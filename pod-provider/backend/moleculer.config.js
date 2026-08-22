@@ -20,6 +20,7 @@ const ApdmLocalDeliveryDatasetExistMemoMiddleware = require('./middlewares/apdm-
 const AdspActionLocalityMiddleware = require('./middlewares/adsp-action-locality');
 const AdspRootEntryEvidenceMiddleware = require('./middlewares/adsp-root-entry-evidence');
 const AdspLocalOntologyRegistrationMiddleware = require('./middlewares/adsp-local-ontology-registration');
+const AtprotoProvisioningReservationMiddleware = require('./middlewares/atproto-provisioning-reservation');
 const { createPhase8Tier1Instrumentation } = require('./lib/apdm-phase8-tier1-instrumentation');
 const CONFIG = require('./config/config');
 const errorHandler = require('./config/errorHandler');
@@ -99,6 +100,15 @@ function createPodCellMiddlewares() {
 }
 
 const middlewares = fabric.serviceGroup === GROUP_POD_CELL ? createPodCellMiddlewares() : [];
+
+// Provisioning must be serialized before signing.provisionAtprotoIdentity can
+// perform its missing-binding check or generate private keys. This middleware
+// uses the shared Redis authority so the reservation remains effective across
+// replicated Pod cells, not merely within one Node.js process.
+const atprotoProvisioningReservation = AtprotoProvisioningReservationMiddleware({
+  redisUrl: CONFIG.QUEUE_SERVICE_URL || CONFIG.REDIS_CACHE_URL || undefined
+});
+if (atprotoProvisioningReservation) middlewares.unshift(atprotoProvisioningReservation);
 
 // Locality telemetry is fabric-safe and may be enabled for either the real Pod
 // cell or an isolated proof group. It observes routing only; it has no service

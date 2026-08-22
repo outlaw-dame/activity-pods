@@ -19,6 +19,7 @@ function remoteCtx() {
   return {
     async call(action, params) {
       if (action === 'activitypub.actor.get') {
+        expect(params.webId).toBe('https://pods.example/alice');
         return {
           id: params.actorUri,
           inbox: `${params.actorUri}/inbox`
@@ -84,9 +85,21 @@ describe('APDM Phase 1 contract hardening', () => {
       }
     };
 
-    const target = await resolveRemoteDeliveryTarget(ctx, 'https://remote.example/users/carol');
+    const target = await resolveRemoteDeliveryTarget(
+      ctx,
+      'https://remote.example/users/carol',
+      'https://pods.example/alice'
+    );
     expect(target.targetDomain).toBe('remote.example');
     expect(target.sharedInboxUrl).toBe('https://remote.example./inbox');
+  });
+
+  test.each([undefined, '', 'system'])('remote target resolution rejects missing or system sender authority (%p)', async authority => {
+    const ctx = { call: jest.fn() };
+    await expect(
+      resolveRemoteDeliveryTarget(ctx, 'https://remote.example/users/carol', authority)
+    ).rejects.toThrow(/requires a concrete sender authority/u);
+    expect(ctx.call).not.toHaveBeenCalled();
   });
 
   test('only the sender own followers collection is classified as followers visibility', () => {

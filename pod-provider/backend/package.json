@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "node scripts/run-moleculer-fabric.js --repl --hot",
     "start": "node scripts/run-moleculer-fabric.js",
-    "postinstall": "node scripts/patch-semapps-activitypub-local-delivery.js && node scripts/patch-semapps-activitypub-local-delivery-phase9.js && node scripts/patch-semapps-ldp-local-registry-bootstrap.js && node scripts/patch-semapps-ldp-special-endpoint-race.js && node scripts/patch-semapps-jsonld-distributed-context-cache.js && node scripts/patch-semapps-ontologies-distributed-cache.js && node scripts/patch-semapps-jsonld-distributed-locality.js && node scripts/patch-semapps-ldp-distributed-semantic-locality.js",
+    "postinstall": "node scripts/patch-semapps-activitypub-local-delivery.js && node scripts/patch-semapps-activitypub-local-delivery-phase9.js && node scripts/patch-semapps-activitypub-remote-actor-fetch.js && node scripts/patch-semapps-crypto-hs2019-verification.js && node scripts/patch-semapps-ldp-local-registry-bootstrap.js && node scripts/patch-semapps-ldp-special-endpoint-race.js && node scripts/patch-semapps-ldp-same-document-fragments.js && node scripts/patch-semapps-jsonld-distributed-context-cache.js && node scripts/patch-semapps-ontologies-distributed-cache.js && node scripts/patch-semapps-jsonld-distributed-locality.js && node scripts/patch-semapps-ldp-distributed-semantic-locality.js",
     "test": "NODE_ENV=test node scripts/run-moleculer-fabric.js --repl --hot",
     "test:unit": "cd ../.. && node tests/node_modules/.bin/jest --testEnvironment=node --roots=pod-provider/backend/tests",
     "test:atproto:multibase": "node scripts/atproto-multibase-smoke.js",

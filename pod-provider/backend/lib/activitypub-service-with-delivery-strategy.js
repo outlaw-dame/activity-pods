@@ -468,6 +468,7 @@ function createOutboxServiceSchema({
       }
     },
     queues: {
+      ...OutboxService.queues,
       [DELIVERY_HANDOFF_QUEUE]: {
         name: '*',
         async process(job) {

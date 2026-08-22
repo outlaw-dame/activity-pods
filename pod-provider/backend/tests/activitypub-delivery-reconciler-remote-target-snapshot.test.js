@@ -55,6 +55,10 @@ test('planner reuses one validated remote target across activities when an expli
   });
 
   expect(actorGet).toHaveBeenCalledTimes(1);
+  expect(actorGet).toHaveBeenCalledWith('activitypub.actor.get', {
+    actorUri: REMOTE_ACTOR,
+    webId: LOCAL_ACTOR
+  });
   expect(remoteDeliveryTargets.size).toBe(1);
   expect(Object.isFrozen(remoteDeliveryTargets.get(REMOTE_ACTOR))).toBe(true);
   expect(first.remoteRecipients).toEqual(second.remoteRecipients);
@@ -147,13 +151,34 @@ test('remote target snapshot stops retaining new actors at its configured bound'
     })
   };
 
-  await resolveRemoteDeliveryTargetWithCache(ctx, firstActor, remoteDeliveryTargets, 1);
-  await resolveRemoteDeliveryTargetWithCache(ctx, secondActor, remoteDeliveryTargets, 1);
+  await resolveRemoteDeliveryTargetWithCache(ctx, firstActor, LOCAL_ACTOR, remoteDeliveryTargets, 1);
+  await resolveRemoteDeliveryTargetWithCache(ctx, secondActor, LOCAL_ACTOR, remoteDeliveryTargets, 1);
 
   expect(remoteDeliveryTargets.size).toBe(1);
   expect(remoteDeliveryTargets.has(firstActor)).toBe(true);
   expect(remoteDeliveryTargets.has(secondActor)).toBe(false);
   expect(ctx.call).toHaveBeenCalledTimes(2);
+});
+
+test('remote target snapshot fails closed when reused across sender authorities', async () => {
+  const remoteDeliveryTargets = new Map();
+  const ctx = {
+    call: jest.fn(async (_action, params) => ({
+      id: params.actorUri,
+      inbox: `${params.actorUri}/inbox`
+    }))
+  };
+
+  await resolveRemoteDeliveryTargetWithCache(ctx, REMOTE_ACTOR, LOCAL_ACTOR, remoteDeliveryTargets);
+  await expect(
+    resolveRemoteDeliveryTargetWithCache(
+      ctx,
+      REMOTE_ACTOR,
+      'https://pods.example/mallory',
+      remoteDeliveryTargets
+    )
+  ).rejects.toThrow(/cannot be reused across sender authorities/u);
+  expect(ctx.call).toHaveBeenCalledTimes(1);
 });
 
 test('reconcileAccount shares one remote-target snapshot across activities but not across account scans', async () => {

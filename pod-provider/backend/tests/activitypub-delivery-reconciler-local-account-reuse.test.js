@@ -5,6 +5,7 @@ process.env.SEMAPPS_AUTH_RESERVED_USER_NAMES ||= 'admin';
 
 const service = require('../services/activitypub-delivery-reconciler.service');
 
+const SENDER = 'https://pods.example/alice';
 const LOCAL = 'https://pods.example/bob';
 const REMOTE = 'https://remote.example/users/carol';
 
@@ -45,7 +46,7 @@ test('reconcileActivity resolves accepted local accounts once in a batch and reu
         throw new Error('heavy actor materialization path must not be used');
       }
       if (action === 'activitypub.actor.get') {
-        expect(params).toEqual({ actorUri: REMOTE, webId: 'system' });
+        expect(params).toEqual({ actorUri: REMOTE, webId: SENDER });
         return {
           id: REMOTE,
           inbox: `${REMOTE}/inbox`,
@@ -62,16 +63,16 @@ test('reconcileActivity resolves accepted local accounts once in a batch and reu
     findLocalAccountsByWebIds: service.methods.findLocalAccountsByWebIds
   };
   const activity = {
-    id: 'https://pods.example/alice/activities/reconcile-account-reuse',
+    id: `${SENDER}/activities/reconcile-account-reuse`,
     type: 'Create',
-    actor: 'https://pods.example/alice',
+    actor: SENDER,
     published: new Date().toISOString(),
     to: [LOCAL, REMOTE],
     cc: [],
     object: {
-      id: 'https://pods.example/alice/objects/reconcile-account-reuse',
+      id: `${SENDER}/objects/reconcile-account-reuse`,
       type: 'Note',
-      attributedTo: 'https://pods.example/alice',
+      attributedTo: SENDER,
       content: 'reuse local account metadata'
     }
   };

@@ -61,12 +61,12 @@ describe('legacy group ownership authority', () => {
     expect(isClaimableGroup({ groupWebId: OTHER, groupAccount: group(), trustedProviderCall: true })).toBe(false);
   });
 
-  test.each(['../admin', '/settings', 'a/b', 'a%2Fb', 'http://evil.example', 'a?b', 'a#b', 'a b', '__proto__', '', 'a'.repeat(65), 'ä'])(
+  test.each(['../admin', '/settings', 'a/b', 'a%2Fb', 'http://evil.example', 'a?b', 'a#b', 'a b', '__proto__', '', 'a'.repeat(65), 'ä', 'A9'])(
     'rejects unsafe group slug %s', slug => {
       expect(isSafeGroupSlug(slug)).toBe(false);
     }
   );
-  test.each(['a', 'photography', 'photo-club', 'photo_club', 'A9'])(
+  test.each(['a', 'photography', 'photo-club', 'photo_club', 'a9'])(
     'accepts safe group slug %s', slug => {
       expect(isSafeGroupSlug(slug)).toBe(true);
     }

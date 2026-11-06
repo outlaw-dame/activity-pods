@@ -142,6 +142,9 @@ const GroupsService = {
 
       const account = await ctx.call('auth.account.findByUsername', { username });
       if (!account) throw404('Actor not found');
+      if (account.disabled === true || account.deletedAt != null) {
+        throw403('You are not allowed to claim a group with this actor.');
+      }
 
       if (!webId || (webId !== 'system' && webId !== account.webId)) {
         throw403('You are not allowed to claim a group with this actor.');

@@ -5,7 +5,7 @@ const { MIME_TYPES } = require('@semapps/mime-types');
 const { arrayOf } = require('@semapps/ldp');
 const { throw403, throw404 } = require('@semapps/middlewares');
 const CONFIG = require('../config/config');
-const { isClaimableGroup, isSafeGroupSlug } = require('./utils/group-ownership');
+const { isClaimableGroup, isSafeGroupSlug, isGroupWebIdSyntax } = require('./utils/group-ownership');
 
 const GroupsService = {
   name: 'groups',
@@ -148,6 +148,11 @@ const GroupsService = {
 
       if (!webId || (webId !== 'system' && webId !== account.webId)) {
         throw403('You are not allowed to claim a group with this actor.');
+      }
+
+      // Validate untrusted input before invoking the account datastore.
+      if (!isGroupWebIdSyntax(groupWebId)) {
+        throw403('You are not allowed to claim this group.');
       }
 
       // The target URI alone grants no ownership. Resolve it through the

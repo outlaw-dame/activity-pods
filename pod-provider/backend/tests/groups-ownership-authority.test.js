@@ -3,7 +3,8 @@
 const { isClaimableGroup, isSafeGroupSlug } = require('../services/utils/group-ownership');
 // The provider config requires deployment-specific environment variables.
 // These action tests only need BASE_URL and must not depend on deployment config.
-jest.mock('../config/config', () => ({ BASE_URL: 'https://pods.example' }));
+jest.mock('../config/config', () => ({ BASE_URL: 'https://pods.example', ENABLE_GROUPS: true }));
+const providerConfig = require('../config/config');
 const GroupsService = require('../services/groups');
 
 const ALICE = 'https://pods.example/alice';
@@ -119,6 +120,22 @@ describe('groups.claim action integration', () => {
 });
 
 describe('groups.create preflight validation', () => {
+  test('disabled provider rejects group creation at the authoritative action', async () => {
+    const previous = providerConfig.ENABLE_GROUPS;
+    providerConfig.ENABLE_GROUPS = false;
+    try {
+      const ctx = {
+        params: { id: 'photography', type: 'foaf:Group' },
+        meta: { webId: ALICE },
+        call: jest.fn()
+      };
+      await expect(GroupsService.actions.create(ctx)).rejects.toThrow();
+      expect(ctx.call).not.toHaveBeenCalled();
+    } finally {
+      providerConfig.ENABLE_GROUPS = previous;
+    }
+  });
+
   test.each(['../admin', '/profile', 'other/path', 'bad%2Fslug', 'a?b', 'a#b', '', 'x'.repeat(65)])(
     'rejects invalid slug before any provider mutation: %s', async id => {
       const ctx = {

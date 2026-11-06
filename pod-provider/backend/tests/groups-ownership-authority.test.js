@@ -1,6 +1,6 @@
 'use strict';
 
-const { isClaimableGroup, isSafeGroupSlug } = require('../services/utils/group-ownership');
+const { isClaimableGroup, isSafeGroupSlug, isGroupWebIdSyntax } = require('../services/utils/group-ownership');
 // The provider config requires deployment-specific environment variables.
 // These action tests only need BASE_URL and must not depend on deployment config.
 jest.mock('../config/config', () => ({ BASE_URL: 'https://pods.example', ENABLE_GROUPS: true }));
@@ -35,6 +35,22 @@ function context({ principal = ALICE, ownerAccount = user(), groupAccount = grou
 }
 
 describe('legacy group ownership authority', () => {
+  test.each([
+    '', 'not-a-url', 'javascript:alert(1)',
+    'https://user:password@pods.example/group',
+    'https://pods.example/group#fragment',
+    'https://pods.example/group?secret=1',
+    'https://pods.example/group\\nmalformed',
+    'x'.repeat(2049), 'https://pods.example/'
+  ])('rejects malformed or ambiguous group WebID %s', uri => {
+    expect(isGroupWebIdSyntax(uri)).toBe(false);
+  });
+
+  test('accepts only syntactically valid group WebIDs', () => {
+    expect(isGroupWebIdSyntax(GROUP)).toBe(true);
+    expect(isGroupWebIdSyntax('http://localhost:3000/team')).toBe(true);
+  });
+
   test.each([
     ['empty group URI', { groupWebId: '', groupAccount: group() }],
     ['whitespace URI', { groupWebId: ' ' + GROUP, groupAccount: group() }],
@@ -104,6 +120,12 @@ describe('groups.claim action integration', () => {
     const { ctx, calls } = context({ groupAccount: group({ owner: BOB }) });
     await expect(GroupsService.actions.claim(ctx)).rejects.toThrow();
     expect(calls.some(x => x.action === 'auth.account.update')).toBe(false);
+  });
+
+  test('rejects invalid group WebID before account lookup or mutation', async () => {
+    const { ctx, calls } = context({ groupUri: 'javascript:alert(1)' });
+    await expect(GroupsService.actions.claim(ctx)).rejects.toThrow();
+    expect(calls.map(x => x.action)).toEqual(['auth.account.findByUsername']);
   });
 
   test('denies claiming arbitrary actor URLs, including a local Person', async () => {

@@ -114,3 +114,29 @@ describe('groups.claim action integration', () => {
     expect(ctx.call.mock.calls.some(([action]) => action === 'auth.account.update')).toBe(false);
   });
 });
+
+describe('groups.create preflight validation', () => {
+  test.each(['../admin', '/profile', 'other/path', 'bad%2Fslug', 'a?b', 'a#b', '', 'x'.repeat(65)])(
+    'rejects invalid slug before any provider mutation: %s', async id => {
+      const ctx = {
+        params: { id, type: 'foaf:Group' },
+        meta: { webId: ALICE },
+        call: jest.fn()
+      };
+      await expect(GroupsService.actions.create(ctx)).rejects.toThrow();
+      expect(ctx.call).not.toHaveBeenCalled();
+    }
+  );
+
+  test('rejects unauthenticated and system creation before any provider mutation', async () => {
+    for (const webId of [undefined, null, 'system']) {
+      const ctx = {
+        params: { id: 'photography', type: 'foaf:Group' },
+        meta: { webId },
+        call: jest.fn()
+      };
+      await expect(GroupsService.actions.create(ctx)).rejects.toThrow();
+      expect(ctx.call).not.toHaveBeenCalled();
+    }
+  });
+});

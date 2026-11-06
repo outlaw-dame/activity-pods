@@ -13,7 +13,7 @@
  */
 function isGroupWebIdSyntax(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 2048 ||
-      /[\\u0000-\\u0020\\u007f]/.test(value)) return false;
+      /[\u0000-\u0020\u007f]/.test(value)) return false;
   try {
     const parsed = new URL(value);
     return (

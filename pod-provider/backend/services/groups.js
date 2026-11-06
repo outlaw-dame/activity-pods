@@ -35,6 +35,10 @@ const GroupsService = {
       const { id, type } = ctx.params;
       const ownerWebId = ctx.meta?.webId;
 
+      // The service remains loadable even when groups are disabled. Enforce
+      // the provider policy at the authoritative mutation, not only in UI.
+      if (CONFIG.ENABLE_GROUPS !== true) throw new E.ForbiddenError();
+
       // Reject ambiguous and path-bearing IDs before any account/storage mutation.
       if (!isSafeGroupSlug(id)) {
         throw new E.BadRequestError('Invalid group identifier');

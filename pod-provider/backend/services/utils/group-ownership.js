@@ -18,7 +18,7 @@ function isClaimableGroup({ groupWebId, groupAccount, ownerWebId, trustedProvide
   if (!groupAccount || typeof groupAccount !== 'object' || Array.isArray(groupAccount)) {
     return false;
   }
-  if (groupAccount.webId !== groupWebId || groupAccount.group !== true || groupAccount.disabled === true) {
+  if (groupAccount.webId !== groupWebId || groupAccount.group !== true || groupAccount.disabled === true || groupAccount.deletedAt != null) {
     return false;
   }
   if (trustedProviderCall === true) return true;

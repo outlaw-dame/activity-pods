@@ -1,6 +1,9 @@
 'use strict';
 
 const { isClaimableGroup, isSafeGroupSlug } = require('../services/utils/group-ownership');
+// The provider config requires deployment-specific environment variables.
+// These action tests only need BASE_URL and must not depend on deployment config.
+jest.mock('../config/config', () => ({ BASE_URL: 'https://pods.example' }));
 const GroupsService = require('../services/groups');
 
 const ALICE = 'https://pods.example/alice';

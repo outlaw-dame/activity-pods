@@ -43,6 +43,7 @@ describe('legacy group ownership authority', () => {
     ['regular user actor', { groupWebId: GROUP, groupAccount: group({ group: false }) }],
     ['unregistered ID mismatch', { groupWebId: OTHER, groupAccount: group() }],
     ['disabled group', { groupWebId: GROUP, groupAccount: group({ disabled: true }) }],
+    ['deleted group', { groupWebId: GROUP, groupAccount: group({ deletedAt: '2026-11-01T00:00:00.000Z' }) }],
     ['foreign group owner', { groupWebId: GROUP, groupAccount: group({ owner: BOB }) }],
     ['missing group owner', { groupWebId: GROUP, groupAccount: group({ owner: undefined }) }],
     ['array owner', { groupWebId: GROUP, groupAccount: group({ owner: [ALICE] }) }]
@@ -86,6 +87,16 @@ describe('groups.claim action integration', () => {
   test('replaying a claim does not append duplicates or write again', async () => {
     const { ctx, calls } = context({ ownerAccount: user({ owns: [GROUP] }) });
     await GroupsService.actions.claim(ctx);
+    expect(calls.some(x => x.action === 'auth.account.update')).toBe(false);
+  });
+
+  test.each([
+    ['disabled', { disabled: true }],
+    ['deleted', { deletedAt: '2026-11-01T00:00:00.000Z' }]
+  ])('rejects claims by a %s owner account', async (_name, state) => {
+    const { ctx, calls } = context({ ownerAccount: user(state) });
+    await expect(GroupsService.actions.claim(ctx)).rejects.toThrow();
+    expect(calls.some(x => x.action === 'auth.account.findByWebId')).toBe(false);
     expect(calls.some(x => x.action === 'auth.account.update')).toBe(false);
   });
 

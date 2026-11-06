@@ -32,7 +32,7 @@ function isClaimableGroup({ groupWebId, groupAccount, ownerWebId, trustedProvide
 }
 
 function isSafeGroupSlug(value) {
-  return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(value);
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(value);
 }
 
 module.exports = { isClaimableGroup, isSafeGroupSlug };

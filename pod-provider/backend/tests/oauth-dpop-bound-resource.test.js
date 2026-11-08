@@ -11,10 +11,12 @@ const tokenHash = token => crypto.createHash('sha256').update(token).digest('bas
 
 function fixture() {
   const keys = new Map();
+  const replayTtls = [];
   const instance = {
     settings: { replayPrefix: 'test:replay', replayTtlSec: 300, noncePrefix: 'test:nonce' },
     redis: {
       async set(key, value, _ex, _ttl, nx) {
+        replayTtls.push(_ttl);
         if (nx !== 'NX') throw Error('expected atomic replay NX');
         if (keys.has(key)) return null;
         keys.set(key, value);
@@ -28,7 +30,7 @@ function fixture() {
       }
     }
   };
-  return { instance, keys };
+  return { instance, keys, replayTtls };
 }
 
 async function signedProof(overrides = {}) {
@@ -133,6 +135,29 @@ describe('DPoP access-token hash verification', () => {
     await expect(service.actions.verifyProof.handler.call(store.instance, {
       params: { proofJwt, htm: 'POST', htu: URL,
         audience: 'https://client.example/app', expectedAth: tokenHash(TOKEN) }
+    })).rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
+    expect(store.keys.size).toBe(0);
+  });
+
+  test('replay record cannot expire while the proof remains valid at clock-skew limits', async () => {
+    const store = fixture();
+    store.instance.settings.replayTtlSec = 60; // Historical unsafe operator config.
+    const future = Math.floor(Date.now()/1000) + 55;
+    const proof = await signedProof({ iat: future });
+    await service.actions.verifyProof.handler.call(store.instance, {
+      params: params(proof)
+    });
+    expect(store.replayTtls).toEqual([420]);
+    await expect(service.actions.verifyProof.handler.call(store.instance, {
+      params: params(proof)
+    })).rejects.toMatchObject({ type: 'DPOP_REPLAY_DETECTED' });
+  });
+
+  test('future-dated proofs beyond sixty seconds are rejected', async () => {
+    const store = fixture();
+    const proof = await signedProof({ iat: Math.floor(Date.now()/1000) + 180 });
+    await expect(service.actions.verifyProof.handler.call(store.instance, {
+      params: params(proof)
     })).rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
     expect(store.keys.size).toBe(0);
   });

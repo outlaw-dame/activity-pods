@@ -17,7 +17,7 @@ const { MoleculerError } = require('moleculer').Errors;
 const NS = 'http://activitypods.org/ns/core#';
 const TYPE = 'CollectiveReservationV1';
 const PREFIX = 'urn:apods:collective:';
-const STAGES = Object.freeze(['reserved', 'ap-key-pending', 'ap-key-verified', 'did-pending', 'did-verified']);
+const STAGES = Object.freeze(['reserved', 'ap-key-pending', 'did-pending']);
 const GRANT_PURPOSE = 'provider.collective.reservation.v1';
 
 function problem(code, status = 403) {
@@ -135,7 +135,7 @@ module.exports = {
             stored.owner !== p.principal || stored.app !== p.app ||
             stored.actorUri !== p.actorUri) throw problem('COLLECTIVE_RESERVATION_CONFLICT', 409);
         return { canonicalGroupId: p.groupId, actorUri: p.actorUri,
-          stage: stored.stage, revision: stored.revision, replay: stored.revision !== 1 ? true : false };
+          stage: stored.stage, revision: stored.revision };
       }
     },
 

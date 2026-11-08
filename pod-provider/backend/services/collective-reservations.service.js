@@ -87,7 +87,8 @@ function validateInput(params, baseUrl, identityKey) {
   }
   let provider;
   try { provider = new URL(baseUrl); } catch { throw problem('COLLECTIVE_INVALID_PROVIDER', 503); }
-  if (provider.protocol !== 'https:' || !provider.hostname || provider.origin !== baseUrl ||
+  if (provider.protocol !== 'https:' || !provider.hostname ||
+      provider.pathname !== '/' || provider.origin !== baseUrl.replace(/\/$/u, '') ||
       provider.username || provider.password || provider.search || provider.hash) {
     throw problem('COLLECTIVE_INVALID_PROVIDER', 503);
   }
@@ -97,7 +98,7 @@ function validateInput(params, baseUrl, identityKey) {
   const requestHash = crypto.createHash('sha256').update(canonical).digest('hex');
   const groupId = 'cg_' + hmac(identityKey, JSON.stringify([principal, app, idempotencyKey])).slice(0, 32);
   return { principal, app, displayName, idempotencyKey, requestHash, groupId,
-    actorUri: baseUrl + '/groups/' + groupId, uri: PREFIX + groupId };
+    actorUri: provider.origin + '/groups/' + groupId, uri: PREFIX + groupId };
 }
 
 module.exports = {

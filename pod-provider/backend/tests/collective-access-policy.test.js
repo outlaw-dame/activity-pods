@@ -65,6 +65,9 @@ describe('live SAI consent gate', () => {
   test.each([
     ['missing account', { account: null }, 'COLLECTIVE_USER_NOT_FOUND'],
     ['wrong local WebID', { account: { webId: 'https://provider.example/users/bob' } }, 'COLLECTIVE_USER_NOT_FOUND'],
+    ['disabled local account', { account: { webId: ALICE, disabled: true } }, 'COLLECTIVE_USER_NOT_FOUND'],
+    ['deleted local account', { account: { webId: ALICE, deleted: true } }, 'COLLECTIVE_USER_NOT_FOUND'],
+    ['suspended local account', { account: { webId: ALICE, status: 'suspended' } }, 'COLLECTIVE_USER_NOT_FOUND'],
     ['not registered', { registered: false }, 'COLLECTIVE_APP_NOT_REGISTERED'],
     ['no special rights', { rights: [] }, 'COLLECTIVE_APP_CONSENT_MISSING'],
     ['only broad ACL control', { rights: ['acl:Control'] }, 'COLLECTIVE_APP_CONSENT_MISSING'],

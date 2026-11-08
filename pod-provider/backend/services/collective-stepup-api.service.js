@@ -65,7 +65,9 @@ module.exports = {
     allowedOriginsConfig: process.env.PROVIDER_COLLECTIVES_ALLOWED_ORIGINS || '',
     redisUrl: process.env.SEMAPPS_REDIS_CACHE_URL || 'redis://localhost:6379',
     ticketPrefix: 'collective:stepup:ticket',
-    ticketTtlSeconds: 600
+    ticketTtlSeconds: 600,
+    maxAttemptsPerMinute: 8,
+    ratePrefix: 'collective:stepup:rate'
   },
 
   created() {
@@ -120,6 +122,19 @@ module.exports = {
           principal, app, operation: 'reserve',
           approvedApps: this.settings.approvedApps
         });
+
+        // Bounded, atomically counted attempts across all provider replicas.
+        // A missing Redis dependency must fail closed, never reset a limit.
+        const rateIdentity = crypto.createHash('sha256')
+          .update(JSON.stringify([principal, app])).digest('hex');
+        const attempts = await this.redis.eval(
+          "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n",
+          1, this.settings.ratePrefix + ':' + rateIdentity, 60
+        );
+        if (!Number.isSafeInteger(Number(attempts)) ||
+            Number(attempts) > this.settings.maxAttemptsPerMinute) {
+          deny('COLLECTIVE_STEPUP_RATE_LIMITED', 429);
+        }
 
         const proof = ctx.meta?.$stepupDpop;
         if (typeof proof !== 'string' || proof.length > 8192 ||

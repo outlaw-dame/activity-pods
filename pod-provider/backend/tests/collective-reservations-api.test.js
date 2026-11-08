@@ -97,9 +97,9 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
   test.each([
-    ['missing bearer', { header: undefined }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing bearer', { header: null }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['malformed bearer', { header: 'Basic abcdef' }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing idempotency', { key: undefined }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
+    ['missing idempotency', { key: null }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
     ['short idempotency', { key: '123' }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
     ['missing token subject', { verified: { azp: app, aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['custom JWT no app', { verified: { webid: principal, aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],

@@ -12,18 +12,23 @@ const DPOP = 'cHJvb2Y.c2lnbmVk.c2lnbmF0dXJl';
 const fingerprint = (p, a, k, d) => crypto.createHash('sha256')
   .update(JSON.stringify([p, a, k, d])).digest('hex');
 
+function validClaims(overrides = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    sub: principal, exp: now + 600, azp: app, webid: principal,
+    aud: app, iss: issuer, iat: now - 30, auth_time: now - 30,
+    amr: ['pwd'], cnf: { jkt: JKT },
+    ...overrides
+  };
+}
+
 function harness({
   enabled = true, header = 'Bearer valid.token.proof',
   key = 'q'.repeat(32), displayName = 'Community Hub',
-  verified = { sub: principal, exp: Math.floor(Date.now() / 1000) + 600,
-    azp: app, webid: principal, aud: app, iss: issuer,
-    iat: Math.floor(Date.now() / 1000) - 30,
-    auth_time: Math.floor(Date.now() / 1000) - 30,
-    amr: ['pwd'], cnf: { jkt: JKT } },
+  verified = validClaims(),
   metadata = {}, failReservation = false
 } = {}) {
   const seen = [];
-  let activeProof = DPOP;
   const ctx = {
     params: { displayName, principal: 'https://evil.example/users/mallory',
       app: 'https://evil.example/fake-app' },
@@ -112,39 +117,43 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     ['malformed bearer', { header: 'Basic abcdef' }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['missing idempotency', { key: null }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
     ['short idempotency', { key: '123' }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
-    ['missing token subject', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['custom JWT no app', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, webid: principal, aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong app signed', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: 'https://evil.example/app', webid: principal, aud: 'https://evil.example/app', iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong person signed', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: 'https://evil.example/user', aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['stale year-long ID token', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: issuer,
-      iat: Math.floor(Date.now() / 1000) - 3600 } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['future issued token', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: issuer,
-      iat: Math.floor(Date.now() / 1000) + 300 } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing issuance timestamp', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: issuer } },
+    ['missing WebID', { verified: validClaims({ webid: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing app', { verified: validClaims({ azp: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['wrong app signed', { verified: validClaims({ azp: 'https://evil.example/app',
+      aud: 'https://evil.example/app' }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['wrong person signed', { verified: validClaims({ webid: 'https://evil.example/user' }) },
       'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['no authentication event', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: issuer,
-      iat: Math.floor(Date.now()/1000) - 30, cnf: { jkt: JKT }, amr: ['pwd'] } }, 'COLLECTIVE_STEP_UP_REQUIRED'],
-    ['stale authentication event', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: issuer,
-      iat: Math.floor(Date.now()/1000) - 30, auth_time: Math.floor(Date.now()/1000) - 3600,
-      cnf: { jkt: JKT }, amr: ['pwd'] } }, 'COLLECTIVE_STEP_UP_REQUIRED'],
-    ['no sender-bound key', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: issuer,
-      iat: Math.floor(Date.now()/1000) - 30, auth_time: Math.floor(Date.now()/1000) - 30,
-      amr: ['pwd'] } }, 'COLLECTIVE_STEP_UP_REQUIRED'],
-    ['bad DPoP syntax', { metadata: { $collectivesDpopProof: 'invalid' } }, 'COLLECTIVE_DPOP_REQUIRED'],
+    ['stale token issuance', { verified: validClaims({ iat: Math.floor(Date.now()/1000) - 3600 }) },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['future token issuance', { verified: validClaims({ iat: Math.floor(Date.now()/1000) + 300 }) },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing issuance timestamp', { verified: validClaims({ iat: undefined }) },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing recent login', { verified: validClaims({ auth_time: undefined }) },
+      'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['stale login', { verified: validClaims({ auth_time: Math.floor(Date.now()/1000) - 3600 }) },
+      'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['missing AMR', { verified: validClaims({ amr: undefined }) }, 'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['no sender-bound key', { verified: validClaims({ cnf: undefined }) }, 'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['malformed DPoP', { metadata: { $collectivesDpopProof: 'invalid' } }, 'COLLECTIVE_DPOP_REQUIRED'],
     ['missing DPoP', { metadata: { $collectivesDpopProof: null } }, 'COLLECTIVE_DPOP_REQUIRED'],
-    ['missing signed subject', { verified: { sub: undefined } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['different signed subject', { verified: { sub: 'https://other.example/users/mallory' } },
+    ['missing signed subject', { verified: validClaims({ sub: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['mismatched signed subject', { verified: validClaims({ sub: 'https://other.example/users/mallory' }) },
       'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['long-life token', { verified: { exp: Math.floor(Date.now()/1000) + 31536000 } },
+    ['year-long token', { verified: validClaims({ exp: Math.floor(Date.now()/1000) + 31536000 }) },
       'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing expiry claim', { verified: { exp: undefined } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong audience', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: 'https://evil.example/app', iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing issuer', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong issuer', { verified: { sub: principal, exp: Math.floor(Date.now() / 1000) + 600, azp: app, webid: principal, aud: app, iss: 'https://evil.example' } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing expiration', { verified: validClaims({ exp: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['wrong audience', { verified: validClaims({ aud: 'https://evil.example/app' }) },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing issuer', { verified: validClaims({ iss: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['wrong issuer', { verified: validClaims({ iss: 'https://evil.example' }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['invalid signature', { verified: null }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['injected gateway app', { metadata: { webId: 'https://evil.example/app' } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['injected gateway user', { metadata: { impersonatedUser: 'https://evil.example/user' } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['injected gateway token claims', { metadata: { tokenPayload: { azp: 'https://evil.example/app', webid: principal } } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED']
+    ['injected gateway app', { metadata: { webId: 'https://evil.example/app' } },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['injected gateway user', { metadata: { impersonatedUser: 'https://evil.example/user' } },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['injected gateway token claims', { metadata: { tokenPayload: {
+      azp: 'https://evil.example/app', webid: principal } } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED']
   ])('fails closed for %s', async (_case, input, expected) => {
     const h = harness(input);
     await denied(h.reserve(), expected);

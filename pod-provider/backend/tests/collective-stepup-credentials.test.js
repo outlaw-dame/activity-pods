@@ -14,9 +14,17 @@ const issuerSecret = 'distinct-stepup-issuer-secret-'.repeat(3);
 const ticketHash = 'b'.repeat(64);
 
 function harness(settings = {}) {
-  const inst = { settings: {
-    enabled: true, secret, issuer, issuerSecret, approvedApps: [app], ...settings
-  }};
+  const used = new Set();
+  const inst = {
+    settings: { enabled: true, secret, issuer, issuerSecret,
+      approvedApps: [app], attestationPrefix: 'test:mint', ...settings },
+    redis: { async set(key, _value, ex, ttl, nx) {
+      expect([ex, ttl, nx]).toEqual(['EX', 300, 'NX']);
+      if (used.has(key)) return null;
+      used.add(key);
+      return 'OK';
+    } }
+  };
   const mint = (overrides = {}) => {
     const params = { principal, app, jkt, verifiedAt: Math.floor(Date.now()/1000),
       ticketHash, ...overrides };
@@ -64,6 +72,18 @@ describe('isolated provider Group step-up JWT', () => {
     const result = await h.mint();
     await expect(jwtVerify(result.token, crypto.randomBytes(32), { algorithms: ['ES256'] }))
       .rejects.toThrow();
+  });
+
+  test('a valid signed WebAuthn mint attestation can be consumed only once', async () => {
+    const h = harness();
+    expect((await h.mint()).tokenType).toBe('DPoP');
+    await denied(h.mint(), 'COLLECTIVE_STEPUP_REPLAY');
+  });
+
+  test('unavailable replay store fails closed before signing a credential', async () => {
+    const h = harness();
+    h.inst.redis = { async set() { throw new Error('Redis unavailable'); } };
+    await expect(h.mint()).rejects.toThrow('Redis unavailable');
   });
 
   test('direct internal calls cannot mint without trusted issuer attestation', async () => {

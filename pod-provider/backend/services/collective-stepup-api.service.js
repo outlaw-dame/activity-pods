@@ -20,6 +20,7 @@
 const crypto = require('node:crypto');
 const Redis = require('ioredis');
 const { MoleculerError } = require('moleculer').Errors;
+const { approvedBrowserOrigins } = require('./utils/collective-endpoint-policy');
 const { assertLiveCollectiveConsent, parseApprovedApps } = require('./utils/collective-access-policy');
 
 function deny(code, status = 401) {
@@ -61,6 +62,7 @@ module.exports = {
       process.env.PROVIDER_COLLECTIVES_API_ENABLED === 'true',
     origin: process.env.SEMAPPS_HOME_URL || '',
     approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || ''),
+    allowedOriginsConfig: process.env.PROVIDER_COLLECTIVES_ALLOWED_ORIGINS || '',
     redisUrl: process.env.SEMAPPS_REDIS_CACHE_URL || 'redis://localhost:6379',
     ticketPrefix: 'collective:stepup:ticket',
     ticketTtlSeconds: 600
@@ -85,6 +87,12 @@ module.exports = {
         authentication: false,
         authorization: false,
         bodyParsers: { json: true },
+        cors: {
+          origin: approvedBrowserOrigins(this.settings.origin, this.settings.allowedOriginsConfig),
+          methods: ['POST', 'OPTIONS'],
+          allowedHeaders: ['Authorization', 'DPoP', 'Idempotency-Key', 'Content-Type'],
+          credentials: false
+        },
         onBeforeCall(ctx, route, req) {
           ctx.meta.$stepupAuthorization = req.headers.authorization;
           ctx.meta.$stepupDpop = req.headers.dpop;

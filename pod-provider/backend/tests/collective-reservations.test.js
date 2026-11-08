@@ -248,6 +248,8 @@ describe('G1 durable collective reservations — provider authority', () => {
       { ...good, grant: undefined },
       { ...good, grant: { ...good.grant, principal: PROVIDER + '/users/bob' } },
       { ...good, grant: { ...good.grant, mac: 'a'.repeat(64) } },
+      { ...good, grant: { ...good.grant, mac: 'é'.repeat(64) } },
+      { ...good, grant: { ...good.grant, mac: '🚫'.repeat(32) } },
       { ...good, grant: { ...good.grant, expiresAt: Date.now() - 1 } },
       { ...good, grant: { ...good.grant, operation: 'read' } }
     ]) await expectError(h.action('reserve', bad), 'COLLECTIVE_UNAUTHORIZED');
@@ -350,6 +352,9 @@ describe('G1 durable collective reservations — provider authority', () => {
     await expectError(h.action('get', { ...readGrant(id), grant: reservation().grant }), 'COLLECTIVE_UNAUTHORIZED');
     await expectError(h.action('advance', { ...advanceGrant(id, 1, 'ap-key-pending'),
       workerGrant: readGrant(id).grant }), 'COLLECTIVE_WORKER_UNAUTHORIZED');
+    await expectError(h.action('advance', { ...advanceGrant(id, 1, 'ap-key-pending'),
+      workerGrant: { ...advanceGrant(id, 1, 'ap-key-pending').workerGrant,
+        mac: 'é'.repeat(64) } }), 'COLLECTIVE_WORKER_UNAUTHORIZED');
   });
 
   test('app-level HMAC grant cannot advance a provider-only lifecycle', async () => {

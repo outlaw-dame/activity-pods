@@ -44,10 +44,13 @@ function reserveParams(displayName = name) {
 function advanceParams(id, revision, nextStage, lease) {
   const issuedAt = Date.now() - 1000;
   const expiresAt = issuedAt + 60000;
-  const fields = [workerPurpose, id, revision, nextStage, issuedAt, expiresAt];
+  const leaseHash = sha(lease.leaseToken);
+  const fields = [workerPurpose, id, revision, nextStage,
+    lease.workerId, lease.epoch, leaseHash, issuedAt, expiresAt];
   return { canonicalGroupId: id, principal, app, expectedRevision: revision, nextStage,
     workerId: lease.workerId, leaseToken: lease.leaseToken, leaseEpoch: lease.epoch,
-    workerGrant: { purpose: workerPurpose, groupId: id, revision, nextStage, issuedAt, expiresAt,
+    workerGrant: { purpose: workerPurpose, groupId: id, revision, nextStage,
+      workerId: lease.workerId, leaseEpoch: lease.epoch, leaseHash, issuedAt, expiresAt,
       mac: crypto.createHmac('sha256', workerSecret).update(JSON.stringify(fields)).digest('hex') } };
 }
 const id = 'cg_' + crypto.createHmac('sha256', identityKey)

@@ -47,7 +47,7 @@ function materialize(query) {
 function harness(db = new Map()) {
   const calls = [];
   let failWrite = false;
-  const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET } };
+  const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48) } };
   instance._load = service.methods._load.bind(instance);
   const ctx = params => ({
     params, call: async (name, args) => {
@@ -162,6 +162,31 @@ describe('G1 durable collective reservations — provider authority', () => {
     })), 'COLLECTIVE_NOT_FOUND');
   });
 
+  test('rotating grant signer secret must not change canonical Group IDs', async () => {
+    const h = harness();
+    const first = await h.action('reserve', reservation());
+    // Identity key remains stable across grant signing key rotation.
+    const savedSecret = h.instance.settings.secret;
+    h.instance.settings.secret = 'r'.repeat(48);
+    const p = reservation();
+    const issuedAt = Date.now() - 500;
+    const expiresAt = issuedAt + 50000;
+    const fields = [PURPOSE, p.principal, p.app, 'reserve', p.grant.requestHash, issuedAt, expiresAt];
+    // Re-sign the same request fingerprint with the rotated grant key.
+    p.grant = {
+      purpose: PURPOSE, principal: p.principal, app: p.app,
+      operation: 'reserve',
+      requestHash: sha(JSON.stringify([p.principal, p.app, p.idempotencyKey, p.displayName])),
+      issuedAt, expiresAt
+    };
+    p.grant.mac = crypto.createHmac('sha256', h.instance.settings.secret)
+      .update(JSON.stringify([PURPOSE, p.principal, p.app, 'reserve', p.grant.requestHash, issuedAt, expiresAt]))
+      .digest('hex');
+    expect((await h.action('reserve', p)).canonicalGroupId).toBe(first.canonicalGroupId);
+    expect(h.db.size).toBe(1);
+    h.instance.settings.secret = savedSecret;
+  });
+
   test('restart of the service retains the source-of-truth state', async () => {
     const persistent = new Map();
     const first = harness(persistent);
@@ -192,6 +217,9 @@ describe('G1 durable collective reservations — provider authority', () => {
     await expectError(h.action('reserve', reservation()), 'COLLECTIVE_DISABLED');
     h.instance.settings.enabled = true;
     h.instance.settings.secret = '';
+    await expectError(h.action('reserve', reservation()), 'COLLECTIVE_DISABLED');
+    h.instance.settings.secret = SECRET;
+    h.instance.settings.identityKey = '';
     await expectError(h.action('reserve', reservation()), 'COLLECTIVE_DISABLED');
     expect(h.calls).toHaveLength(0);
   });

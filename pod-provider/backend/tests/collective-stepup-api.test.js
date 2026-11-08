@@ -19,12 +19,21 @@ function harness({
   failAssertion = false
 } = {}) {
   const keys = new Set();
+  const rateCounters = new Map();
   const calls = [];
   let currentRights = rights, currentRegistered = registered;
   const instance = {
     settings: { enabled, origin, approvedApps: allowlist,
-      ticketPrefix: 'test:ticket', ticketTtlSeconds: 600 },
+      ticketPrefix: 'test:ticket', ticketTtlSeconds: 600,
+      ratePrefix: 'test:rate', maxAttemptsPerMinute: 8 },
     redis: {
+      async eval(lua, numKeys, key, seconds) {
+        expect(numKeys).toBe(1);
+        expect(seconds).toBe(60);
+        const count = (rateCounters.get(key) || 0) + 1;
+        rateCounters.set(key, count);
+        return count;
+      },
       async set(key, val, ex, ttl, nx) {
         expect(ex).toBe('EX'); expect(ttl).toBe(600); expect(nx).toBe('NX');
         if (keys.has(key)) return null;
@@ -53,7 +62,7 @@ function harness({
       throw Error('Unexpected service action: ' + action);
     }
   };
-  return { ctx, calls, keys, instance,
+  return { ctx, calls, keys, rateCounters, instance,
     setRights(v) { currentRights = v; },
     setRegistered(v) { currentRegistered = v; },
     verify() { return service.actions.verify.handler.call(instance, ctx); } };
@@ -75,7 +84,7 @@ describe('existing Solid-OIDC + SAI + passkey Group step-up bridge', () => {
   test('registered route verifies Solid-OIDC token internally (not via a Group token)', async () => {
     const calls = [];
     await service.started.call({
-      settings: { enabled: true },
+      settings: { enabled: true, origin, allowedOriginsConfig: '' },
       broker: { call: async (...args) => calls.push(args) }
     });
     expect(calls[0][1].route).toMatchObject({
@@ -140,6 +149,18 @@ describe('existing Solid-OIDC + SAI + passkey Group step-up bridge', () => {
       expect(h.keys.size).toBe(0);
       expect(h.calls.some(x => x.action === 'passkeys-api.verifyAssertion')).toBe(false);
     }
+  });
+
+  test('distributed rate limit fails closed before consuming passkey tickets', async () => {
+    const h = harness();
+    for (let i = 0; i < 8; i += 1) {
+      // DPoP syntax denial occurs after rate counter increments.
+      h.ctx.meta.$stepupDpop = 'not-a-jws';
+      await denied(h.verify(), 'COLLECTIVE_STEPUP_DPOP_REQUIRED');
+    }
+    await denied(h.verify(), 'COLLECTIVE_STEPUP_RATE_LIMITED');
+    expect(h.keys.size).toBe(0);
+    expect([...h.rateCounters.values()]).toEqual([9]);
   });
 
   test('WebAuthn account mismatch cannot mint credentials even with valid OIDC and DPoP', async () => {

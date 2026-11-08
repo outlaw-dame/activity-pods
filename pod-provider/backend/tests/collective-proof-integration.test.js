@@ -1,209 +1,111 @@
 'use strict';
 
 /**
- * End-to-end service-chain test with ACTUAL ES256 Solid JWT, actual DPoP JWS
- * verification and ACTUAL HS256 Group-only credential signing/verification.
- * Mocked: HTTP router, WebAuthn hardware authenticator, SAI persistence and
- * database mutations. It is not a running-provider/browser E2E claim.
+ * The existing Solid-OIDC identity is the ONLY app login for Group creation.
+ * Real ES256 JWTs are verified using the provider's existing jwk action.
+ * SAI and reservation writes in this test are explicit provider-service
+ * doubles. Durable real Fuseki/lease behavior has a separate workflow.
  */
-const crypto = require('node:crypto');
-const { generateKeyPair, exportJWK, SignJWT, calculateJwkThumbprint } = require('jose');
+const { generateKeyPair, exportJWK, SignJWT } = require('jose');
 const jwkService = require('../services/core/jwk');
-const dpopService = require('../services/oauth/oauth-dpop-nonce.service');
-const stepupApi = require('../services/collective-stepup-api.service');
-const stepupCredentials = require('../services/collective-stepup-credentials.service');
-const reservationApi = require('../services/collective-reservations-api.service');
+const groupApi = require('../services/collective-reservations-api.service');
+const { assertLiveCollectiveConsent } = require('../services/utils/collective-access-policy');
 
 const ISSUER = 'https://provider.example';
-const APP = 'https://reader.example/client';
+const APP = 'https://paper.example/app';
 const PERSON = ISSUER + '/users/alice#me';
-const GRANT_SECRET = 'g'.repeat(48);
-const STEPUP_SECRET = 'isolation-secret-'.repeat(4);
-const ISSUER_SECRET = 'distinct-passkey-issuer-attestation-key-'.repeat(3);
-const REQUEST_KEY = 'a'.repeat(32);
+const SECRET = 'a'.repeat(48);
+const REQUEST_KEY = 'r'.repeat(32);
 
-function dpopHash(token) {
-  return crypto.createHash('sha256').update(token).digest('base64url');
-}
-
-async function makeClient() {
-  const providerKeys = await generateKeyPair('ES256');
-  const deviceKeys = await generateKeyPair('ES256');
-  const providerJwk = await exportJWK(providerKeys.publicKey);
-  const deviceJwk = await exportJWK(deviceKeys.publicKey);
-  const jkt = await calculateJwkThumbprint(deviceJwk, 'sha256');
-  const now = Math.floor(Date.now()/1000);
-  const solidToken = await new SignJWT({ webid: PERSON, azp: APP })
+async function signedIdentity(override = {}) {
+  const key = await generateKeyPair('ES256');
+  const publicJwk = await exportJWK(key.publicKey);
+  const now = Math.floor(Date.now() / 1000);
+  const claims = { sub: PERSON, webid: PERSON, azp: APP, ...override };
+  const token = await new SignJWT(claims)
     .setProtectedHeader({ alg: 'ES256' })
-    .setSubject(PERSON).setIssuer(ISSUER).setAudience(APP)
-    .setIssuedAt(now - 200).setExpirationTime(now + 3600)
-    .sign(providerKeys.privateKey);
-  async function proof(token, url) {
-    return new SignJWT({
-      htm: 'POST', htu: url, jti: crypto.randomUUID(),
-      ath: dpopHash(token), iat: Math.floor(Date.now()/1000)
-    }).setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: deviceJwk })
-      .sign(deviceKeys.privateKey);
-  }
-  return { providerJwk, solidToken, jkt, proof };
+    .setIssuer(ISSUER).setAudience(APP)
+    .setIssuedAt(now - 120).setExpirationTime(now + 3600)
+    .sign(key.privateKey);
+  return { publicJwk, token };
 }
 
-function testBroker(client, { rights = ['apods:CreateGroup'] } = {}) {
-  const keys = new Map(), calls = [], issuedTokens = [];
-  let currentRights = rights;
-  const jwtInst = { publicJwk: client.providerJwk, settings: { alg: 'ES256' } };
-  const groupCredentials = {
-    settings: { enabled: true, secret: STEPUP_SECRET, issuer: ISSUER,
-      issuerSecret: ISSUER_SECRET, approvedApps: [APP],
-      attestationPrefix: 'test:proof:mint' },
-    redis: {
-      async set(key, value, ex, ttl, nx) {
-        if (nx !== 'NX' || ex !== 'EX' || ttl !== 300) throw Error('Invalid mint replay guard');
-        if (keys.has(key)) return null;
-        keys.set(key, value);
-        return 'OK';
+function provider(token, publicJwk) {
+  let rights = [];
+  let registered = true;
+  const seen = [];
+  const jwtInstance = { publicJwk, settings: { alg: 'ES256' } };
+  const ctx = {
+    params: { displayName: 'Provider-owned Group' },
+    meta: {
+      webId: APP, impersonatedUser: PERSON,
+      tokenPayload: { sub: PERSON, webid: PERSON, azp: APP },
+      $collectivesAuthHeader: 'Bearer ' + token,
+      $collectivesIdempotencyKey: REQUEST_KEY
+    },
+    async call(action, params) {
+      seen.push(action);
+      if (action === 'jwk.verifyToken') {
+        return jwkService.actions.verifyToken.call(jwtInstance, { params });
       }
+      if (action === 'collective-reservations.reserve') {
+        await assertLiveCollectiveConsent(ctx, {
+          principal: params.principal, app: params.app,
+          operation: 'reserve', approvedApps: [APP]
+        });
+        return { canonicalGroupId: 'cg_' + 'b'.repeat(32), stage: 'reserved' };
+      }
+      if (action === 'auth.account.findByWebId') return { webId: PERSON };
+      if (action === 'app-registrations.isRegistered') return registered;
+      if (action === 'access-authorizations.getSpecialRights') return rights;
+      throw new Error('Unexpected provider action ' + action);
     }
   };
-  const dpopInst = {
-    settings: { replayPrefix: 'test:dpop', replayTtlSec: 300 },
-    redis: {
-      async set(key, value, ex, ttl, nx) {
-        if (nx !== 'NX') throw new Error('Expected atomic NX');
-        if (keys.has(key)) return null;
-        keys.set(key, value);
-        return 'OK';
-      }
-    }
-  };
-  const stepupInst = {
-    settings: { enabled: true, origin: ISSUER, approvedApps: [APP],
-      issuerSecret: ISSUER_SECRET,
-      ticketPrefix: 'test:stepup', ticketTtlSeconds: 600,
-      ratePrefix: 'test:stepup:rate', maxAttemptsPerMinute: 8 },
-    redis: {
-      ...dpopInst.redis,
-      async eval(lua, numKeys, key, seconds) {
-        expect(numKeys).toBe(1);
-        expect(seconds).toBe(60);
-        return 1;
-      }
-    }
-  };
-  const reserveInst = {
-    settings: { enabled: true, providerOrigin: ISSUER, grantSecret: GRANT_SECRET }
-  };
-
-  async function call(action, params) {
-    calls.push({ action, params });
-    if (action === 'jwk.verifyToken') {
-      return jwkService.actions.verifyToken.call(jwtInst, { params });
-    }
-    if (action === 'oauth-dpop-nonce.verifyProof') {
-      return dpopService.actions.verifyProof.handler.call(dpopInst, { params });
-    }
-    if (action === 'auth.account.findByWebId') return { webId: PERSON };
-    if (action === 'app-registrations.isRegistered') return true;
-    if (action === 'access-authorizations.getSpecialRights') return currentRights;
-    if (action === 'passkeys-api.verifyAssertion') return { webId: PERSON };
-    if (action === 'collective-stepup-credentials.mint') {
-      const credential = await stepupCredentials.actions.mint.handler.call(groupCredentials, { params, call });
-      issuedTokens.push(credential.token);
-      return credential;
-    }
-    if (action === 'collective-stepup-credentials.verify') {
-      return stepupCredentials.actions.verify.handler.call(groupCredentials, { params });
-    }
-    if (action === 'collective-reservations.reserve') {
-      if (!currentRights.includes('apods:CreateGroup')) {
-        throw new Error('SAI revoked before authoritative commit');
-      }
-      return { canonicalGroupId: 'cg_' + 'c'.repeat(32), stage: 'reserved',
-        actorUri: ISSUER + '/groups/cg_' + 'c'.repeat(32) };
-    }
-    throw new Error('Unexpected action: ' + action);
-  }
-  async function performStepup() {
-    const proof = await client.proof(client.solidToken,
-      ISSUER + '/api/collectives/stepup/verify');
-    const ctx = {
-      params: { ticket: 'signed-web-authn-ticket-'.repeat(4),
-        response: { id: 'example-passkey' } },
-      meta: { $stepupAuthorization: 'Bearer ' + client.solidToken,
-        $stepupDpop: proof },
-      call
-    };
-    return stepupApi.actions.verify.handler.call(stepupInst, ctx);
-  }
-  async function performReservation(credential, { proof = null } = {}) {
-    const dpop = proof || await client.proof(credential.token,
-      ISSUER + '/api/collectives/reserve');
-    const ctx = {
-      params: { displayName: 'Cryptographic Integration Group' },
-      meta: { $collectivesAuthHeader: 'DPoP ' + credential.token,
-        $collectivesDpopProof: dpop, $collectivesIdempotencyKey: REQUEST_KEY },
-      call
-    };
-    return reservationApi.actions.reserve.handler.call(reserveInst, ctx);
-  }
-  return { calls, keys, issuedTokens, performStepup, performReservation,
-    revoke() { currentRights = []; },
-    jwtVerify(token) { return jwkService.actions.verifyToken.call(jwtInst, {
-      params: { token }
-    }); }
+  const instance = { settings: {
+    enabled: true, providerOrigin: ISSUER, grantSecret: SECRET
+  }};
+  return {
+    seen,
+    approve() { rights = ['apods:CreateGroup']; },
+    revoke() { rights = []; },
+    unregister() { registered = false; },
+    reserve() { return groupApi.actions.reserve.handler.call(instance, ctx); }
   };
 }
 
-describe('G1 Solid login → SAI → WebAuthn → Group-only DPoP authorization chain', () => {
-  test('signed Solid ID + SAI + WebAuthn → isolated Group token → reserved identity', async () => {
-    const client = await makeClient();
-    const h = testBroker(client);
-    const credential = await h.performStepup();
-    expect(credential).toMatchObject({ tokenType: 'DPoP', expiresIn: 300 });
-    const reservation = await h.performReservation(credential);
-    expect(reservation.stage).toBe('reserved');
-    expect(h.calls.some(x => x.action === 'collective-stepup-credentials.mint')).toBe(true);
-    expect(h.calls.some(x => x.action === 'collective-reservations.reserve')).toBe(true);
-    // Group-only HS256 JWT is cryptographically invalid for the ordinary
-    // Solid-OIDC ES256 verifier, preventing access-token confusion.
-    expect(await h.jwtVerify(credential.token)).toBeUndefined();
-  });
-
-  test('a single WebAuthn ticket cannot mint two credentials', async () => {
-    const h = testBroker(await makeClient());
-    await h.performStepup();
-    await expect(h.performStepup()).rejects.toMatchObject({
-      type: 'COLLECTIVE_STEPUP_REPLAY'
-    });
-    expect(h.issuedTokens).toHaveLength(1);
-  });
-
-  test('revoking SAI consent before step-up denies issuing any Group token', async () => {
-    const h = testBroker(await makeClient());
+describe('Existing Solid-OIDC + SAI → provider-owned Groups', () => {
+  test('authenticated app denied before SAI consent; approved, then revoked', async () => {
+    const signed = await signedIdentity();
+    const h = provider(signed.token, signed.publicJwk);
+    await expect(h.reserve()).rejects.toMatchObject({ type: 'COLLECTIVE_APP_CONSENT_MISSING' });
+    h.approve();
+    expect((await h.reserve()).stage).toBe('reserved');
     h.revoke();
-    await expect(h.performStepup()).rejects.toMatchObject({
-      type: 'COLLECTIVE_APP_CONSENT_MISSING'
-    });
-    expect(h.issuedTokens).toHaveLength(0);
+    await expect(h.reserve()).rejects.toMatchObject({ type: 'COLLECTIVE_APP_CONSENT_MISSING' });
+    expect(h.seen.filter(x => x === 'jwk.verifyToken')).toHaveLength(3);
   });
 
-  test('revoking SAI after step-up prevents reservation despite valid signed token', async () => {
-    const client = await makeClient();
-    const h = testBroker(client);
-    const credential = await h.performStepup();
-    h.revoke();
-    await expect(h.performReservation(credential)).rejects.toThrow(
-      'SAI revoked before authoritative commit'
-    );
+  test('unregistering the app revokes Group authority without a new login ceremony', async () => {
+    const signed = await signedIdentity();
+    const h = provider(signed.token, signed.publicJwk);
+    h.approve();
+    h.unregister();
+    await expect(h.reserve()).rejects.toMatchObject({ type: 'COLLECTIVE_APP_NOT_REGISTERED' });
   });
 
-  test('a DPoP proof for an unrelated bearer cannot reserve a Group', async () => {
-    const client = await makeClient();
-    const h = testBroker(client);
-    const credential = await h.performStepup();
-    const wrong = await client.proof('some-other-bearer',
-      ISSUER + '/api/collectives/reserve');
-    await expect(h.performReservation(credential, { proof: wrong }))
-      .rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
+  test('wrong provider signature rejects request before any SAI or storage operation', async () => {
+    const a = await signedIdentity();
+    const b = await signedIdentity();
+    const h = provider(b.token, a.publicJwk);
+    h.approve();
+    await expect(h.reserve()).rejects.toMatchObject({ type: 'COLLECTIVE_AUTHENTICATION_REQUIRED' });
+    expect(h.seen).toEqual(['jwk.verifyToken']);
+  });
+
+  test('signed subject differing from WebID cannot create a Group', async () => {
+    const a = await signedIdentity({ sub: ISSUER + '/users/other#me' });
+    const h = provider(a.token, a.publicJwk);
+    h.approve();
+    await expect(h.reserve()).rejects.toMatchObject({ type: 'COLLECTIVE_AUTHENTICATION_REQUIRED' });
   });
 });

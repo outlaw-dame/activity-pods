@@ -35,7 +35,9 @@ jobs:
           git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
-          yarn install
+          # This isolated proof imports only the JS Moleculer error contract.
+          # Do not run unrelated Sharp/libvips native postinstall downloads.
+          yarn install --ignore-scripts
 
       - name: Start isolated persistent Fuseki TDB2
         run: |

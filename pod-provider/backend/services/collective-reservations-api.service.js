@@ -153,6 +153,12 @@ module.exports = {
         }
         const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
         const canonicalGroupId = ctx.params.canonicalGroupId;
+        // Validate at the service boundary too: internal Moleculer calls can
+        // bypass route-level FastestValidator declarations.
+        if (typeof canonicalGroupId !== 'string' ||
+            !/^cg_[a-f0-9]{32}$/u.test(canonicalGroupId)) {
+          fail('COLLECTIVE_INVALID_ID', 400);
+        }
         const grant = makeProviderGrant(
           this.settings.grantSecret, principal, app, 'read', canonicalGroupId
         );

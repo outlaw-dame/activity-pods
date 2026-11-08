@@ -171,6 +171,21 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
     if (broker) await broker.stop();
   }, 30000);
 
+  test('browser preflight does not allow an unapproved origin or wildcard', async () => {
+    const headers = {
+      Origin: 'https://malicious.example',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'authorization,dpop,content-type'
+    };
+    for (const path of ['/api/collectives/stepup/verify', '/api/collectives/reserve']) {
+      const response = await fetch('http://127.0.0.1:' + port + path, {
+        method: 'OPTIONS', headers, signal: AbortSignal.timeout(10000)
+      });
+      expect(response.headers.get('access-control-allow-origin')).not.toBe('*');
+      expect(response.headers.get('access-control-allow-origin')).not.toBe('https://malicious.example');
+    }
+  });
+
   test('real HTTP flow: signed Solid token + consent + passkey proof → scoped credential → reservation', async () => {
     const now = Math.floor(Date.now()/1000);
     const solid = await new SignJWT({ webid: PERSON, azp: APP })

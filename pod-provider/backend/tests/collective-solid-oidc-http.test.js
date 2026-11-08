@@ -48,6 +48,17 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
     });
     return { response: result, text: await result.text() };
   }
+  async function requestRead(token, id = 'cg_' + 'c'.repeat(32)) {
+    const response = await fetch('http://127.0.0.1:' + port + '/api/collectives/' + id, {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Origin': 'https://paper.example'
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+    return { response, text: await response.text() };
+  }
   async function token(overrides = {}, key = issuerKey) {
     const now = Math.floor(Date.now() / 1000);
     return new SignJWT({ webid: PERSON, azp: APP, ...overrides })
@@ -66,7 +77,7 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
       name: 'api', mixins: [Gateway],
       settings: {
         port: 0, routes: [],
-        cors: { origin: '*', methods: ['POST', 'OPTIONS'] }
+        cors: { origin: '*', methods: ['GET', 'POST', 'OPTIONS'] }
       },
       methods: {
         async authenticate(ctx, route, req, res) {
@@ -120,6 +131,17 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
             canonicalGroupId: 'cg_' + 'c'.repeat(32),
             stage: 'reserved', actorUri: ORIGIN + '/groups/cg_' + 'c'.repeat(32)
           };
+        },
+        async get(ctx) {
+          await assertLiveCollectiveConsent(ctx, {
+            principal: ctx.params.principal, app: ctx.params.app,
+            operation: 'read', approvedApps: [APP]
+          });
+          if (ctx.params.principal !== PERSON || ctx.params.canonicalGroupId !== 'cg_' + 'c'.repeat(32)) {
+            const { MoleculerError } = require('moleculer').Errors;
+            throw new MoleculerError('COLLECTIVE_NOT_FOUND', 404, 'COLLECTIVE_NOT_FOUND');
+          }
+          return { canonicalGroupId: ctx.params.canonicalGroupId, stage: 'reserved', revision: 1 };
         }
       }
     });
@@ -159,6 +181,33 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
     expect(revoked.response.status).toBeGreaterThanOrEqual(400);
     expect(revoked.response.status).toBeLessThan(500);
     expect(revoked.text).not.toContain('"stage":"reserved"');
+  });
+
+  test('GET needs ReadGroups separately; revocation and IDOR fail closed', async () => {
+    const solid = await token();
+    rights = ['apods:CreateGroup'];
+    const withoutRead = await requestRead(solid);
+    expect(withoutRead.response.status).toBeGreaterThanOrEqual(400);
+    expect(withoutRead.response.status).toBeLessThan(500);
+
+    rights = ['apods:ReadGroups'];
+    const permitted = await requestRead(solid);
+    expect(permitted.response.status).toBe(200);
+    expect(JSON.parse(permitted.text)).toMatchObject({
+      canonicalGroupId: 'cg_' + 'c'.repeat(32),
+      stage: 'reserved', revision: 1
+    });
+    expect(permitted.response.headers.get('cache-control')).toBe('no-store');
+
+    const wrongId = await requestRead(solid, 'cg_' + 'b'.repeat(32));
+    expect(wrongId.response.status).toBe(404);
+    const malformed = await requestRead(solid, 'cg_invalid');
+    expect(malformed.response.status).toBeGreaterThanOrEqual(400);
+
+    rights = [];
+    const revoked = await requestRead(solid);
+    expect(revoked.response.status).toBeGreaterThanOrEqual(400);
+    expect(revoked.response.status).toBeLessThan(500);
   });
 
   test('unregistering an application denies Group creation even when it retains a valid token', async () => {

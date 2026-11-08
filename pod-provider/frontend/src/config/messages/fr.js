@@ -155,6 +155,8 @@ module.exports = {
       read_outbox: "Lire ma boîte d'envoi",
       post_outbox: "Poster dans ma boîte d'envoi",
       query_sparql_endpoint: 'Rechercher mes données',
+      create_social_group: 'Créer des communautés sociales via mon fournisseur',
+      read_social_groups: 'Lire les communautés auxquelles je peux accéder',
       create_wac_group: 'Créer et gérer des groupes de permissions',
       create_collection: 'Créer et gérer des collections',
       update_webid: 'Modifier mon identité (WebId)',

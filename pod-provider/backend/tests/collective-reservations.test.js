@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 const service = require('../services/collective-reservations.service');
 
 const SECRET = 'z'.repeat(48);
+const WORKER_SECRET = 'w'.repeat(48);
+const WORKER_PURPOSE = 'provider.collective.worker.advance.v1';
 const PROVIDER = 'https://social.example';
 const PRINCIPAL = PROVIDER + '/users/alice';
 const APP = 'https://reader.example/app';
@@ -28,9 +30,14 @@ function readGrant(groupId, overrides = {}) {
     grant: createGrant(PRINCIPAL, APP, 'read', groupId), ...overrides };
 }
 function advanceGrant(groupId, expectedRevision, nextStage, overrides = {}) {
+  const issuedAt = Date.now() - 500;
+  const expiresAt = issuedAt + 50000;
+  const fields = [WORKER_PURPOSE, groupId, expectedRevision, nextStage, issuedAt, expiresAt];
+  const workerGrant = { purpose: WORKER_PURPOSE, groupId,
+    revision: expectedRevision, nextStage, issuedAt, expiresAt,
+    mac: crypto.createHmac('sha256', WORKER_SECRET).update(JSON.stringify(fields)).digest('hex') };
   return { principal: PRINCIPAL, app: APP, canonicalGroupId: groupId, expectedRevision, nextStage,
-    grant: createGrant(PRINCIPAL, APP, 'advance',
-      sha(JSON.stringify([groupId, expectedRevision, nextStage]))), ...overrides };
+    workerGrant, ...overrides };
 }
 function materialize(query) {
   const id = /<urn:apods:collective:([^>]+)> a <http:\/\/activitypods\.org\/ns\/core#CollectiveReservationV1>/u.exec(query)?.[1];
@@ -49,7 +56,7 @@ function harness(db = new Map()) {
   let failWrite = false;
   let registered = true;
   let rights = ['apods:CreateGroup', 'apods:ReadGroups'];
-  const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48), approvedApps: [APP, 'https://forum.example/app'] } };
+  const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48), workerSecret: WORKER_SECRET, approvedApps: [APP, 'https://forum.example/app'] } };
   instance._load = service.methods._load.bind(instance);
   const ctx = params => ({
     params, call: async (name, args) => {
@@ -148,7 +155,7 @@ describe('G1 durable collective reservations — provider authority', () => {
     const secondary = 'https://forum.example/app';
     const grant = advanceGrant(id, 1, 'ap-key-pending', {
       app: secondary,
-      grant: createGrant(PRINCIPAL, secondary, 'advance', sha(JSON.stringify([id, 1, 'ap-key-pending'])))
+      // The provider worker authorizes the stage; app identity is not the signer.
     });
     const updated = await h.action('advance', grant);
     expect(updated).toMatchObject({ canonicalGroupId: id, stage: 'ap-key-pending', revision: 2 });
@@ -164,7 +171,7 @@ describe('G1 durable collective reservations — provider authority', () => {
     })), 'COLLECTIVE_NOT_FOUND');
     await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending', {
       principal: bob,
-      grant: createGrant(bob, APP, 'advance', sha(JSON.stringify([id, 1, 'ap-key-pending'])))
+      // A legitimate worker credential still cannot impersonate the owner.
     })), 'COLLECTIVE_NOT_FOUND');
   });
 
@@ -327,7 +334,28 @@ describe('G1 durable collective reservations — provider authority', () => {
     const { canonicalGroupId: id } = await h.action('reserve', reservation());
     await expectError(h.action('get', { ...readGrant(id), grant: reservation().grant }), 'COLLECTIVE_UNAUTHORIZED');
     await expectError(h.action('advance', { ...advanceGrant(id, 1, 'ap-key-pending'),
-      grant: readGrant(id).grant }), 'COLLECTIVE_UNAUTHORIZED');
+      workerGrant: readGrant(id).grant }), 'COLLECTIVE_WORKER_UNAUTHORIZED');
+  });
+
+  test('app-level HMAC grant cannot advance a provider-only lifecycle', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    const proper = advanceGrant(id, 1, 'ap-key-pending');
+    await expectError(h.action('advance', { ...proper, workerGrant: createGrant(PRINCIPAL, APP,
+      'advance', sha(JSON.stringify([id, 1, 'ap-key-pending']))) }), 'COLLECTIVE_WORKER_UNAUTHORIZED');
+    await expectError(h.action('advance', { ...proper, workerGrant: {
+      ...proper.workerGrant, mac: '0'.repeat(64)
+    } }), 'COLLECTIVE_WORKER_UNAUTHORIZED');
+    expect(h.db.get(id).revision).toBe(1);
+  });
+
+  test('missing worker secret disables transitions even with otherwise valid credentials', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    h.instance.settings.workerSecret = '';
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending')),
+      'COLLECTIVE_WORKER_DISABLED');
+    expect(h.db.get(id).revision).toBe(1);
   });
 
   test('corrupt or duplicate source records fail closed', async () => {

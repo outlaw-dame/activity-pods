@@ -117,12 +117,14 @@ module.exports = {
           fail('COLLECTIVE_API_DISABLED', 503);
         }
         const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
-        // Verify identity before validating a potentially user-controlled key.
-        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
         if (typeof idempotencyKey !== 'string' ||
             !/^[A-Za-z0-9_-]{24,128}$/u.test(idempotencyKey)) {
+          // Invalid parameters require no cryptographic work or downstream
+          // calls, and the raw bearer must not linger in request metadata.
+          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
           fail('COLLECTIVE_INVALID_IDEMPOTENCY', 400);
         }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
         const requestHash = reserveFingerprint(
           principal, app, idempotencyKey, ctx.params.displayName
         );

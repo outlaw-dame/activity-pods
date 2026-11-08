@@ -7,6 +7,7 @@ on:
       - 'pod-provider/backend/services/collective-provisioning-leases.service.js'
       - 'pod-provider/backend/services/utils/collective-worker-lease.js'
       - 'pod-provider/backend/scripts/proof-collective-fuseki.js'
+      - 'pod-provider/backend/scripts/proof-collective-redis.js'
       - '.github/workflows/collectives-g1-fuseki.yml'
   workflow_dispatch:
 
@@ -45,13 +46,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p data/fuseki_test
-          docker compose -f docker-compose-test.yml up -d fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test redis
           FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
 
       - name: Prove concurrent idempotent reservation and CAS on real Fuseki
         env:
           FUSEKI_URL: http://127.0.0.1:3040
         run: node backend/scripts/proof-collective-fuseki.js prepare
+
+      - name: Prove real Redis rate, ticket, DPoP nonce and JTI atomicity
+        env:
+          COLLECTIVES_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if docker compose -f docker-compose-test.yml exec -T redis redis-cli PING | grep -q PONG; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then exit 1; fi
+            sleep 2
+          done
+          node backend/scripts/proof-collective-redis.js
 
       - name: Restart Fuseki without discarding its persistent volume
         run: |

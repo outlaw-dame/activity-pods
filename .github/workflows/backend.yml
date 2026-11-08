@@ -41,7 +41,17 @@ jobs:
             sed -i 's#git@github.com:#https://github.com/#g' yarn.lock
           fi
 
+      - name: Install system libvips for reproducible Sharp native build
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libvips-dev pkg-config build-essential python3
+          pkg-config --modversion vips-cpp
+
       - name: Install backend dependencies
+        env:
+          SHARP_FORCE_GLOBAL_LIBVIPS: '1'
+          npm_config_build_from_source: 'true'
         run: |
           set -euo pipefail
           # Preserve real postinstall/native dependency behavior. Sharp's

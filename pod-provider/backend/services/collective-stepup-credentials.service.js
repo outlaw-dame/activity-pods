@@ -12,6 +12,8 @@
 const crypto = require('node:crypto');
 const { SignJWT, jwtVerify } = require('jose');
 const { MoleculerError } = require('moleculer').Errors;
+const { verifyMintAttestation } = require('./utils/collective-mint-attestation');
+const { assertLiveCollectiveConsent, parseApprovedApps } = require('./utils/collective-access-policy');
 
 const PURPOSE = 'apods:collective-reservation-stepup:v1';
 const LIFETIME_SECONDS = 300;
@@ -53,18 +55,35 @@ module.exports = {
     enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
       process.env.PROVIDER_COLLECTIVES_STEPUP_ENABLED === 'true',
     secret: process.env.PROVIDER_COLLECTIVES_STEPUP_SECRET || '',
+    issuerSecret: process.env.PROVIDER_COLLECTIVES_STEPUP_ISSUER_SECRET || '',
+    approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || ''),
     issuer: process.env.SEMAPPS_HOME_URL || ''
   },
   actions: {
     mint: {
-      params: { principal: 'string', app: 'string', jkt: 'string', verifiedAt: 'number|integer' },
+      params: {
+        principal: 'string', app: 'string', jkt: 'string',
+        verifiedAt: 'number|integer', ticketHash: 'string',
+        issuerAttestation: 'string'
+      },
       async handler(ctx) {
         if (!this.settings.enabled) deny('COLLECTIVE_STEPUP_DISABLED', 503);
-        const { principal, app, jkt, verifiedAt } = ctx.params;
+        const { principal, app, jkt, verifiedAt, ticketHash, issuerAttestation } = ctx.params;
         const now = Math.floor(Date.now() / 1000);
         if (!validUri(principal, true) || !validUri(app) || !JKT.test(jkt) ||
             !Number.isSafeInteger(verifiedAt) || verifiedAt > now + 2 ||
-            now - verifiedAt > 30) deny('COLLECTIVE_STEPUP_INVALID');
+            now - verifiedAt > 30 ||
+            typeof ticketHash !== 'string' || !/^[a-f0-9]{64}$/u.test(ticketHash) ||
+            !verifyMintAttestation(this.settings.issuerSecret,
+              { principal, app, jkt, verifiedAt, ticketHash }, issuerAttestation)) {
+          deny('COLLECTIVE_STEPUP_INVALID');
+        }
+        // The minting action is callable internally by other Moleculer services.
+        // Recheck current SAI authorization at THIS boundary too; a fabricated
+        // claim or stale grant must not become a minted high-trust credential.
+        await assertLiveCollectiveConsent(ctx, {
+          principal, app, operation: 'reserve', approvedApps: this.settings.approvedApps
+        });
         const issuer = issuerOrigin(this.settings.issuer);
         const token = await new SignJWT({
           purpose: PURPOSE, operation: 'reserve',

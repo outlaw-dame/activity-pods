@@ -54,7 +54,16 @@ function testBroker(client, { rights = ['apods:CreateGroup'] } = {}) {
   const jwtInst = { publicJwk: client.providerJwk, settings: { alg: 'ES256' } };
   const groupCredentials = {
     settings: { enabled: true, secret: STEPUP_SECRET, issuer: ISSUER,
-      issuerSecret: ISSUER_SECRET, approvedApps: [APP] }
+      issuerSecret: ISSUER_SECRET, approvedApps: [APP],
+      attestationPrefix: 'test:proof:mint' },
+    redis: {
+      async set(key, value, ex, ttl, nx) {
+        if (nx !== 'NX' || ex !== 'EX' || ttl !== 300) throw Error('Invalid mint replay guard');
+        if (keys.has(key)) return null;
+        keys.set(key, value);
+        return 'OK';
+      }
+    }
   };
   const dpopInst = {
     settings: { replayPrefix: 'test:dpop', replayTtlSec: 300 },

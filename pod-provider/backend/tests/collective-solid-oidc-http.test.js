@@ -11,6 +11,15 @@
 const { ServiceBroker } = require('moleculer');
 const Gateway = require('moleculer-web');
 const { SignJWT, generateKeyPair, jwtVerify } = require('jose');
+// Supply the instance config normally injected by ActivityPods. The gateway
+// and Solid-OIDC authenticate/authorize actions themselves remain real.
+jest.mock('../config/config', () => ({
+  BASE_URL: 'https://provider.example',
+  FRONTEND_URL: 'https://provider.example',
+  REDIS_OIDC_PROVIDER_URL: 'redis://127.0.0.1:6379',
+  COOKIE_SECRET: 'test-only-solid-cookie-secret',
+  SEMAPPS_AVAILABLE_LOCALES: 'en'
+}));
 const solidOidc = require('../services/solid/solid-oidc');
 const groupApi = require('../services/collective-reservations-api.service');
 const { assertLiveCollectiveConsent } = require('../services/utils/collective-access-policy');

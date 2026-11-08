@@ -29,6 +29,10 @@ function harness({
     async call(action, params) {
       calls.push({ action, params });
       if (action === 'jwk.verifyToken') return claims;
+      if (action === 'collective-reservations.get') {
+        if (failWrite) throw new Error('Fuseki unavailable');
+        return { canonicalGroupId: 'cg_' + 'a'.repeat(32), stage: 'reserved', revision: 1 };
+      }
       if (action === 'collective-reservations.reserve') {
         if (failWrite) throw new Error('Fuseki unavailable');
         return { canonicalGroupId: 'cg_' + 'a'.repeat(32), stage: 'reserved' };
@@ -42,7 +46,11 @@ function harness({
     }
   };
   return { calls, ctx, instance,
-    run: () => api.actions.reserve.handler.call(instance, ctx) };
+    run: () => api.actions.reserve.handler.call(instance, ctx),
+    read: (groupId = 'cg_' + 'a'.repeat(32)) => {
+      ctx.params = { canonicalGroupId: groupId };
+      return api.actions.get.handler.call(instance, ctx);
+    } };
 }
 
 async function denied(run, code) {
@@ -72,7 +80,8 @@ describe('Provider-native Solid-OIDC Group reservation', () => {
     expect(route.authentication).toBe(true);
     expect(route.authorization).toBe(true);
     expect(route.aliases).toEqual({
-      'POST /reserve': 'collective-reservations-api.reserve'
+      'POST /reserve': 'collective-reservations-api.reserve',
+      'GET /:canonicalGroupId': 'collective-reservations-api.get'
     });
     expect(route.cors.credentials).toBe(false);
     expect(route.cors.allowedHeaders).not.toContain('DPoP');
@@ -136,7 +145,41 @@ describe('Provider-native Solid-OIDC Group reservation', () => {
   ])('rejects %s idempotency key', async (_case, key) => {
     const h = harness({ key });
     await denied(h.run, 'COLLECTIVE_INVALID_IDEMPOTENCY');
-    expect(h.calls).toHaveLength(0);
+    expect(h.calls.map(x => x.action)).toEqual(['jwk.verifyToken']);
+  });
+
+  test('read uses the existing Solid login with a distinct, Group-bound ReadGroups grant', async () => {
+    const h = harness();
+    const id = 'cg_' + 'a'.repeat(32);
+    const result = await h.read(id);
+    expect(result).toEqual({ canonicalGroupId: id, stage: 'reserved', revision: 1 });
+    expect(h.calls.map(x => x.action)).toEqual([
+      'jwk.verifyToken', 'collective-reservations.get'
+    ]);
+    const params = h.calls[1].params;
+    expect(params).toMatchObject({ canonicalGroupId: id, principal, app,
+      grant: { purpose: 'provider.collective.reservation.v1', operation: 'read',
+        requestHash: id } });
+    const fields = [params.grant.purpose, principal, app, 'read', id,
+      params.grant.issuedAt, params.grant.expiresAt];
+    expect(params.grant.mac).toBe(crypto.createHmac('sha256', secret)
+      .update(JSON.stringify(fields)).digest('hex'));
+    expect(h.ctx.meta.$responseHeaders['Cache-Control']).toBe('no-store');
+    expect(h.ctx.meta).not.toHaveProperty('$collectivesAuthHeader');
+  });
+
+  test('read denies forged gateway identity and never invokes the reservation store', async () => {
+    const h = harness({ gateway: { impersonatedUser: 'https://attacker.example#me' } });
+    await denied(() => h.read(), 'COLLECTIVE_AUTHENTICATION_REQUIRED');
+    expect(h.calls.some(x => x.action === 'collective-reservations.get')).toBe(false);
+  });
+
+  test('read refuses missing or malformed Group IDs before issuing storage calls', async () => {
+    const h = harness();
+    for (const id of ['../secret', 'cg_bad', '', 'cg_' + 'x'.repeat(32)]) {
+      await expect(h.read(id)).rejects.toBeDefined();
+    }
+    expect(h.calls.some(x => x.action === 'collective-reservations.get')).toBe(false);
   });
 
   test('does not report success if provider persistence fails', async () => {

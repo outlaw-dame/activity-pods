@@ -79,6 +79,17 @@ module.exports = {
           throw new MoleculerError('DPoP proof missing jwk', 401, 'INVALID_DPOP_PROOF');
         }
 
+        // RFC 9449 requires a public JWK in the DPoP protected header.
+        // Reject private/symmetric material rather than accepting it as a
+        // harmless extra claim that could leak signing-key bytes to the API.
+        if (protectedHeader.jwk.kty !== 'EC' || protectedHeader.jwk.crv !== 'P-256' ||
+            typeof protectedHeader.jwk.x !== 'string' ||
+            typeof protectedHeader.jwk.y !== 'string' ||
+            ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']
+              .some(field => Object.hasOwn(protectedHeader.jwk, field))) {
+          throw new MoleculerError('DPoP JWK must contain public key only', 401, 'INVALID_DPOP_PROOF');
+        }
+
         const key = await importJWK(protectedHeader.jwk, 'ES256');
         const { payload } = await jwtVerify(proofJwt, key, {
           typ: 'dpop+jwt',
@@ -95,8 +106,9 @@ module.exports = {
           throw new MoleculerError('DPoP htu mismatch', 401, 'INVALID_DPOP_PROOF');
         }
 
-        const proofJti = String(payload.jti || '').trim();
-        if (!proofJti) {
+        const proofJti = typeof payload.jti === 'string' ? payload.jti : '';
+        if (!proofJti || Buffer.byteLength(proofJti) > 256 ||
+            /[\u0000-\u001f\u007f]/u.test(proofJti)) {
           throw new MoleculerError('DPoP jti missing', 401, 'INVALID_DPOP_PROOF');
         }
 

@@ -10,6 +10,8 @@ const token = 'ordinary.signed.solidtoken';
 const proof = 'encoded.header.signature';
 const ticket = 'a'.repeat(80);
 const jkt = 'z'.repeat(43);
+const issuerSecret = 'distinct-stepup-issuer-secret-'.repeat(3);
+const { verifyMintAttestation } = require('../services/utils/collective-mint-attestation');
 
 function harness({
   enabled = true, rights = ['apods:CreateGroup'], registered = true,
@@ -23,7 +25,7 @@ function harness({
   const calls = [];
   let currentRights = rights, currentRegistered = registered;
   const instance = {
-    settings: { enabled, origin, approvedApps: allowlist,
+    settings: { enabled, origin, approvedApps: allowlist, issuerSecret,
       ticketPrefix: 'test:ticket', ticketTtlSeconds: 600,
       ratePrefix: 'test:rate', maxAttemptsPerMinute: 8 },
     redis: {
@@ -56,6 +58,8 @@ function harness({
         return { webId: assertedWebId };
       }
       if (action === 'collective-stepup-credentials.mint') {
+        expect(verifyMintAttestation(issuerSecret, params, params.issuerAttestation)).toBe(true);
+        expect(params.ticketHash).toBe(crypto.createHash('sha256').update(ticket).digest('hex'));
         return { token: 'group-only.stepup.credential', tokenType: 'DPoP',
           expiresIn: 300 };
       }

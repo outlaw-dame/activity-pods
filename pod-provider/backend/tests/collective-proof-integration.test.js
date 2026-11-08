@@ -69,7 +69,12 @@ function provider(token, publicJwk) {
     approve() { rights = ['apods:CreateGroup']; },
     revoke() { rights = []; },
     unregister() { registered = false; },
-    reserve() { return groupApi.actions.reserve.handler.call(instance, ctx); }
+    reserve() {
+      // Every HTTP request has a fresh request-scoped auth header. The API
+      // deliberately deletes the raw bearer from downstream shared metadata.
+      ctx.meta.$collectivesAuthHeader = 'Bearer ' + token;
+      return groupApi.actions.reserve.handler.call(instance, ctx);
+    }
   };
 }
 

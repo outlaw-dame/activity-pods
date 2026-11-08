@@ -120,6 +120,32 @@ describe('DPoP access-token hash verification', () => {
     expect(f.keys.has('test:nonce:' + audience + ':' + nonce)).toBe(true);
   });
 
+  test('rejects DPoP protected header exposing a private JWK', async () => {
+    const store = fixture();
+    const { privateKey } = await generateKeyPair('ES256');
+    const privateJwk = await exportJWK(privateKey);
+    const proofJwt = await new SignJWT({
+      htm: 'POST', htu: URL, iat: Math.floor(Date.now() / 1000),
+      jti: crypto.randomUUID(), ath: tokenHash(TOKEN)
+    }).setProtectedHeader({
+      typ: 'dpop+jwt', alg: 'ES256', jwk: privateJwk
+    }).sign(privateKey);
+    await expect(service.actions.verifyProof.handler.call(store.instance, {
+      params: { proofJwt, htm: 'POST', htu: URL,
+        audience: 'https://client.example/app', expectedAth: tokenHash(TOKEN) }
+    })).rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
+    expect(store.keys.size).toBe(0);
+  });
+
+  test('rejects oversized DPoP replay IDs before writing to Redis', async () => {
+    const store = fixture();
+    const proof = await signedProof({ jti: 'x'.repeat(400) });
+    await expect(service.actions.verifyProof.handler.call(store.instance, {
+      params: params(proof)
+    })).rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
+    expect(store.keys.size).toBe(0);
+  });
+
   test('rejects proof bound to a different URL or HTTP operation', async () => {
     const store = fixture();
     const proof = await signedProof({ htu: ORIGIN + '/api/other', htm: 'GET' });

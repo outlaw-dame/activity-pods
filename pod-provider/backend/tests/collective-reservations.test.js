@@ -72,7 +72,10 @@ function harness(db = new Map()) {
         if (!id || !m || !insert) throw new Error('Unexpected CAS SPARQL syntax');
         const row = db.get(id);
         if (row && row.stage === JSON.parse(m[1]) && row.revision === Number(JSON.parse(m[2]))) {
-          db.set(id, { ...row, stage: JSON.parse(insert[1]), revision: Number(JSON.parse(insert[2])) });
+          const nonce = /apods:collectiveLastTransition ("[^"]+")/u.exec(args.query);
+          if (!nonce) throw new Error('Missing transition nonce');
+          db.set(id, { ...row, stage: JSON.parse(insert[1]),
+            revision: Number(JSON.parse(insert[2])), lastTransition: JSON.parse(nonce[1]) });
         }
       } else throw new Error('Unexpected update');
     }

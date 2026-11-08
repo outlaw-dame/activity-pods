@@ -13,6 +13,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const service = require('../services/collective-reservations.service');
+const leaseService = require('../services/collective-provisioning-leases.service');
 
 const origin = 'https://groups-proof.example';
 const principal = origin + '/users/test-authority';
@@ -79,7 +80,7 @@ function instance() {
   obj._load = service.methods._load.bind(obj);
   return obj;
 }
-async function call(instanceObj, actionName, params) {
+async function call(instanceObj, actionName, params, selectedService = service) {
   const ctx = {
     params,
     call: async (serviceName, args) => {
@@ -95,8 +96,38 @@ async function call(instanceObj, actionName, params) {
       throw new Error('Unexpected action ' + serviceName);
     }
   };
-  return service.actions[actionName].handler.call(instanceObj, ctx);
+  return selectedService.actions[actionName].handler.call(instanceObj, ctx);
 }
+function leaseInstance() {
+  const obj = {
+    settings: { enabled: true, secret: workerSecret, ttlMs: 1500 }
+  };
+  obj._load = leaseService.methods._load.bind(obj);
+  return obj;
+}
+function leaseGrant(action, workerId, tokenHash = '') {
+  const issuedAt = Date.now() - 500;
+  const expiresAt = issuedAt + 30000;
+  const fields = ['provider.collective.worker.lease.v1', action, id, workerId,
+    tokenHash, issuedAt, expiresAt];
+  return {
+    purpose: 'provider.collective.worker.lease.v1', operation: action,
+    groupId: id, workerId, tokenHash, issuedAt, expiresAt,
+    mac: crypto.createHmac('sha256', workerSecret).update(JSON.stringify(fields)).digest('hex')
+  };
+}
+function leaseParams(action, workerId, leaseToken = undefined) {
+  const digest = leaseToken === undefined ? '' : sha(leaseToken);
+  return {
+    canonicalGroupId: id, workerId,
+    ...(leaseToken === undefined ? {} : { leaseToken }),
+    workerGrant: leaseGrant(action, workerId, digest)
+  };
+}
+function leaseCall(action, params) {
+  return call(leaseInstance(), action, params, leaseService);
+}
+
 async function count(id) {
   const rows = await fuseki('query', 'SELECT (COUNT(*) AS ?count) WHERE { <urn:apods:collective:' +
     id + '> ?p ?o }');
@@ -125,6 +156,28 @@ async function prepare() {
   });
   assert.equal(read.stage, 'ap-key-pending');
   assert.equal(read.revision, 2);
+  const contestedLeases = await Promise.allSettled(
+    Array.from({ length: 12 }, (_, i) => leaseCall('claim',
+      leaseParams('claim', 'test-worker-' + String(i).padStart(2, '0'))))
+  );
+  const winners = contestedLeases.filter(x => x.status === 'fulfilled');
+  assert.equal(winners.length, 1, 'exactly one worker lease owner');
+  assert(contestedLeases.filter(x => x.status === 'rejected')
+    .every(x => x.reason?.type === 'COLLECTIVE_LEASE_UNAVAILABLE'));
+  const winner = winners[0].value;
+  const renewed = await leaseCall('renew', leaseParams('renew', winner.workerId, winner.leaseToken));
+  assert.equal(renewed.epoch, winner.epoch);
+  assert(renewed.expiresAt >= winner.expiresAt);
+  await assert.rejects(leaseCall('release', leaseParams('release', 'test-worker-evil', winner.leaseToken)),
+    e => e.type === 'COLLECTIVE_LEASE_UNAVAILABLE');
+  const released = await leaseCall('release', leaseParams('release', winner.workerId, winner.leaseToken));
+  assert.equal(released.released, true);
+  // Simulate a worker crash: second worker cannot steal an active lease.
+  const crashLease = await leaseCall('claim', leaseParams('claim', 'test-worker-crash'));
+  assert(crashLease.leaseToken);
+  await assert.rejects(leaseCall('claim', leaseParams('claim', 'test-worker-after-crash')),
+    e => e.type === 'COLLECTIVE_LEASE_UNAVAILABLE');
+
   console.log(JSON.stringify({ ok: true, phase: 'prepare', groupId: id,
     reservations: results.length, winningCas: wins.length, revision: read.revision }));
 }
@@ -136,6 +189,13 @@ async function verify() {
   assert.equal(read.stage, 'ap-key-pending');
   assert.equal(read.revision, 2);
   assert((await count(id)) >= 9);
+  // Expired lease from an interrupted worker is reclaimable after restart.
+  const recovered = await leaseCall('claim', leaseParams('claim', 'test-worker-after-crash'));
+  assert.equal(recovered.canonicalGroupId, id);
+  await assert.rejects(leaseCall('renew', leaseParams('renew', 'test-worker-crash', 'a'.repeat(43))),
+    e => e.type === 'COLLECTIVE_LEASE_UNAVAILABLE');
+  assert.equal((await leaseCall('release', leaseParams('release',
+    recovered.workerId, recovered.leaseToken))).released, true);
   console.log(JSON.stringify({ ok: true, phase: 'verify-after-restart', groupId: id,
     revision: read.revision }));
 }

@@ -39,8 +39,10 @@ function providerOrigin(raw) {
 function oidcClaims(payload, issuer) {
   if (!payload || typeof payload.webid !== 'string' ||
       typeof payload.azp !== 'string' || payload.sub !== payload.webid ||
-      payload.iss !== issuer && payload.iss !== issuer + '/' ||
-      payload.aud !== payload.azp || !Number.isSafeInteger(payload.exp) ||
+      (payload.iss !== issuer && payload.iss !== issuer + '/') ||
+      !(typeof payload.aud === 'string' ? payload.aud === payload.azp :
+        Array.isArray(payload.aud) && payload.aud.includes(payload.azp)) ||
+      !Number.isSafeInteger(payload.exp) ||
       payload.exp <= Math.floor(Date.now() / 1000)) {
     deny('COLLECTIVE_OIDC_AUTH_REQUIRED');
   }

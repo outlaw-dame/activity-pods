@@ -65,7 +65,7 @@ function nonEmpty(value, code, max = 256) {
 function validatePublicCollectiveActor(record, { providerOrigin, expectedActorUri } = {}) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) fail('GROUP_NOT_FOUND');
   if (typeof providerOrigin !== 'string' || providerOrigin.length > 256 ||
-      /[\\u0000-\\u0020\\u007f\\\\]/.test(providerOrigin)) fail('GROUP_INVALID_PROVIDER');
+      /[\u0000-\u0020\u007f\\]/.test(providerOrigin)) fail('GROUP_INVALID_PROVIDER');
   let provider;
   try {
     provider = new URL(providerOrigin);

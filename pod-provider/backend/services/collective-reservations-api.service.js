@@ -96,11 +96,13 @@ module.exports = {
         // issued token. NOTE: iat freshness is NOT proof of fresh login or
         // sender possession; production requires a stronger step-up/DPoP gate.
         if (!verified || !Number.isSafeInteger(verified.iat) ||
+            !Number.isSafeInteger(verified.exp) || verified.exp <= nowSeconds ||
+            verified.exp - verified.iat > 900 ||
             verified.iat > nowSeconds + 60 || nowSeconds - verified.iat > 600) {
           fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
         }
         if (!verified || typeof verified.azp !== 'string' ||
-            typeof verified.webid !== 'string' ||
+            typeof verified.webid !== 'string' || verified.sub !== verified.webid ||
             verified.azp !== ctx.meta?.webId ||
             verified.webid !== ctx.meta?.impersonatedUser ||
             !matchAudience(verified.aud, verified.azp) ||

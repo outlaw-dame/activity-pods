@@ -93,14 +93,17 @@ function assertGrant(grant, secret, principal, app, operation, requestHash, now 
  * distinct secret and purpose, so a valid SAI app grant—even if mistaken for
  * an advance operation—cannot move provisioning state.
  */
-function assertWorkerGrant(grant, secret, groupId, revision, nextStage, now = Date.now()) {
+function assertWorkerGrant(grant, secret, groupId, revision, nextStage, lease, now = Date.now()) {
   if (!secret || Buffer.byteLength(secret) < 32) throw problem('COLLECTIVE_WORKER_DISABLED', 503);
   if (!grant || grant.purpose !== WORKER_PURPOSE || grant.groupId !== groupId ||
       grant.revision !== revision || grant.nextStage !== nextStage ||
+      grant.workerId !== lease.workerId || grant.leaseEpoch !== lease.leaseEpoch ||
+      grant.leaseHash !== lease.hash ||
       !Number.isSafeInteger(grant.issuedAt) || !Number.isSafeInteger(grant.expiresAt) ||
       grant.issuedAt > now + 30000 || grant.expiresAt < now ||
       grant.expiresAt - grant.issuedAt > 120000) throw problem('COLLECTIVE_WORKER_UNAUTHORIZED');
-  const fields = [WORKER_PURPOSE, groupId, revision, nextStage, grant.issuedAt, grant.expiresAt];
+  const fields = [WORKER_PURPOSE, groupId, revision, nextStage,
+    lease.workerId, lease.leaseEpoch, lease.hash, grant.issuedAt, grant.expiresAt];
   if (!safeCompare(grant.mac, hmac(secret, JSON.stringify(fields)))) {
     throw problem('COLLECTIVE_WORKER_UNAUTHORIZED');
   }
@@ -219,9 +222,9 @@ module.exports = {
         const principal = exactHttps(ctx.params.principal, { allowFragment: true }).href;
         const app = exactHttps(ctx.params.app).href;
         const next = ctx.params.nextStage, revision = ctx.params.expectedRevision;
-        assertWorkerGrant(ctx.params.workerGrant, this.settings.workerSecret, groupId, revision, next);
         const lease = leaseReference(ctx.params);
         if (!lease) throw problem('COLLECTIVE_WORKER_UNAUTHORIZED');
+        assertWorkerGrant(ctx.params.workerGrant, this.settings.workerSecret, groupId, revision, next, lease);
         const now = Date.now();
         const before = await this._load(ctx, groupId);
         if (!before || before.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);

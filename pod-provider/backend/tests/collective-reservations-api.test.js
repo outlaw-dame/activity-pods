@@ -7,6 +7,8 @@ const principal = 'https://social.example/users/alice';
 const app = 'https://client.example/app';
 const issuer = 'https://social.example';
 const secret = 'g'.repeat(48);
+const JKT = 'd'.repeat(43);
+const DPOP = 'cHJvb2Y.c2lnbmVk.c2lnbmF0dXJl';
 const fingerprint = (p, a, k, d) => crypto.createHash('sha256')
   .update(JSON.stringify([p, a, k, d])).digest('hex');
 
@@ -14,10 +16,13 @@ function harness({
   enabled = true, header = 'Bearer valid.token.proof',
   key = 'q'.repeat(32), displayName = 'Community Hub',
   verified = { azp: app, webid: principal, aud: app, iss: issuer,
-    iat: Math.floor(Date.now() / 1000) - 30 },
+    iat: Math.floor(Date.now() / 1000) - 30,
+    auth_time: Math.floor(Date.now() / 1000) - 30,
+    amr: ['pwd'], cnf: { jkt: JKT } },
   metadata = {}, failReservation = false
 } = {}) {
   const seen = [];
+  let activeProof = DPOP;
   const ctx = {
     params: { displayName, principal: 'https://evil.example/users/mallory',
       app: 'https://evil.example/fake-app' },
@@ -26,11 +31,13 @@ function harness({
       tokenPayload: { azp: app, webid: principal },
       $collectivesAuthHeader: header,
       $collectivesIdempotencyKey: key,
+      $collectivesDpopProof: DPOP,
       ...metadata
     },
     async call(action, params) {
       seen.push({ action, params });
       if (action === 'jwk.verifyToken') return verified;
+      if (action === 'oauth-dpop-nonce.verifyProof') return { jkt: JKT, jti: 'random' };
       if (action === 'collective-reservations.reserve') {
         if (failReservation) throw new Error('authoritative store unavailable');
         return { canonicalGroupId: 'cg_00000000000000000000000000000000', stage: 'reserved' };
@@ -78,9 +85,11 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     expect(h.ctx.meta.$statusCode).toBe(202);
     expect(h.ctx.meta.$responseHeaders['Cache-Control']).toBe('no-store');
     const actions = h.seen.map(x => x.action);
-    expect(actions).toEqual(['jwk.verifyToken', 'collective-reservations.reserve']);
+    expect(actions).toEqual(['jwk.verifyToken', 'oauth-dpop-nonce.verifyProof', 'collective-reservations.reserve']);
     expect(h.seen[0].params.token).toBe('valid.token.proof');
-    const op = h.seen[1].params;
+    expect(h.seen[1].params).toMatchObject({ expectedJkt: JKT, htm: 'POST', htu: issuer + '/api/collectives/reserve' });
+    expect(h.seen[1].params.expectedAth).toBe(crypto.createHash('sha256').update('valid.token.proof').digest('base64url'));
+    const op = h.seen[2].params;
     expect(op.principal).toBe(principal);
     expect(op.app).toBe(app);
     expect(op).not.toHaveProperty('ownerWebId');
@@ -112,6 +121,16 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
       iat: Math.floor(Date.now() / 1000) + 300 } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['missing issuance timestamp', { verified: { azp: app, webid: principal, aud: app, iss: issuer } },
       'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['no authentication event', { verified: { azp: app, webid: principal, aud: app, iss: issuer,
+      iat: Math.floor(Date.now()/1000) - 30, cnf: { jkt: JKT }, amr: ['pwd'] } }, 'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['stale authentication event', { verified: { azp: app, webid: principal, aud: app, iss: issuer,
+      iat: Math.floor(Date.now()/1000) - 30, auth_time: Math.floor(Date.now()/1000) - 3600,
+      cnf: { jkt: JKT }, amr: ['pwd'] } }, 'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['no sender-bound key', { verified: { azp: app, webid: principal, aud: app, iss: issuer,
+      iat: Math.floor(Date.now()/1000) - 30, auth_time: Math.floor(Date.now()/1000) - 30,
+      amr: ['pwd'] } }, 'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['bad DPoP syntax', { metadata: { $collectivesDpopProof: 'invalid' } }, 'COLLECTIVE_DPOP_REQUIRED'],
+    ['missing DPoP', { metadata: { $collectivesDpopProof: null } }, 'COLLECTIVE_DPOP_REQUIRED'],
     ['wrong audience', { verified: { azp: app, webid: principal, aud: 'https://evil.example/app', iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['missing issuer', { verified: { azp: app, webid: principal, aud: app } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['wrong issuer', { verified: { azp: app, webid: principal, aud: app, iss: 'https://evil.example' } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],

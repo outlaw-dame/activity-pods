@@ -6,6 +6,9 @@ const service = require('../services/collective-reservations.service');
 const SECRET = 'z'.repeat(48);
 const WORKER_SECRET = 'w'.repeat(48);
 const WORKER_PURPOSE = 'provider.collective.worker.advance.v1';
+const TEST_LEASE_TOKEN = 'x'.repeat(43);
+const TEST_LEASE_EPOCH = '00000000-0000-4000-8000-000000000001';
+const TEST_WORKER_ID = 'worker-node-001';
 const PROVIDER = 'https://social.example';
 const PRINCIPAL = PROVIDER + '/users/alice';
 const APP = 'https://reader.example/app';
@@ -37,6 +40,7 @@ function advanceGrant(groupId, expectedRevision, nextStage, overrides = {}) {
     revision: expectedRevision, nextStage, issuedAt, expiresAt,
     mac: crypto.createHmac('sha256', WORKER_SECRET).update(JSON.stringify(fields)).digest('hex') };
   return { principal: PRINCIPAL, app: APP, canonicalGroupId: groupId, expectedRevision, nextStage,
+    workerId: TEST_WORKER_ID, leaseToken: TEST_LEASE_TOKEN, leaseEpoch: TEST_LEASE_EPOCH,
     workerGrant, ...overrides };
 }
 function materialize(query) {
@@ -76,14 +80,27 @@ function harness(db = new Map()) {
       if (failWrite) throw new Error('Fuseki write unavailable');
       if (args.query.startsWith('INSERT { ')) {
         const row = materialize(args.query);
-        if (!db.has(row.id)) db.set(row.id, row); // Jena conditional INSERT semantics
+        if (!db.has(row.id)) db.set(row.id, {
+          ...row,
+          // A worker lease is pre-acquired in the stage unit fixture.
+          // Actual lease contention is exercised against live Fuseki separately.
+          leaseOwner: TEST_WORKER_ID,
+          leaseHash: sha(TEST_LEASE_TOKEN),
+          leaseEpoch: TEST_LEASE_EPOCH,
+          leaseUntil: Date.now() + 30000
+        }); // Jena conditional INSERT semantics
       } else if (args.query.includes('DELETE {')) {
         const id = /<urn:apods:collective:([^>]+)> apods:collectiveStage/u.exec(args.query)?.[1];
         const m = /DELETE \{ [^\n]+ apods:collectiveStage ("[^"]+")\s+; apods:collectiveRevision ("[^"]+")/u.exec(args.query);
         const insert = /INSERT \{ [^\n]+ apods:collectiveStage ("[^"]+")\s+; apods:collectiveRevision ("[^"]+")/u.exec(args.query);
         if (!id || !m || !insert) throw new Error('Unexpected CAS SPARQL syntax');
         const row = db.get(id);
-        if (row && row.stage === JSON.parse(m[1]) && row.revision === Number(JSON.parse(m[2]))) {
+        if (row && row.stage === JSON.parse(m[1]) && row.revision === Number(JSON.parse(m[2]) &&
+            row.leaseOwner === TEST_WORKER_ID && row.leaseHash === sha(TEST_LEASE_TOKEN) &&
+            row.leaseEpoch === TEST_LEASE_EPOCH && row.leaseUntil > Date.now() &&
+            args.query.includes('apods:collectiveLeaseOwner ' + JSON.stringify(row.leaseOwner)) &&
+            args.query.includes('apods:collectiveLeaseHash ' + JSON.stringify(row.leaseHash)) &&
+            args.query.includes('apods:collectiveLeaseEpoch ' + JSON.stringify(row.leaseEpoch))) {
           const nonce = /apods:collectiveLastTransition ("[^"]+")/u.exec(args.query);
           if (!nonce) throw new Error('Missing transition nonce');
           db.set(id, { ...row, stage: JSON.parse(insert[1]),
@@ -332,6 +349,30 @@ describe('G1 durable collective reservations — provider authority', () => {
     expect(next.stage).toBe('did-pending');
     await expectError(h.action('advance', advanceGrant(id, 3, 'ap-key-pending')), 'COLLECTIVE_INVALID_TRANSITION');
     expect(h.db.get(id).stage).not.toBe('active');
+  });
+
+  test('stage mutation cannot bypass a missing, expired or transferred worker lease', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    const row = h.db.get(id);
+    row.leaseUntil = Date.now() - 1000;
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending')),
+      'COLLECTIVE_STALE_REVISION');
+    row.leaseUntil = Date.now() + 30000;
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending', {
+      leaseToken: 'y'.repeat(43)
+    })), 'COLLECTIVE_STALE_REVISION');
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending', {
+      leaseEpoch: '00000000-0000-4000-8000-000000000002'
+    })), 'COLLECTIVE_STALE_REVISION');
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending', {
+      workerId: 'wrong-worker-id'
+    })), 'COLLECTIVE_STALE_REVISION');
+    delete row.leaseOwner;
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending')),
+      'COLLECTIVE_STALE_REVISION');
+    expect(row.revision).toBe(1);
+    expect(row.stage).toBe('reserved');
   });
 
   test('two workers with the same revision cannot both perform a CAS transition', async () => {

@@ -3,20 +3,36 @@
 const crypto = require('node:crypto');
 const { jwtVerify, decodeJwt } = require('jose');
 const service = require('../services/collective-stepup-credentials.service');
+const { signMintAttestation } = require('../services/utils/collective-mint-attestation');
 
 const issuer = 'https://provider.example';
 const principal = issuer + '/profile/card#me';
 const app = 'https://forum.example/client';
 const secret = 'different-from-solid-oidc-jwk-secret'.repeat(3);
 const jkt = 'a'.repeat(43);
+const issuerSecret = 'distinct-stepup-issuer-secret-'.repeat(3);
+const ticketHash = 'b'.repeat(64);
 
 function harness(settings = {}) {
   const inst = { settings: {
-    enabled: true, secret, issuer, ...settings
+    enabled: true, secret, issuer, issuerSecret, approvedApps: [app], ...settings
   }};
-  const mint = (overrides = {}) => service.actions.mint.handler.call(inst, {
-    params: { principal, app, jkt, verifiedAt: Math.floor(Date.now()/1000), ...overrides }
-  });
+  const mint = (overrides = {}) => {
+    const params = { principal, app, jkt, verifiedAt: Math.floor(Date.now()/1000),
+      ticketHash, ...overrides };
+    if (params.issuerAttestation === undefined) {
+      params.issuerAttestation = signMintAttestation(issuerSecret, params);
+    }
+    return service.actions.mint.handler.call(inst, {
+      params,
+      call: async (action, args) => {
+        if (action === 'auth.account.findByWebId') return { webId: args.webId };
+        if (action === 'app-registrations.isRegistered') return true;
+        if (action === 'access-authorizations.getSpecialRights') return ['apods:CreateGroup'];
+        throw new Error('Unexpected SAI service call: ' + action);
+      }
+    });
+  };
   const verify = token => service.actions.verify.handler.call(inst, { params: { token } });
   return { inst, mint, verify };
 }
@@ -48,6 +64,33 @@ describe('isolated provider Group step-up JWT', () => {
     const result = await h.mint();
     await expect(jwtVerify(result.token, crypto.randomBytes(32), { algorithms: ['ES256'] }))
       .rejects.toThrow();
+  });
+
+  test('direct internal calls cannot mint without trusted issuer attestation', async () => {
+    const h = harness();
+    await denied(h.mint({ issuerAttestation: '0'.repeat(64) }), 'COLLECTIVE_STEPUP_INVALID');
+    await denied(h.mint({ issuerAttestation: 'é'.repeat(64) }), 'COLLECTIVE_STEPUP_INVALID');
+    await denied(h.mint({ issuerAttestation: null }), 'COLLECTIVE_STEPUP_INVALID');
+    await denied(h.mint({ issuerAttestation: signMintAttestation(issuerSecret, {
+      principal, app, jkt, verifiedAt: Math.floor(Date.now()/1000),
+      ticketHash: 'f'.repeat(64)
+    }) }), 'COLLECTIVE_STEPUP_INVALID');
+  });
+
+  test('cannot mint after SAI right is withdrawn at credential boundary', async () => {
+    const h = harness();
+    const params = {
+      principal, app, jkt, verifiedAt: Math.floor(Date.now()/1000), ticketHash
+    };
+    await denied(service.actions.mint.handler.call(h.inst, {
+      params: { ...params, issuerAttestation: signMintAttestation(issuerSecret, params) },
+      call: async action => {
+        if (action === 'auth.account.findByWebId') return { webId: principal };
+        if (action === 'app-registrations.isRegistered') return true;
+        if (action === 'access-authorizations.getSpecialRights') return [];
+        throw new Error('Unexpected call');
+      }
+    }), 'COLLECTIVE_APP_CONSENT_MISSING');
   });
 
   test('signer secrets are isolated: a Group token signed by another provider secret fails', async () => {

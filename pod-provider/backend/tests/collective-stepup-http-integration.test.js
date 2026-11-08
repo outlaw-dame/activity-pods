@@ -199,7 +199,11 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
       created() { this.redis = redis; },
       stopped() {}
     });
-    broker.createService(creds, { settings: {
+    broker.createService({
+      ...creds,
+      created() { this.redis = redis; },
+      stopped() {}
+    }, { settings: {
       enabled: true, secret: SECRET, issuer: ORIGIN,
       issuerSecret: ISSUER_SECRET, approvedApps: [APP]
     } });

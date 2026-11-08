@@ -13,6 +13,7 @@
  */
 const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
+const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
 
 const NS = 'http://activitypods.org/ns/core#';
 const TYPE = 'CollectiveReservationV1';
@@ -107,7 +108,8 @@ module.exports = {
     enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true',
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
     secret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
-    identityKey: process.env.PROVIDER_COLLECTIVES_ID_KEY || ''
+    identityKey: process.env.PROVIDER_COLLECTIVES_ID_KEY || '',
+    approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || '')
   },
   actions: {
     reserve: {
@@ -125,6 +127,10 @@ module.exports = {
         }
         const p = validateInput(ctx.params, this.settings.providerOrigin, this.settings.identityKey);
         assertGrant(ctx.params.grant, this.settings.secret, p.principal, p.app, 'reserve', p.requestHash);
+        await assertLiveCollectiveConsent(ctx, {
+          principal: p.principal, app: p.app, operation: 'reserve',
+          approvedApps: this.settings.approvedApps
+        });
         // The recorded creator application is provenance, NOT exclusive authority.
         const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';
         const record = '<' + p.uri + '> a <' + NS + TYPE + '> ;\n' +
@@ -162,6 +168,9 @@ module.exports = {
         const principal = exactHttps(ctx.params.principal).href;
         const app = exactHttps(ctx.params.app).href;
         assertGrant(ctx.params.grant, this.settings.secret, principal, app, 'read', groupId);
+        await assertLiveCollectiveConsent(ctx, {
+          principal, app, operation: 'read', approvedApps: this.settings.approvedApps
+        });
         const result = await this._load(ctx, groupId);
         if (!result || result.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);
         return { canonicalGroupId: groupId, actorUri: result.actorUri, stage: result.stage,

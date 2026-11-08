@@ -79,8 +79,18 @@ function assertGrant(grant, secret, principal, app, operation, requestHash, now 
 function validateInput(params, baseUrl, identityKey) {
   const principal = exactHttps(params.principal).href;
   const app = exactHttps(params.app).href;
-  const provider = exactHttps(baseUrl);
-  if (provider.origin !== baseUrl) throw problem('COLLECTIVE_INVALID_PROVIDER', 503);
+  // Provider origin is a bare HTTPS origin; WHATWG serializes it with a
+  // trailing slash. Do not apply resource-URL exactness rules to an origin.
+  if (typeof baseUrl !== 'string' || baseUrl.length > 256 ||
+      /[\u0000-\u0020\u007f\\]/u.test(baseUrl)) {
+    throw problem('COLLECTIVE_INVALID_PROVIDER', 503);
+  }
+  let provider;
+  try { provider = new URL(baseUrl); } catch { throw problem('COLLECTIVE_INVALID_PROVIDER', 503); }
+  if (provider.protocol !== 'https:' || !provider.hostname || provider.origin !== baseUrl ||
+      provider.username || provider.password || provider.search || provider.hash) {
+    throw problem('COLLECTIVE_INVALID_PROVIDER', 503);
+  }
   const idempotencyKey = requireString(params.idempotencyKey, /^[a-zA-Z0-9_-]{24,128}$/u, 'COLLECTIVE_INVALID_IDEMPOTENCY');
   const displayName = requireString(params.displayName, /^[^\u0000-\u001f\u007f]{1,160}$/u, 'COLLECTIVE_INVALID_DISPLAY_NAME');
   const canonical = JSON.stringify([principal, app, idempotencyKey, displayName]);

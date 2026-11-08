@@ -105,6 +105,7 @@ describe('Provider-native Solid-OIDC Group reservation', () => {
     expect(params.grant.expiresAt - params.grant.issuedAt).toBe(60000);
     expect(h.ctx.meta.$statusCode).toBe(202);
     expect(h.ctx.meta.$responseHeaders['Cache-Control']).toBe('no-store');
+    expect(h.ctx.meta).not.toHaveProperty('$collectivesAuthHeader');
   });
 
   test.each([

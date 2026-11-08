@@ -41,6 +41,19 @@ jobs:
             sed -i 's#git@github.com:#https://github.com/#g' yarn.lock
           fi
 
+      - name: Syntax-check collective backend changes before dependency installation
+        working-directory: .
+        run: |
+          set -euo pipefail
+          for file in pod-provider/backend/services/collective-*.js \
+                      pod-provider/backend/services/utils/collective-*.js \
+                      pod-provider/backend/tests/collective-*.test.js \
+                      pod-provider/backend/tests/oauth-dpop-bound-resource.test.js \
+                      pod-provider/backend/scripts/proof-collective-fuseki.js; do
+            [ -f "$file" ] || continue
+            node --check "$file"
+          done
+
       - name: Install system libvips for reproducible Sharp native build
         run: |
           set -euo pipefail

@@ -155,6 +155,8 @@ module.exports = {
       read_outbox: 'Read my outbox',
       post_outbox: 'Post in my outbox',
       query_sparql_endpoint: 'Search on my data',
+      create_social_group: 'Create social communities through my provider',
+      read_social_groups: 'Read communities I am allowed to access',
       create_wac_group: 'Create and manage permissions groups',
       create_collection: 'Create and manage collections',
       update_webid: 'Update my identity (WebId)',

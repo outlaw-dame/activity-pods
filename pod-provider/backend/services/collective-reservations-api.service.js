@@ -80,6 +80,9 @@ module.exports = {
         }
         const authorization = ctx.meta?.$collectivesAuthHeader;
         const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
+        // Do not propagate the raw bearer token via ctx.meta to unrelated
+        // provider services during SAI checks or the Fuseki reservation write.
+        if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
         if (typeof authorization !== 'string' || authorization.length > 8192 ||
             !/^Bearer [A-Za-z0-9._~-]+$/u.test(authorization)) {
           fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);

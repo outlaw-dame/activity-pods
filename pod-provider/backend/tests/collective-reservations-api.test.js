@@ -63,7 +63,7 @@ describe('G1 purpose-bound reservation ingress', () => {
   test('Group-only route is NOT a generic Solid-OIDC login route', async () => {
     const calls = [];
     await api.started.call({
-      settings: { enabled: true },
+      settings: { enabled: true, providerOrigin: issuer, allowedOriginsConfig: '' },
       broker: { call: async (...args) => calls.push(args) }
     });
     expect(calls).toHaveLength(1);

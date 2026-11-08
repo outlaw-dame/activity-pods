@@ -155,6 +155,9 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
     });
     broker.createService({
       ...passkeysService,
+      // auth.jwt is not involved in the Group-only assertion verification;
+      // do not introduce the unrelated account-login dependency in this proof.
+      dependencies: [],
       // Keep the independent passkey HTTP routes out of this focused test.
       started() {},
       methods: {

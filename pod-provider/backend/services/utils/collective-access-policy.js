@@ -52,7 +52,9 @@ async function assertLiveCollectiveConsent(ctx, { principal, app, operation, app
   // Do not downgrade missing services, unavailable authoritative storage, or
   // authorization failures into "allowed" or cached grants.
   const account = await ctx.call('auth.account.findByWebId', { webId: principal });
-  if (!account || account.webId !== principal) deny('COLLECTIVE_USER_NOT_FOUND');
+  if (!account || account.webId !== principal || account.disabled === true ||
+      account.deleted === true || account.status === 'suspended' ||
+      account.status === 'deleted') deny('COLLECTIVE_USER_NOT_FOUND');
   const registered = await ctx.call('app-registrations.isRegistered', {
     appUri: app, podOwner: principal
   });

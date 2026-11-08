@@ -140,6 +140,16 @@ describe('existing Solid-OIDC + SAI + passkey Group step-up bridge', () => {
     expect(h.calls.some(x => x.action === 'collective-stepup-credentials.mint')).toBe(false);
   });
 
+  test('signed OIDC tokens with an audience array must still include the exact app', async () => {
+    const now = Math.floor(Date.now()/1000);
+    const valid = { webid: person, sub: person, azp: app,
+      aud: [app, 'https://unrelated.example'], iss: origin, exp: now + 3600 };
+    expect((await harness({ claims: valid }).verify()).tokenType).toBe('DPoP');
+    const bad = harness({ claims: { ...valid, aud: ['https://unrelated.example'] } });
+    await denied(bad.verify(), 'COLLECTIVE_OIDC_AUTH_REQUIRED');
+    expect(bad.keys.size).toBe(0);
+  });
+
   test('revoked app consent and unregistered app cannot initiate step-up', async () => {
     for (const opts of [
       { rights: [] }, { registered: false }, { allowlist: [] }

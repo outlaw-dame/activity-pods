@@ -162,6 +162,23 @@ describe('G1 durable collective reservations — provider authority', () => {
     })), 'COLLECTIVE_NOT_FOUND');
   });
 
+  test('normalizes one provider-origin trailing slash without changing the actor path', async () => {
+    const h = harness();
+    h.instance.settings.providerOrigin = PROVIDER + '/';
+    const record = await h.action('reserve', reservation());
+    expect(record.actorUri).toBe(PROVIDER + '/groups/' + record.canonicalGroupId);
+    expect(record.actorUri).not.toContain('.example//groups/');
+  });
+
+  test('fails closed on a provider origin that contains a path or credentials', async () => {
+    for (const bad of [PROVIDER + '/path', 'https://alice:password@social.example']) {
+      const h = harness();
+      h.instance.settings.providerOrigin = bad;
+      await expectError(h.action('reserve', reservation()), 'COLLECTIVE_INVALID_PROVIDER');
+      expect(h.calls).toHaveLength(0);
+    }
+  });
+
   test('rotating grant signer secret must not change canonical Group IDs', async () => {
     const h = harness();
     const first = await h.action('reserve', reservation());
@@ -171,7 +188,6 @@ describe('G1 durable collective reservations — provider authority', () => {
     const p = reservation();
     const issuedAt = Date.now() - 500;
     const expiresAt = issuedAt + 50000;
-    const fields = [PURPOSE, p.principal, p.app, 'reserve', p.grant.requestHash, issuedAt, expiresAt];
     // Re-sign the same request fingerprint with the rotated grant key.
     p.grant = {
       purpose: PURPOSE, principal: p.principal, app: p.app,

@@ -37,9 +37,9 @@ function grant(operation, requestHash) {
   return { purpose, principal, app, operation, requestHash, issuedAt, expiresAt,
     mac: crypto.createHmac('sha256', secret).update(JSON.stringify(fields)).digest('hex') };
 }
-function reserveParams(displayName = name) {
-  return { principal, app, idempotencyKey: key, displayName,
-    grant: grant('reserve', sha(JSON.stringify([principal, app, key, displayName]))) };
+function reserveParams(displayName = name, idempotencyKey = key) {
+  return { principal, app, idempotencyKey, displayName,
+    grant: grant('reserve', sha(JSON.stringify([principal, app, idempotencyKey, displayName]))) };
 }
 function advanceParams(id, revision, nextStage, lease) {
   const issuedAt = Date.now() - 1000;
@@ -84,7 +84,7 @@ function instance() {
   obj._load = service.methods._load.bind(obj);
   return obj;
 }
-async function call(instanceObj, actionName, params, selectedService = service) {
+async function call(instanceObj, actionName, params, selectedService = service, hooks = {}) {
   const ctx = {
     params,
     call: async (serviceName, args) => {
@@ -92,10 +92,15 @@ async function call(instanceObj, actionName, params, selectedService = service) 
       // in a separate authenticated end-to-end integration test.
       if (serviceName === 'auth.account.findByWebId') return { webId: args.webId };
       if (serviceName === 'app-registrations.isRegistered') return true;
-      if (serviceName === 'access-authorizations.getSpecialRights') return ['apods:CreateGroup', 'apods:ReadGroups'];
+      if (serviceName === 'access-authorizations.getSpecialRights') {
+        return hooks.getRights ? hooks.getRights() : ['apods:CreateGroup', 'apods:ReadGroups'];
+      }
       assert.equal(args.dataset, 'settings');
       assert.equal(args.webId, 'system');
-      if (serviceName === 'triplestore.update') return fuseki('update', args.query);
+      if (serviceName === 'triplestore.update') {
+        if (hooks.beforeUpdate) await hooks.beforeUpdate();
+        return fuseki('update', args.query);
+      }
       if (serviceName === 'triplestore.query') return fuseki('query', args.query);
       throw new Error('Unexpected action ' + serviceName);
     }
@@ -148,6 +153,31 @@ async function prepare() {
   assert.equal(replays.canonicalGroupId, id);
   await assert.rejects(call(instance(), 'reserve', reserveParams('Conflicting Request')),
     e => e.type === 'COLLECTIVE_RESERVATION_CONFLICT');
+
+  // Revocation can arrive while the existing SAI read and Fuseki write are
+  // separated in time. Prove the post-write recheck denies success even if
+  // the private inactive record persists. This is NOT a transactional fence.
+  const raceKey = 'g1realrevokeraceidempotency0123';
+  const raceId = 'cg_' + crypto.createHmac('sha256', identityKey)
+    .update(JSON.stringify([principal, app, raceKey])).digest('hex').slice(0, 32);
+  let authorized = true;
+  let revocationTriggered = false;
+  await assert.rejects(
+    call(instance(), 'reserve', reserveParams('Revoked During Commit', raceKey), service, {
+      getRights: () => authorized ? ['apods:CreateGroup', 'apods:ReadGroups'] : [],
+      beforeUpdate: () => {
+        authorized = false;
+        revocationTriggered = true;
+      }
+    }),
+    e => e.type === 'COLLECTIVE_APP_CONSENT_MISSING'
+  );
+  assert.equal(revocationTriggered, true);
+  assert((await count(raceId)) >= 9, 'inactive reservation may persist after raced revocation');
+  const recoveredRace = await call(instance(), 'reserve',
+    reserveParams('Revoked During Commit', raceKey));
+  assert.equal(recoveredRace.canonicalGroupId, raceId);
+  assert.equal(recoveredRace.stage, 'reserved');
 
   const transitionLease = await leaseCall('claim', leaseParams('claim', 'test-worker-stage'));
   const races = await Promise.allSettled(Array.from({ length: 12 },

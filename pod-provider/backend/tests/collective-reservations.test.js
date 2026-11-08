@@ -175,6 +175,21 @@ describe('G1 durable collective reservations — provider authority', () => {
     })), 'COLLECTIVE_NOT_FOUND');
   });
 
+  test('supports canonical Solid WebIDs ending in #me without accepting fragment app URIs', async () => {
+    const h = harness();
+    const webId = PROVIDER + '/profile/card#me';
+    const reserved = await h.action('reserve', reservation({ principal: webId }));
+    const result = await h.action('get', readGrant(reserved.canonicalGroupId, {
+      principal: webId,
+      grant: createGrant(webId, APP, 'read', reserved.canonicalGroupId)
+    }));
+    expect(result.canonicalGroupId).toBe(reserved.canonicalGroupId);
+    expect(h.db.get(reserved.canonicalGroupId).owner).toBe(webId);
+    await expectError(h.action('reserve', reservation({
+      principal: webId, app: APP + '#impersonated'
+    })), 'COLLECTIVE_INVALID_URI');
+  });
+
   test('normalizes one provider-origin trailing slash without changing the actor path', async () => {
     const h = harness();
     h.instance.settings.providerOrigin = PROVIDER + '/';

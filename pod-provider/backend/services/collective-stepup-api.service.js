@@ -22,6 +22,7 @@ const Redis = require('ioredis');
 const { MoleculerError } = require('moleculer').Errors;
 const { approvedBrowserOrigins } = require('./utils/collective-endpoint-policy');
 const { assertLiveCollectiveConsent, parseApprovedApps } = require('./utils/collective-access-policy');
+const { signMintAttestation } = require('./utils/collective-mint-attestation');
 
 function deny(code, status = 401) {
   throw new MoleculerError(code, status, code);
@@ -65,6 +66,7 @@ module.exports = {
     origin: process.env.SEMAPPS_HOME_URL || '',
     approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || ''),
     allowedOriginsConfig: process.env.PROVIDER_COLLECTIVES_ALLOWED_ORIGINS || '',
+    issuerSecret: process.env.PROVIDER_COLLECTIVES_STEPUP_ISSUER_SECRET || '',
     redisUrl: process.env.SEMAPPS_REDIS_CACHE_URL || 'redis://localhost:6379',
     ticketPrefix: 'collective:stepup:ticket',
     ticketTtlSeconds: 600,
@@ -115,6 +117,10 @@ module.exports = {
       },
       async handler(ctx) {
         if (!this.settings.enabled || !this.redis) deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        if (typeof this.settings.issuerSecret !== 'string' ||
+            Buffer.byteLength(this.settings.issuerSecret) < 32) {
+          deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        }
         const origin = providerOrigin(this.settings.origin);
         const token = bearer(ctx.meta?.$stepupAuthorization);
         const claims = await ctx.call('jwk.verifyToken', { token });
@@ -176,8 +182,12 @@ module.exports = {
           principal, app, operation: 'reserve', approvedApps: this.settings.approvedApps
         });
         const verifiedAt = Math.floor(Date.now() / 1000);
+        const attestation = {
+          principal, app, jkt, verifiedAt, ticketHash: ticketDigest
+        };
         const issued = await ctx.call('collective-stepup-credentials.mint', {
-          principal, app, jkt, verifiedAt
+          ...attestation,
+          issuerAttestation: signMintAttestation(this.settings.issuerSecret, attestation)
         });
         ctx.meta.$responseHeaders = {
           ...(ctx.meta.$responseHeaders || {}),

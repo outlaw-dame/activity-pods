@@ -16,6 +16,12 @@ const creds = require('../services/collective-stepup-credentials.service');
 const apiReserve = require('../services/collective-reservations-api.service');
 const { assertLiveCollectiveConsent } = require('../services/utils/collective-access-policy');
 const dpopService = require('../services/oauth/oauth-dpop-nonce.service');
+// The real provider injects these values from instance configuration.
+jest.mock('../config/config', () => ({
+  BASE_URL: 'https://provider.example',
+  FRONTEND_URL: 'https://provider.example',
+  COOKIE_SECRET: 'test-only-provider-passkey-cookie-secret'
+}));
 const passkeysService = require('../services/passkeys-api.service');
 
 const ORIGIN = 'https://provider.example';

@@ -43,7 +43,7 @@ function harness() {
     readTicket: passkeys.methods.readTicket,
     normalizeCredentialId: passkeys.methods.normalizeCredentialId,
     requireWebauthnResponse: passkeys.methods.requireWebauthnResponse,
-    async getCredentialByCredentialId(id) {
+    async getCredentialByCredentialId(_ctx, id) {
       return id === CREDENTIAL_ID ? credential : null;
     },
     async touchCredential(_ctx, id, updates) {

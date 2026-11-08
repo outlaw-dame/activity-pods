@@ -181,12 +181,14 @@ module.exports = {
           dataset: 'settings', webId: 'system',
           query: 'PREFIX apods: <' + NS + '>\n' +
             'DELETE { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(before.stage) +
-            ' ; apods:collectiveRevision ' + sparqlString(String(revision)) + ' . }\n' +
+            ' ; apods:collectiveRevision ' + sparqlString(String(revision)) +
+            ' . <' + PREFIX + groupId + '> apods:collectiveLastTransition ?previousTransition . }\n' +
             'INSERT { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(next) +
             ' ; apods:collectiveRevision ' + sparqlString(String(revision + 1)) +
             ' ; apods:collectiveLastTransition ' + sparqlString(transitionId) + ' . }\n' +
             'WHERE { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(before.stage) +
-            ' ; apods:collectiveRevision ' + sparqlString(String(revision)) + ' . }'
+            ' ; apods:collectiveRevision ' + sparqlString(String(revision)) +
+            ' . OPTIONAL { <' + PREFIX + groupId + '> apods:collectiveLastTransition ?previousTransition . } }'
         });
         const after = await this._load(ctx, groupId);
         if (!after || after.stage !== next || after.revision !== revision + 1 || after.lastTransition !== transitionId) {

@@ -126,7 +126,9 @@ describe('isolated provider Group step-up JWT', () => {
 
   test.each([
     ['disabled', { enabled: false }, 'COLLECTIVE_STEPUP_DISABLED'],
-    ['weak secret', { secret: 'weak' }, 'COLLECTIVE_STEPUP_DISABLED']
+    ['weak secret', { secret: 'weak' }, 'COLLECTIVE_STEPUP_DISABLED'],
+    ['identical issuer and credential signing keys',
+      { issuerSecret: secret }, 'COLLECTIVE_STEPUP_DISABLED']
   ])('fails closed with %s', async (_label, opts, code) => {
     const h = harness(opts);
     await denied(h.mint(), code);

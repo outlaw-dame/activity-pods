@@ -112,7 +112,7 @@ module.exports = {
         }
         const p = validateInput(ctx.params, this.settings.providerOrigin, this.settings.secret);
         assertGrant(ctx.params.grant, this.settings.secret, p.principal, p.app, 'reserve', p.requestHash);
-        const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';
+        // The recorded creator application is provenance, NOT exclusive authority.\n        const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';
         const record = '<' + p.uri + '> a <' + NS + TYPE + '> ;\n' +
           q('canonicalGroupId', p.groupId) +
           q('activityPubActorId', p.actorUri) +
@@ -149,7 +149,7 @@ module.exports = {
         const app = exactHttps(ctx.params.app).href;
         assertGrant(ctx.params.grant, this.settings.secret, principal, app, 'read', groupId);
         const result = await this._load(ctx, groupId);
-        if (!result || result.owner !== principal || result.app !== app) throw problem('COLLECTIVE_NOT_FOUND', 404);
+        if (!result || result.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);
         return { canonicalGroupId: groupId, actorUri: result.actorUri, stage: result.stage,
           revision: result.revision, displayName: result.displayName };
       }
@@ -169,7 +169,7 @@ module.exports = {
         const payloadHash = crypto.createHash('sha256').update(JSON.stringify([groupId, revision, next])).digest('hex');
         assertGrant(ctx.params.grant, this.settings.secret, principal, app, 'advance', payloadHash);
         const before = await this._load(ctx, groupId);
-        if (!before || before.owner !== principal || before.app !== app) throw problem('COLLECTIVE_NOT_FOUND', 404);
+        if (!before || before.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);
         if (before.revision !== revision) throw problem('COLLECTIVE_STALE_REVISION', 409);
         if (STAGES.indexOf(next) !== STAGES.indexOf(before.stage) + 1) {
           throw problem('COLLECTIVE_INVALID_TRANSITION', 409);

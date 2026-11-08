@@ -20,6 +20,7 @@ const TYPE = 'CollectiveReservationV1';
 const PREFIX = 'urn:apods:collective:';
 const STAGES = Object.freeze(['reserved', 'ap-key-pending', 'did-pending']);
 const GRANT_PURPOSE = 'provider.collective.reservation.v1';
+const WORKER_PURPOSE = 'provider.collective.worker.advance.v1';
 
 function problem(code, status = 403) {
   return new MoleculerError(code, status, code);
@@ -77,6 +78,24 @@ function assertGrant(grant, secret, principal, app, operation, requestHash, now 
   if (!safeCompare(grant.mac, hmac(secret, JSON.stringify(fields)))) throw problem('COLLECTIVE_UNAUTHORIZED');
 }
 
+/**
+ * Worker-only transitions are NOT application rights. This credential uses a
+ * distinct secret and purpose, so a valid SAI app grant—even if mistaken for
+ * an advance operation—cannot move provisioning state.
+ */
+function assertWorkerGrant(grant, secret, groupId, revision, nextStage, now = Date.now()) {
+  if (!secret || Buffer.byteLength(secret) < 32) throw problem('COLLECTIVE_WORKER_DISABLED', 503);
+  if (!grant || grant.purpose !== WORKER_PURPOSE || grant.groupId !== groupId ||
+      grant.revision !== revision || grant.nextStage !== nextStage ||
+      !Number.isSafeInteger(grant.issuedAt) || !Number.isSafeInteger(grant.expiresAt) ||
+      grant.issuedAt > now + 30000 || grant.expiresAt < now ||
+      grant.expiresAt - grant.issuedAt > 120000) throw problem('COLLECTIVE_WORKER_UNAUTHORIZED');
+  const fields = [WORKER_PURPOSE, groupId, revision, nextStage, grant.issuedAt, grant.expiresAt];
+  if (!safeCompare(grant.mac, hmac(secret, JSON.stringify(fields)))) {
+    throw problem('COLLECTIVE_WORKER_UNAUTHORIZED');
+  }
+}
+
 function validateInput(params, baseUrl, identityKey) {
   const principal = exactHttps(params.principal).href;
   const app = exactHttps(params.app).href;
@@ -109,6 +128,7 @@ module.exports = {
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
     secret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
     identityKey: process.env.PROVIDER_COLLECTIVES_ID_KEY || '',
+    workerSecret: process.env.PROVIDER_COLLECTIVES_WORKER_SECRET || '',
     approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || '')
   },
   actions: {
@@ -182,15 +202,14 @@ module.exports = {
       params: { canonicalGroupId: 'string|min:12', principal: 'string|min:1',
         app: 'string|min:1', expectedRevision: 'number|integer|min:1',
         nextStage: { type: 'enum', values: STAGES.slice(1) },
-        grant: { type: 'object', strict: false } },
+        workerGrant: { type: 'object', strict: false } },
       async handler(ctx) {
         if (!this.settings.enabled) throw problem('COLLECTIVE_DISABLED', 503);
         const groupId = requireString(ctx.params.canonicalGroupId, /^cg_[a-f0-9]{32}$/u, 'COLLECTIVE_INVALID_ID');
         const principal = exactHttps(ctx.params.principal).href;
         const app = exactHttps(ctx.params.app).href;
         const next = ctx.params.nextStage, revision = ctx.params.expectedRevision;
-        const payloadHash = crypto.createHash('sha256').update(JSON.stringify([groupId, revision, next])).digest('hex');
-        assertGrant(ctx.params.grant, this.settings.secret, principal, app, 'advance', payloadHash);
+        assertWorkerGrant(ctx.params.workerGrant, this.settings.workerSecret, groupId, revision, next);
         const before = await this._load(ctx, groupId);
         if (!before || before.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);
         if (before.revision !== revision) throw problem('COLLECTIVE_STALE_REVISION', 409);

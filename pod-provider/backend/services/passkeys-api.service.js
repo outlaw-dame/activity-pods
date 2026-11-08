@@ -169,18 +169,56 @@ module.exports = {
     },
 
     async authenticationVerify(ctx) {
-      const webId = await this.verifyAuthenticationAssertion(ctx);
-      const token = await ctx.call('auth.jwt.generateServerSignedToken', {
-        payload: { webId }
-      });
-      return { ok: true, token, webId };
-    },
+      const ticket = this.readTicket(ctx.params.ticket, 'authentication');
+      const credentialId = this.normalizeCredentialId(this.requireWebauthnResponse(ctx.params.response));
+      const storedCredential = await this.getCredentialByCredentialId(ctx, credentialId);
 
-    // Not exposed as an HTTP alias. This returns identity ONLY after a fresh
-    // WebAuthn assertion; high-trust callers must independently verify the
-    // initiating Solid-OIDC app/user, one-time challenge and current SAI grant.
-    async verifyAssertion(ctx) {
-      return { webId: await this.verifyAuthenticationAssertion(ctx) };
+      if (!storedCredential) {
+        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
+      }
+
+      const responseUserHandle = ctx.params.response?.response?.userHandle;
+      if (responseUserHandle && responseUserHandle !== storedCredential.userHandle) {
+        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
+      }
+
+      let verification;
+      try {
+        verification = await verifyAuthenticationResponse({
+          response: this.requireWebauthnResponse(ctx.params.response),
+          expectedChallenge: ticket.challenge,
+          expectedOrigin: this.getExpectedOrigin(),
+          expectedRPID: this.getRpId(),
+          credential: {
+            id: storedCredential.credentialId,
+            publicKey: Buffer.from(storedCredential.publicKey, 'base64url'),
+            counter: storedCredential.counter,
+            transports: storedCredential.transports
+          },
+          requireUserVerification: true
+        });
+      } catch (_error) {
+        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
+      }
+
+      if (!verification.verified || !verification.authenticationInfo) {
+        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
+      }
+
+      await this.touchCredential(ctx, storedCredential.credentialId, {
+        counter: verification.authenticationInfo.newCounter,
+        lastUsedAt: new Date().toISOString()
+      });
+
+      const token = await ctx.call('auth.jwt.generateServerSignedToken', {
+        payload: { webId: storedCredential.webId }
+      });
+
+      return {
+        ok: true,
+        token,
+        webId: storedCredential.webId
+      };
     },
 
     async listCredentials(ctx) {
@@ -228,51 +266,6 @@ module.exports = {
   },
 
   methods: {
-    async verifyAuthenticationAssertion(ctx) {
-      const ticket = this.readTicket(ctx.params.ticket, 'authentication');
-      const credentialId = this.normalizeCredentialId(this.requireWebauthnResponse(ctx.params.response));
-      const storedCredential = await this.getCredentialByCredentialId(ctx, credentialId);
-
-      if (!storedCredential) {
-        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
-      }
-
-      const responseUserHandle = ctx.params.response?.response?.userHandle;
-      if (responseUserHandle && responseUserHandle !== storedCredential.userHandle) {
-        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
-      }
-
-      let verification;
-      try {
-        verification = await verifyAuthenticationResponse({
-          response: this.requireWebauthnResponse(ctx.params.response),
-          expectedChallenge: ticket.challenge,
-          expectedOrigin: this.getExpectedOrigin(),
-          expectedRPID: this.getRpId(),
-          credential: {
-            id: storedCredential.credentialId,
-            publicKey: Buffer.from(storedCredential.publicKey, 'base64url'),
-            counter: storedCredential.counter,
-            transports: storedCredential.transports
-          },
-          requireUserVerification: true
-        });
-      } catch (_error) {
-        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
-      }
-
-      if (!verification.verified || !verification.authenticationInfo) {
-        throw new MoleculerError('Passkey authentication failed', 401, 'PASSKEY_AUTHENTICATION_FAILED');
-      }
-
-      await this.touchCredential(ctx, storedCredential.credentialId, {
-        counter: verification.authenticationInfo.newCounter,
-        lastUsedAt: new Date().toISOString()
-      });
-
-      return storedCredential.webId;
-    },
-
     async registerUnavailableRoute(origin, reason) {
       await this.broker.call('api.addRoute', {
         route: {

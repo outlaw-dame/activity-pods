@@ -279,6 +279,8 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
     expect(rejected.response.status).toBeLessThan(500);
     expect(rejected.body.token).toBeUndefined();
     expect(passkeyRecord.counter).toBe(0);
+    // The next scenario begins with no SAI authorization.
+    personRights.clear();
   });
 
   test('real HTTP flow: signed Solid token + consent + passkey proof → scoped credential → reservation', async () => {
@@ -289,10 +291,23 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
       .setIssuedAt(now - 600).setExpirationTime(now + 3600)
       .sign(identityKey.privateKey);
 
+    const assertion = await webauthnAssertion();
+    // A signed Solid login and a valid passkey are insufficient unless the
+    // user explicitly approved the application's CreateGroup SAI right.
+    const notApproved = await request('/api/collectives/stepup/verify', solid, 'Bearer',
+      await proof(solid, ORIGIN + '/api/collectives/stepup/verify'),
+      assertion, { Origin: 'https://paper.example' });
+    expect(notApproved.response.status).toBeGreaterThanOrEqual(400);
+    expect(notApproved.response.status).toBeLessThan(500);
+    expect(notApproved.body.token).toBeUndefined();
+    expect(passkeyRecord.counter).toBe(0);
+
+    // Simulate the SAI authorization registry gaining the accepted right.
+    // Live provider SAI registration/UI remains a separate integration gate.
+    personRights.add('apods:CreateGroup');
     const stepup = await request('/api/collectives/stepup/verify', solid, 'Bearer',
       await proof(solid, ORIGIN + '/api/collectives/stepup/verify'),
-      await webauthnAssertion(),
-      { Origin: 'https://paper.example' });
+      assertion, { Origin: 'https://paper.example' });
     expect(stepup.response.status).toBe(200);
     expect(stepup.body.tokenType).toBe('DPoP');
     expect(stepup.response.headers.get('access-control-allow-origin')).toBe('https://paper.example');

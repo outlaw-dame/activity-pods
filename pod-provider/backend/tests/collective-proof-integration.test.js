@@ -19,6 +19,7 @@ const APP = 'https://reader.example/client';
 const PERSON = ISSUER + '/users/alice#me';
 const GRANT_SECRET = 'g'.repeat(48);
 const STEPUP_SECRET = 'isolation-secret-'.repeat(4);
+const ISSUER_SECRET = 'distinct-passkey-issuer-attestation-key-'.repeat(3);
 const REQUEST_KEY = 'a'.repeat(32);
 
 function dpopHash(token) {
@@ -52,7 +53,8 @@ function testBroker(client, { rights = ['apods:CreateGroup'] } = {}) {
   let currentRights = rights;
   const jwtInst = { publicJwk: client.providerJwk, settings: { alg: 'ES256' } };
   const groupCredentials = {
-    settings: { enabled: true, secret: STEPUP_SECRET, issuer: ISSUER }
+    settings: { enabled: true, secret: STEPUP_SECRET, issuer: ISSUER,
+      issuerSecret: ISSUER_SECRET, approvedApps: [APP] }
   };
   const dpopInst = {
     settings: { replayPrefix: 'test:dpop', replayTtlSec: 300 },
@@ -67,6 +69,7 @@ function testBroker(client, { rights = ['apods:CreateGroup'] } = {}) {
   };
   const stepupInst = {
     settings: { enabled: true, origin: ISSUER, approvedApps: [APP],
+      issuerSecret: ISSUER_SECRET,
       ticketPrefix: 'test:stepup', ticketTtlSeconds: 600,
       ratePrefix: 'test:stepup:rate', maxAttemptsPerMinute: 8 },
     redis: {
@@ -95,7 +98,7 @@ function testBroker(client, { rights = ['apods:CreateGroup'] } = {}) {
     if (action === 'access-authorizations.getSpecialRights') return currentRights;
     if (action === 'passkeys-api.verifyAssertion') return { webId: PERSON };
     if (action === 'collective-stepup-credentials.mint') {
-      const credential = await stepupCredentials.actions.mint.handler.call(groupCredentials, { params });
+      const credential = await stepupCredentials.actions.mint.handler.call(groupCredentials, { params, call });
       issuedTokens.push(credential.token);
       return credential;
     }

@@ -174,20 +174,22 @@ module.exports = {
         if (STAGES.indexOf(next) !== STAGES.indexOf(before.stage) + 1) {
           throw problem('COLLECTIVE_INVALID_TRANSITION', 409);
         }
-        // Atomic compare-and-swap in the authoritative Fuseki settings dataset.
-        // A racing worker with a stale revision makes no update.
+        // A per-transition nonce prevents a losing same-stage race from
+        // incorrectly observing the winner's state and reporting success.
+        const transitionId = crypto.randomUUID();
         await ctx.call('triplestore.update', {
           dataset: 'settings', webId: 'system',
           query: 'PREFIX apods: <' + NS + '>\n' +
             'DELETE { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(before.stage) +
             ' ; apods:collectiveRevision ' + sparqlString(String(revision)) + ' . }\n' +
             'INSERT { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(next) +
-            ' ; apods:collectiveRevision ' + sparqlString(String(revision + 1)) + ' . }\n' +
+            ' ; apods:collectiveRevision ' + sparqlString(String(revision + 1)) +
+            ' ; apods:collectiveLastTransition ' + sparqlString(transitionId) + ' . }\n' +
             'WHERE { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(before.stage) +
             ' ; apods:collectiveRevision ' + sparqlString(String(revision)) + ' . }'
         });
         const after = await this._load(ctx, groupId);
-        if (!after || after.stage !== next || after.revision !== revision + 1) {
+        if (!after || after.stage !== next || after.revision !== revision + 1 || after.lastTransition !== transitionId) {
           throw problem('COLLECTIVE_STALE_REVISION', 409);
         }
         return { canonicalGroupId: groupId, stage: after.stage, revision: after.revision };
@@ -201,13 +203,14 @@ module.exports = {
       const rows = await ctx.call('triplestore.query', {
         dataset: 'settings', webId: 'system',
         query: 'PREFIX apods: <' + NS + '>\n' +
-          'SELECT ?owner ?app ?requestHash ?actorUri ?displayName ?stage ?revision WHERE {\n' +
+          'SELECT ?owner ?app ?requestHash ?actorUri ?displayName ?stage ?revision ?lastTransition WHERE {\n' +
           '  <' + subject + '> a apods:' + TYPE + ' ;\n' +
           '    apods:collectiveOwner ?owner ; apods:collectiveApp ?app ;\n' +
           '    apods:collectiveRequestHash ?requestHash ;\n' +
           '    apods:activityPubActorId ?actorUri ;\n' +
           '    apods:collectiveDisplayName ?displayName ;\n' +
-          '    apods:collectiveStage ?stage ; apods:collectiveRevision ?revision .\n}\nLIMIT 2'
+          '    apods:collectiveStage ?stage ; apods:collectiveRevision ?revision .\n' +
+          '  OPTIONAL { <' + subject + '> apods:collectiveLastTransition ?lastTransition . }\n}\nLIMIT 2'
       });
       if (!Array.isArray(rows) || rows.length === 0) return null;
       if (rows.length !== 1) throw problem('COLLECTIVE_CORRUPT_STATE', 500);
@@ -218,7 +221,7 @@ module.exports = {
       }
       return { owner: unpack(row, 'owner'), app: unpack(row, 'app'),
         requestHash: unpack(row, 'requestHash'), actorUri: unpack(row, 'actorUri'),
-        displayName: unpack(row, 'displayName'), stage, revision };
+        displayName: unpack(row, 'displayName'), lastTransition: unpack(row, 'lastTransition'), stage, revision };
     }
   }
 };

@@ -118,10 +118,15 @@ describe('G1 durable collective reservations — provider authority', () => {
     const a = await h.action('reserve', reservation());
     const b = await h.action('reserve', reservation({ app: 'https://forum.example/app' }));
     expect(a.canonicalGroupId).not.toBe(b.canonicalGroupId);
-    await expectError(h.action('get', readGrant(a.canonicalGroupId, {
+    const throughOtherApp = await h.action('get', readGrant(a.canonicalGroupId, {
       app: 'https://forum.example/app',
       grant: createGrant(PRINCIPAL, 'https://forum.example/app', 'read', a.canonicalGroupId)
-    })), 'COLLECTIVE_NOT_FOUND');
+    }));
+    expect(throughOtherApp.canonicalGroupId).toBe(a.canonicalGroupId);
+    // An app-specific provider grant remains required for each operation.
+    await expectError(h.action('get', readGrant(a.canonicalGroupId, {
+      app: 'https://forum.example/app'
+    })), 'COLLECTIVE_UNAUTHORIZED');
   });
 
   test('simultaneous identical reservations converge on one durable record', async () => {
@@ -129,6 +134,32 @@ describe('G1 durable collective reservations — provider authority', () => {
     const [a, b] = await Promise.all([h.action('reserve', reservation()), h.action('reserve', reservation())]);
     expect(a).toEqual(b);
     expect(h.db.size).toBe(1);
+  });
+
+  test('different authorized app can advance the same provider-owned group', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    const secondary = 'https://forum.example/app';
+    const grant = advanceGrant(id, 1, 'ap-key-pending', {
+      app: secondary,
+      grant: createGrant(PRINCIPAL, secondary, 'advance', sha(JSON.stringify([id, 1, 'ap-key-pending'])))
+    });
+    const updated = await h.action('advance', grant);
+    expect(updated).toMatchObject({ canonicalGroupId: id, stage: 'ap-key-pending', revision: 2 });
+    expect(h.db.get(id).app).toBe(APP); // Creator provenance, not governing authority.
+  });
+
+  test('valid token for another user cannot read or advance the creator group', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    const bob = PROVIDER + '/users/bob';
+    await expectError(h.action('get', readGrant(id, {
+      principal: bob, grant: createGrant(bob, APP, 'read', id)
+    })), 'COLLECTIVE_NOT_FOUND');
+    await expectError(h.action('advance', advanceGrant(id, 1, 'ap-key-pending', {
+      principal: bob,
+      grant: createGrant(bob, APP, 'advance', sha(JSON.stringify([id, 1, 'ap-key-pending'])))
+    })), 'COLLECTIVE_NOT_FOUND');
   });
 
   test('restart of the service retains the source-of-truth state', async () => {

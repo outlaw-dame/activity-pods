@@ -89,6 +89,15 @@ module.exports = {
         // Independent verification prevents caller-forged ctx.meta from acting
         // as proof of a signed user+application identity.
         const verified = await ctx.call('jwk.verifyToken', { token: header.slice(7) });
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        // ActivityPods currently accepts very long-lived Solid ID tokens.
+        // Bound this experimental identity-creation endpoint to a recently
+        // issued token. NOTE: iat freshness is NOT proof of fresh login or
+        // sender possession; production requires a stronger step-up/DPoP gate.
+        if (!verified || !Number.isSafeInteger(verified.iat) ||
+            verified.iat > nowSeconds + 60 || nowSeconds - verified.iat > 600) {
+          fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
+        }
         if (!verified || typeof verified.azp !== 'string' ||
             typeof verified.webid !== 'string' ||
             verified.azp !== ctx.meta?.webId ||

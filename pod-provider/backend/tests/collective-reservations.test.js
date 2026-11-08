@@ -63,6 +63,7 @@ function materialize(query) {
 function harness(db = new Map()) {
   const calls = [];
   let failWrite = false;
+  let onBeforeWrite = null;
   let registered = true;
   let rights = ['apods:CreateGroup', 'apods:ReadGroups'];
   const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48), workerSecret: WORKER_SECRET, approvedApps: [APP, 'https://forum.example/app'] } };
@@ -83,6 +84,11 @@ function harness(db = new Map()) {
         return row ? [Object.fromEntries(Object.entries(row).filter(([k]) => k !== 'id').map(([k, v]) => [k, { value: String(v) }]))] : [];
       }
       if (failWrite) throw new Error('Fuseki write unavailable');
+      if (onBeforeWrite) {
+        const hook = onBeforeWrite;
+        onBeforeWrite = null;
+        await hook();
+      }
       if (args.query.startsWith('INSERT { ')) {
         const row = materialize(args.query);
         if (!db.has(row.id)) db.set(row.id, {
@@ -118,6 +124,7 @@ function harness(db = new Map()) {
     return service.actions[name].handler.call(instance, ctx(params));
   }
   return { db, calls, instance, action, setFailWrite(v) { failWrite = v; },
+    setBeforeWrite(fn) { onBeforeWrite = fn; },
     setRegistration(v) { registered = v; }, setRights(v) { rights = v; } };
 }
 async function expectError(promise, code) {
@@ -138,6 +145,22 @@ describe('G1 durable collective reservations — provider authority', () => {
     expect([...h.db.values()][0]).toMatchObject({ owner: PRINCIPAL, app: APP, revision: 1 });
     expect(h.calls.some(c => c.args.query?.includes('FILTER NOT EXISTS'))).toBe(true);
     expect(h.calls.filter(c => c.name === 'triplestore.update').every(c => c.args.dataset === 'settings')).toBe(true);
+  });
+
+  test('mid-flight SAI revocation denies success, even if an inactive record was written', async () => {
+    const h = harness();
+    h.setBeforeWrite(() => h.setRights([]));
+    await expectError(h.action('reserve', reservation()), 'COLLECTIVE_APP_CONSENT_MISSING');
+    // Cross-store writes are not atomic: the inert reservation may exist. It
+    // must never be confused with an activated actor or production fencing.
+    expect(h.db.size).toBe(1);
+    expect([...h.db.values()][0].stage).toBe('reserved');
+    expect(h.calls.filter(x => x.name === 'access-authorizations.getSpecialRights'))
+      .toHaveLength(2);
+    h.setRights(['apods:CreateGroup', 'apods:ReadGroups']);
+    const retry = await h.action('reserve', reservation());
+    expect(retry.stage).toBe('reserved');
+    expect(h.db.size).toBe(1);
   });
 
   test('different payload with same principal, app and idempotency key fails closed', async () => {

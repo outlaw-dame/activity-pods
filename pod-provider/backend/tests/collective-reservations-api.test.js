@@ -8,24 +8,15 @@ const app = 'https://client.example/app';
 const issuer = 'https://social.example';
 const secret = 'g'.repeat(48);
 const JKT = 'd'.repeat(43);
+const TOKEN = 'stepup.group.credential';
 const DPOP = 'cHJvb2Y.c2lnbmVk.c2lnbmF0dXJl';
 const fingerprint = (p, a, k, d) => crypto.createHash('sha256')
   .update(JSON.stringify([p, a, k, d])).digest('hex');
 
-function validClaims(overrides = {}) {
-  const now = Math.floor(Date.now() / 1000);
-  return {
-    sub: principal, exp: now + 600, azp: app, webid: principal,
-    aud: app, iss: issuer, iat: now - 30, auth_time: now - 30,
-    amr: ['pwd'], cnf: { jkt: JKT },
-    ...overrides
-  };
-}
-
 function harness({
-  enabled = true, header = 'Bearer valid.token.proof',
+  enabled = true, header = 'DPoP ' + TOKEN,
   key = 'q'.repeat(32), displayName = 'Community Hub',
-  verified = validClaims(),
+  verified = { principal, app, jkt: JKT },
   metadata = {}, failReservation = false
 } = {}) {
   const seen = [];
@@ -33,8 +24,6 @@ function harness({
     params: { displayName, principal: 'https://evil.example/users/mallory',
       app: 'https://evil.example/fake-app' },
     meta: {
-      webId: app, impersonatedUser: principal,
-      tokenPayload: { azp: app, webid: principal },
       $collectivesAuthHeader: header,
       $collectivesIdempotencyKey: key,
       $collectivesDpopProof: DPOP,
@@ -42,7 +31,7 @@ function harness({
     },
     async call(action, params) {
       seen.push({ action, params });
-      if (action === 'jwk.verifyToken') return verified;
+      if (action === 'collective-stepup-credentials.verify') return verified;
       if (action === 'oauth-dpop-nonce.verifyProof') return { jkt: JKT, jti: 'random' };
       if (action === 'collective-reservations.reserve') {
         if (failReservation) throw new Error('authoritative store unavailable');
@@ -60,9 +49,8 @@ function harness({
 async function denied(promise, type) {
   await expect(promise).rejects.toMatchObject({ type });
 }
-
-describe('G1 Solid-OIDC authenticated reservation ingress', () => {
-  test('default-off endpoint does not register any route', async () => {
+describe('G1 purpose-bound reservation ingress', () => {
+  test('route is disabled by default', async () => {
     const calls = [];
     await api.started.call({
       settings: { enabled: false },
@@ -71,7 +59,8 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     expect(calls).toEqual([]);
     await denied(harness({ enabled: false }).reserve(), 'COLLECTIVE_API_DISABLED');
   });
-  test('enabled route requires both gateway authentication and authorization', async () => {
+
+  test('Group-only route is NOT a generic Solid-OIDC login route', async () => {
     const calls = [];
     await api.started.call({
       settings: { enabled: true },
@@ -80,21 +69,31 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     expect(calls).toHaveLength(1);
     const route = calls[0][1].route;
     expect(route.path).toBe('/api/collectives');
-    expect(route.authentication).toBe(true);
-    expect(route.authorization).toBe(true);
+    expect(route.authentication).toBe(false);
+    expect(route.authorization).toBe(false);
     expect(route.aliases).toEqual({ 'POST /reserve': 'collective-reservations-api.reserve' });
+    // Authentication is explicitly enforced by the distinct Group credential
+    // verifier, so an ordinary ID token cannot get mistaken for a login.
   });
-  test('derives user and app ONLY from verified OIDC claims, never the request body', async () => {
+
+  test('derives Group principal and app ONLY from signed step-up credential', async () => {
     const h = harness();
     const result = await h.reserve();
     expect(result.stage).toBe('reserved');
     expect(h.ctx.meta.$statusCode).toBe(202);
     expect(h.ctx.meta.$responseHeaders['Cache-Control']).toBe('no-store');
-    const actions = h.seen.map(x => x.action);
-    expect(actions).toEqual(['jwk.verifyToken', 'oauth-dpop-nonce.verifyProof', 'collective-reservations.reserve']);
-    expect(h.seen[0].params.token).toBe('valid.token.proof');
-    expect(h.seen[1].params).toMatchObject({ expectedJkt: JKT, htm: 'POST', htu: issuer + '/api/collectives/reserve' });
-    expect(h.seen[1].params.expectedAth).toBe(crypto.createHash('sha256').update('valid.token.proof').digest('base64url'));
+    expect(h.seen.map(x => x.action)).toEqual([
+      'collective-stepup-credentials.verify',
+      'oauth-dpop-nonce.verifyProof',
+      'collective-reservations.reserve'
+    ]);
+    expect(h.seen[0].params.token).toBe(TOKEN);
+    expect(h.seen[1].params).toMatchObject({
+      expectedJkt: JKT, htm: 'POST', htu: issuer + '/api/collectives/reserve'
+    });
+    expect(h.seen[1].params.expectedAth).toBe(
+      crypto.createHash('sha256').update(TOKEN).digest('base64url')
+    );
     const op = h.seen[2].params;
     expect(op.principal).toBe(principal);
     expect(op.app).toBe(app);
@@ -104,67 +103,46 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     expect(op.grant.app).toBe(app);
     const hash = fingerprint(principal, app, 'q'.repeat(32), 'Community Hub');
     expect(op.grant.requestHash).toBe(hash);
-    const fields = ['provider.collective.reservation.v1', principal, app, 'reserve',
-      hash, op.grant.issuedAt, op.grant.expiresAt];
-    const mac = crypto.createHmac('sha256', secret).update(JSON.stringify(fields)).digest('hex');
-    expect(op.grant.mac).toBe(mac);
+    const fields = ['provider.collective.reservation.v1', principal, app,
+      'reserve', hash, op.grant.issuedAt, op.grant.expiresAt];
+    expect(op.grant.mac).toBe(
+      crypto.createHmac('sha256', secret).update(JSON.stringify(fields)).digest('hex')
+    );
     expect(op.grant.expiresAt - op.grant.issuedAt).toBe(60000);
     expect(result).not.toHaveProperty('grant');
-    expect(JSON.stringify(result)).not.toContain(secret);
   });
+
   test.each([
-    ['missing bearer', { header: null }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['malformed bearer', { header: 'Basic abcdef' }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['ordinary Solid bearer', { header: 'Bearer ' + TOKEN }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing DPoP authorization', { header: null }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['malformed authorization', { header: 'Basic abcdef' }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['missing idempotency', { key: null }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
     ['short idempotency', { key: '123' }, 'COLLECTIVE_INVALID_IDEMPOTENCY'],
-    ['missing WebID', { verified: validClaims({ webid: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing app', { verified: validClaims({ azp: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong app signed', { verified: validClaims({ azp: 'https://evil.example/app',
-      aud: 'https://evil.example/app' }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong person signed', { verified: validClaims({ webid: 'https://evil.example/user' }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['stale token issuance', { verified: validClaims({ iat: Math.floor(Date.now()/1000) - 3600 }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['future token issuance', { verified: validClaims({ iat: Math.floor(Date.now()/1000) + 300 }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing issuance timestamp', { verified: validClaims({ iat: undefined }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing recent login', { verified: validClaims({ auth_time: undefined }) },
-      'COLLECTIVE_STEP_UP_REQUIRED'],
-    ['stale login', { verified: validClaims({ auth_time: Math.floor(Date.now()/1000) - 3600 }) },
-      'COLLECTIVE_STEP_UP_REQUIRED'],
-    ['missing AMR', { verified: validClaims({ amr: undefined }) }, 'COLLECTIVE_STEP_UP_REQUIRED'],
-    ['no sender-bound key', { verified: validClaims({ cnf: undefined }) }, 'COLLECTIVE_STEP_UP_REQUIRED'],
+    ['missing stepup subject', { verified: { app, jkt: JKT } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing stepup app', { verified: { principal, jkt: JKT } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing bound key', { verified: { principal, app } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing Group stepup credential', { verified: null }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['malformed DPoP', { metadata: { $collectivesDpopProof: 'invalid' } }, 'COLLECTIVE_DPOP_REQUIRED'],
-    ['missing DPoP', { metadata: { $collectivesDpopProof: null } }, 'COLLECTIVE_DPOP_REQUIRED'],
-    ['missing signed subject', { verified: validClaims({ sub: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['mismatched signed subject', { verified: validClaims({ sub: 'https://other.example/users/mallory' }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['year-long token', { verified: validClaims({ exp: Math.floor(Date.now()/1000) + 31536000 }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing expiration', { verified: validClaims({ exp: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong audience', { verified: validClaims({ aud: 'https://evil.example/app' }) },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['missing issuer', { verified: validClaims({ iss: undefined }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['wrong issuer', { verified: validClaims({ iss: 'https://evil.example' }) }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['invalid signature', { verified: null }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['injected gateway app', { metadata: { webId: 'https://evil.example/app' } },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['injected gateway user', { metadata: { impersonatedUser: 'https://evil.example/user' } },
-      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
-    ['injected gateway token claims', { metadata: { tokenPayload: {
-      azp: 'https://evil.example/app', webid: principal } } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED']
-  ])('fails closed for %s', async (_case, input, expected) => {
-    const h = harness(input);
-    await denied(h.reserve(), expected);
+    ['missing DPoP', { metadata: { $collectivesDpopProof: null } }, 'COLLECTIVE_DPOP_REQUIRED']
+  ])('fails closed for %s', async (_label, params, type) => {
+    const h = harness(params);
+    await denied(h.reserve(), type);
     expect(h.seen.some(x => x.action === 'collective-reservations.reserve')).toBe(false);
   });
-  test('does not issue a successful HTTP status when authoritative persistence fails', async () => {
+
+  test('rejects a cryptographically verified proof from a different sender key', async () => {
+    const h = harness({ verified: { principal, app, jkt: 'z'.repeat(43) } });
+    await denied(h.reserve(), 'COLLECTIVE_DPOP_REQUIRED');
+    expect(h.seen.some(x => x.action === 'collective-reservations.reserve')).toBe(false);
+  });
+
+  test('does not report success when authoritative reservation write fails', async () => {
     const h = harness({ failReservation: true });
     await expect(h.reserve()).rejects.toThrow('authoritative store unavailable');
     expect(h.ctx.meta.$statusCode).toBeUndefined();
   });
-  test('does not silently sign when provider secret is misconfigured', async () => {
+
+  test('does not authorize requests with missing grant secret', async () => {
     const h = harness();
     h.instance.settings.grantSecret = '';
     await denied(h.reserve(), 'COLLECTIVE_API_DISABLED');

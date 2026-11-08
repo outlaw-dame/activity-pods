@@ -36,7 +36,7 @@ function expectedIssuer(origin) {
 
 module.exports = {
   name: 'collective-reservations-api',
-  dependencies: ['api', 'jwk', 'collective-reservations'],
+  dependencies: ['api', 'jwk', 'collective-reservations', 'oauth-dpop-nonce'],
   settings: {
     enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
       process.env.PROVIDER_COLLECTIVES_API_ENABLED === 'true',
@@ -58,6 +58,7 @@ module.exports = {
         onBeforeCall(ctx, route, req) {
           ctx.meta.$collectivesAuthHeader = req.headers.authorization;
           ctx.meta.$collectivesIdempotencyKey = req.headers['idempotency-key'];
+          ctx.meta.$collectivesDpopProof = req.headers.dpop;
         },
         aliases: {
           'POST /reserve': 'collective-reservations-api.reserve'
@@ -108,6 +109,34 @@ module.exports = {
             ctx.meta?.tokenPayload?.azp !== verified.azp ||
             ctx.meta?.tokenPayload?.webid !== verified.webid) {
           fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
+        }
+        // This is a high-trust identity mutation. Current ActivityPods
+        // year-long bearer ID tokens alone must NEVER authorize it.
+        // The verified JWT must carry a recent *authentication* event (not
+        // merely a recent iat) and a sender-constrained JWK thumbprint.
+        const authAge = nowSeconds - verified.auth_time;
+        const jkt = verified.cnf?.jkt;
+        if (!Number.isSafeInteger(verified.auth_time) || authAge < -60 || authAge > 300 ||
+            !Array.isArray(verified.amr) || verified.amr.length === 0 ||
+            typeof jkt !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(jkt)) {
+          fail('COLLECTIVE_STEP_UP_REQUIRED', 401);
+        }
+        const dpop = ctx.meta?.$collectivesDpopProof;
+        if (typeof dpop !== 'string' || dpop.length > 8192 ||
+            !/^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/u.test(dpop)) {
+          fail('COLLECTIVE_DPOP_REQUIRED', 401);
+        }
+        const issuerOrigin = expectedIssuer(this.settings.providerOrigin);
+        const verifiedProof = await ctx.call('oauth-dpop-nonce.verifyProof', {
+          proofJwt: dpop,
+          htm: 'POST',
+          htu: issuerOrigin + '/api/collectives/reserve',
+          audience: verified.azp,
+          expectedJkt: jkt,
+          expectedAth: crypto.createHash('sha256').update(header.slice(7)).digest('base64url')
+        });
+        if (!verifiedProof || verifiedProof.jkt !== jkt) {
+          fail('COLLECTIVE_DPOP_REQUIRED', 401);
         }
         const principal = verified.webid;
         const app = verified.azp;

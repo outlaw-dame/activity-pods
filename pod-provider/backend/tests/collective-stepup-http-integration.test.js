@@ -3,8 +3,9 @@
 /**
  * HTTP-facing integration with actual Moleculer-Web gateway, actual ES256
  * OIDC/DPoP and isolated HS256 step-up credential; live HTTP middleware.
- * SAI records, WebAuthn hardware and Group persistence are test doubles;
- * separate CI suites exercise WebAuthn crypto, SAI policy and real Fuseki.
+ * SAI records and Group persistence are test doubles; the virtual WebAuthn
+ * authenticator signs real assertions validated by the provider's verifier.
+ * Separate CI exercises actual Fuseki persistence.
  */
 const crypto = require('node:crypto');
 const { ServiceBroker } = require('moleculer');
@@ -15,6 +16,7 @@ const creds = require('../services/collective-stepup-credentials.service');
 const apiReserve = require('../services/collective-reservations-api.service');
 const { assertLiveCollectiveConsent } = require('../services/utils/collective-access-policy');
 const dpopService = require('../services/oauth/oauth-dpop-nonce.service');
+const passkeysService = require('../services/passkeys-api.service');
 
 const ORIGIN = 'https://provider.example';
 const APP = 'https://client.example/app';
@@ -44,9 +46,47 @@ function mockRedis() {
 }
 
 describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', () => {
-  let broker, address, identityKey, identityJwk, deviceKey, deviceJwk, personRights;
+  let broker, identityKey, deviceKey, deviceJwk, personRights;
+  let passkeyKey, passkeyRecord;
   let port, nonceCounter = 0;
   const groupKey = 'r'.repeat(32);
+
+  function passkeyCose(publicJwk) {
+    return Buffer.concat([
+      Buffer.from([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]),
+      Buffer.from(publicJwk.x, 'base64url'),
+      Buffer.from([0x22, 0x58, 0x20]),
+      Buffer.from(publicJwk.y, 'base64url')
+    ]);
+  }
+  async function webauthnAssertion() {
+    const { options, ticket } = await broker.call('passkeys-api.authenticationOptions');
+    const challenge = options.challenge;
+    const clientData = Buffer.from(JSON.stringify({
+      type: 'webauthn.get', challenge, origin: ORIGIN, crossOrigin: false
+    }));
+    const authData = Buffer.alloc(37);
+    crypto.createHash('sha256').update('provider.example').digest().copy(authData, 0);
+    authData[32] = 0x05; // user present and verified
+    authData.writeUInt32BE(passkeyRecord.counter + 1, 33);
+    const signable = Buffer.concat([
+      authData, crypto.createHash('sha256').update(clientData).digest()
+    ]);
+    const signature = crypto.sign('sha256', signable, passkeyKey.privateKey);
+    return {
+      ticket,
+      response: {
+        id: passkeyRecord.credentialId,
+        rawId: passkeyRecord.credentialId, type: 'public-key',
+        response: {
+          clientDataJSON: clientData.toString('base64url'),
+          authenticatorData: authData.toString('base64url'),
+          signature: signature.toString('base64url')
+        },
+        clientExtensionResults: {}
+      }
+    };
+  }
 
   async function proof(token, htu) {
     nonceCounter += 1;
@@ -74,9 +114,15 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
 
   beforeAll(async () => {
     identityKey = await generateKeyPair('ES256');
-    identityJwk = await exportJWK(identityKey.publicKey);
     deviceKey = await generateKeyPair('ES256');
     deviceJwk = await exportJWK(deviceKey.publicKey);
+    passkeyKey = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    passkeyRecord = {
+      credentialId: crypto.randomBytes(20).toString('base64url'),
+      webId: PERSON,
+      publicKey: passkeyCose(passkeyKey.publicKey.export({ format: 'jwk' })).toString('base64url'),
+      counter: 0, transports: [], userHandle: 'dGVzdC11c2Vy'
+    };
     personRights = new Set(['apods:CreateGroup']);
     const redis = mockRedis();
 
@@ -108,9 +154,24 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
       }
     });
     broker.createService({
-      name: 'passkeys-api',
-      actions: { verifyAssertion: () => ({ webId: PERSON }) }
-    });
+      ...passkeysService,
+      // Keep the independent passkey HTTP routes out of this focused test.
+      started() {},
+      methods: {
+        ...passkeysService.methods,
+        getExpectedOrigin: () => ORIGIN,
+        getRpId: () => 'provider.example',
+        ticketSecret: () => 'test-passkey-ticket-signing-secret-'.repeat(3),
+        async getCredentialByCredentialId(_ctx, id) {
+          return id === passkeyRecord.credentialId ? passkeyRecord : null;
+        },
+        async touchCredential(_ctx, id, updates) {
+          if (id !== passkeyRecord.credentialId) throw new Error('Incorrect passkey');
+          passkeyRecord.counter = updates.counter;
+          return passkeyRecord;
+        }
+      }
+    }, { settings: { ticketTtlSec: 300, challengeTimeoutMs: 60000 } });
     broker.createService({
       name: 'auth.account',
       actions: { findByWebId: ctx => ctx.params.webId === PERSON ?
@@ -189,6 +250,24 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
     }
   });
 
+  test('running provider rejects invalid virtual WebAuthn signatures before issuance', async () => {
+    const now = Math.floor(Date.now()/1000);
+    const solid = await new SignJWT({ webid: PERSON, azp: APP })
+      .setProtectedHeader({ alg: 'ES256' })
+      .setIssuer(ORIGIN).setAudience(APP).setSubject(PERSON)
+      .setIssuedAt(now - 60).setExpirationTime(now + 3600)
+      .sign(identityKey.privateKey);
+    const assertion = await webauthnAssertion();
+    assertion.response.response.signature = crypto.randomBytes(70).toString('base64url');
+    const rejected = await request('/api/collectives/stepup/verify', solid, 'Bearer',
+      await proof(solid, ORIGIN + '/api/collectives/stepup/verify'),
+      assertion, { Origin: 'https://paper.example' });
+    expect(rejected.response.status).toBeGreaterThanOrEqual(400);
+    expect(rejected.response.status).toBeLessThan(500);
+    expect(rejected.body.token).toBeUndefined();
+    expect(passkeyRecord.counter).toBe(0);
+  });
+
   test('real HTTP flow: signed Solid token + consent + passkey proof → scoped credential → reservation', async () => {
     const now = Math.floor(Date.now()/1000);
     const solid = await new SignJWT({ webid: PERSON, azp: APP })
@@ -199,7 +278,7 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
 
     const stepup = await request('/api/collectives/stepup/verify', solid, 'Bearer',
       await proof(solid, ORIGIN + '/api/collectives/stepup/verify'),
-      { ticket: 'signed-web-authn-ticket-'.repeat(4), response: { id: 'passkey-a' } },
+      await webauthnAssertion(),
       { Origin: 'https://paper.example' });
     expect(stepup.response.status).toBe(200);
     expect(stepup.body.tokenType).toBe('DPoP');

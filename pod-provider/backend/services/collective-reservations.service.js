@@ -14,6 +14,7 @@
 const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
+const { reserveFingerprint } = require('./utils/collective-grant-claims');
 
 const NS = 'http://activitypods.org/ns/core#';
 const TYPE = 'CollectiveReservationV1';
@@ -114,8 +115,7 @@ function validateInput(params, baseUrl, identityKey) {
   }
   const idempotencyKey = requireString(params.idempotencyKey, /^[a-zA-Z0-9_-]{24,128}$/u, 'COLLECTIVE_INVALID_IDEMPOTENCY');
   const displayName = requireString(params.displayName, /^[^\u0000-\u001f\u007f]{1,160}$/u, 'COLLECTIVE_INVALID_DISPLAY_NAME');
-  const canonical = JSON.stringify([principal, app, idempotencyKey, displayName]);
-  const requestHash = crypto.createHash('sha256').update(canonical).digest('hex');
+  const requestHash = reserveFingerprint(principal, app, idempotencyKey, displayName);
   const groupId = 'cg_' + hmac(identityKey, JSON.stringify([principal, app, idempotencyKey])).slice(0, 32);
   return { principal, app, displayName, idempotencyKey, requestHash, groupId,
     actorUri: provider.origin + '/groups/' + groupId, uri: PREFIX + groupId };

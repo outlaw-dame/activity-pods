@@ -26,6 +26,41 @@ function matchAudience(audience, clientId) {
   return typeof audience === 'string' ? audience === clientId
     : Array.isArray(audience) && audience.includes(clientId);
 }
+function makeProviderGrant(secret, principal, app, operation, requestHash) {
+  const issuedAt = Date.now();
+  const expiresAt = issuedAt + 60000;
+  const fields = [PURPOSE, principal, app, operation, requestHash, issuedAt, expiresAt];
+  return {
+    purpose: PURPOSE, principal, app, operation, requestHash, issuedAt, expiresAt,
+    mac: crypto.createHmac('sha256', secret).update(JSON.stringify(fields)).digest('hex')
+  };
+}
+
+async function authenticatedPrincipal(ctx, providerOrigin) {
+  const authorization = ctx.meta?.$collectivesAuthHeader;
+  // Remove the secret before calling any downstream action, including the JWK
+  // service. JWT bytes are supplied solely as the explicit verifyToken input.
+  if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
+  if (typeof authorization !== 'string' || authorization.length > 8192 ||
+      !/^Bearer [A-Za-z0-9._~-]+$/u.test(authorization)) {
+    fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
+  }
+  const signed = await ctx.call('jwk.verifyToken', { token: authorization.slice(7) });
+  const issuer = expectedIssuer(providerOrigin);
+  if (!signed || typeof signed.webid !== 'string' ||
+      typeof signed.azp !== 'string' || signed.sub !== signed.webid ||
+      ![issuer, issuer + '/'].includes(signed.iss) ||
+      !matchAudience(signed.aud, signed.azp) ||
+      signed.azp !== ctx.meta?.webId ||
+      signed.webid !== ctx.meta?.impersonatedUser ||
+      ctx.meta?.tokenPayload?.azp !== signed.azp ||
+      ctx.meta?.tokenPayload?.webid !== signed.webid ||
+      ctx.meta?.tokenPayload?.sub !== signed.sub) {
+    fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
+  }
+  return { principal: signed.webid, app: signed.azp };
+}
+
 function expectedIssuer(origin) {
   const issuer = canonicalOrigin(origin);
   if (!issuer) fail('COLLECTIVE_API_DISABLED', 503);
@@ -56,7 +91,7 @@ module.exports = {
         bodyParsers: { json: true },
         cors: {
           origin: approvedBrowserOrigins(this.settings.providerOrigin, this.settings.allowedOriginsConfig),
-          methods: ['POST', 'OPTIONS'],
+          methods: ['GET', 'POST', 'OPTIONS'],
           allowedHeaders: ['Authorization', 'Idempotency-Key', 'Content-Type'],
           credentials: false
         },
@@ -64,7 +99,10 @@ module.exports = {
           ctx.meta.$collectivesAuthHeader = req.headers.authorization;
           ctx.meta.$collectivesIdempotencyKey = req.headers['idempotency-key'];
         },
-        aliases: { 'POST /reserve': 'collective-reservations-api.reserve' }
+        aliases: {
+          'POST /reserve': 'collective-reservations-api.reserve',
+          'GET /:canonicalGroupId': 'collective-reservations-api.get'
+        }
       },
       toBottom: false
     });
@@ -78,57 +116,49 @@ module.exports = {
             Buffer.byteLength(this.settings.grantSecret) < 32) {
           fail('COLLECTIVE_API_DISABLED', 503);
         }
-        const authorization = ctx.meta?.$collectivesAuthHeader;
         const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
-        // Do not propagate the raw bearer token via ctx.meta to unrelated
-        // provider services during SAI checks or the Fuseki reservation write.
-        if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
-        if (typeof authorization !== 'string' || authorization.length > 8192 ||
-            !/^Bearer [A-Za-z0-9._~-]+$/u.test(authorization)) {
-          fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
-        }
+        // Verify identity before validating a potentially user-controlled key.
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
         if (typeof idempotencyKey !== 'string' ||
             !/^[A-Za-z0-9_-]{24,128}$/u.test(idempotencyKey)) {
           fail('COLLECTIVE_INVALID_IDEMPOTENCY', 400);
         }
-
-        // The gateway already authenticated the Solid ID token; verify again
-        // to keep direct service calls and forged ctx.meta fail-closed.
-        const token = authorization.slice(7);
-        const signed = await ctx.call('jwk.verifyToken', { token });
-        const issuer = expectedIssuer(this.settings.providerOrigin);
-        if (!signed || typeof signed.webid !== 'string' ||
-            typeof signed.azp !== 'string' ||
-            signed.sub !== signed.webid ||
-            ![issuer, issuer + '/'].includes(signed.iss) ||
-            !matchAudience(signed.aud, signed.azp) ||
-            signed.azp !== ctx.meta?.webId ||
-            signed.webid !== ctx.meta?.impersonatedUser ||
-            ctx.meta?.tokenPayload?.azp !== signed.azp ||
-            ctx.meta?.tokenPayload?.webid !== signed.webid ||
-            ctx.meta?.tokenPayload?.sub !== signed.sub) {
-          fail('COLLECTIVE_AUTHENTICATION_REQUIRED', 401);
-        }
-
-        const principal = signed.webid;
-        const app = signed.azp;
         const requestHash = reserveFingerprint(
           principal, app, idempotencyKey, ctx.params.displayName
         );
-        const issuedAt = Date.now();
-        const expiresAt = issuedAt + 60000;
-        const fields = [PURPOSE, principal, app, 'reserve', requestHash, issuedAt, expiresAt];
-        const grant = {
-          purpose: PURPOSE, principal, app, operation: 'reserve', requestHash,
-          issuedAt, expiresAt,
-          mac: crypto.createHmac('sha256', this.settings.grantSecret)
-            .update(JSON.stringify(fields)).digest('hex')
-        };
+        const grant = makeProviderGrant(
+          this.settings.grantSecret, principal, app, 'reserve', requestHash
+        );
 
         const outcome = await ctx.call('collective-reservations.reserve', {
           principal, app, idempotencyKey, displayName: ctx.params.displayName, grant
         });
         ctx.meta.$statusCode = 202;
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff'
+        };
+        return outcome;
+      }
+    },
+    get: {
+      params: {
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' }
+      },
+      async handler(ctx) {
+        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.grantSecret) < 32) {
+          fail('COLLECTIVE_API_DISABLED', 503);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const canonicalGroupId = ctx.params.canonicalGroupId;
+        const grant = makeProviderGrant(
+          this.settings.grantSecret, principal, app, 'read', canonicalGroupId
+        );
+        const outcome = await ctx.call('collective-reservations.get', {
+          principal, app, canonicalGroupId, grant
+        });
         ctx.meta.$responseHeaders = {
           ...(ctx.meta.$responseHeaders || {}),
           'Cache-Control': 'no-store',

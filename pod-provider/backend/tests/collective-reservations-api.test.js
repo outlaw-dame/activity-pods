@@ -112,7 +112,7 @@ describe('Provider-native Solid-OIDC Group reservation', () => {
     ['wrong scheme', { header: 'Basic ' + token }],
     ['DPoP credential scheme', { header: 'DPoP ' + token }],
     ['invalid bearer syntax', { header: 'Bearer a b' }],
-    ['invalid signature', { claims: undefined }],
+    ['invalid signature', { claims: null }],
     ['missing app', { claims: { ...signedClaims, azp: undefined } }],
     ['missing person', { claims: { ...signedClaims, webid: undefined } }],
     ['subject substitution', { claims: { ...signedClaims,

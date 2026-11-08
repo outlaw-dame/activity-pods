@@ -52,8 +52,12 @@ function hmac(key, text) {
 }
 
 function safeCompare(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length || a.length > 256) return false;
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  // HMAC-SHA256 hex digests are exactly 64 ASCII hex digits. Comparing only JS
+  // string lengths lets Unicode strings become unequal byte lengths and makes
+  // timingSafeEqual throw instead of returning an authorization denial.
+  if (typeof a !== 'string' || typeof b !== 'string' ||
+      !/^[0-9a-f]{64}$/u.test(a) || !/^[0-9a-f]{64}$/u.test(b)) return false;
+  return crypto.timingSafeEqual(Buffer.from(a, 'ascii'), Buffer.from(b, 'ascii'));
 }
 
 function sparqlString(value) {

@@ -13,7 +13,8 @@ const fingerprint = (p, a, k, d) => crypto.createHash('sha256')
 function harness({
   enabled = true, header = 'Bearer valid.token.proof',
   key = 'q'.repeat(32), displayName = 'Community Hub',
-  verified = { azp: app, webid: principal, aud: app, iss: issuer },
+  verified = { azp: app, webid: principal, aud: app, iss: issuer,
+    iat: Math.floor(Date.now() / 1000) - 30 },
   metadata = {}, failReservation = false
 } = {}) {
   const seen = [];
@@ -105,6 +106,12 @@ describe('G1 Solid-OIDC authenticated reservation ingress', () => {
     ['custom JWT no app', { verified: { webid: principal, aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['wrong app signed', { verified: { azp: 'https://evil.example/app', webid: principal, aud: 'https://evil.example/app', iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['wrong person signed', { verified: { azp: app, webid: 'https://evil.example/user', aud: app, iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['stale year-long ID token', { verified: { azp: app, webid: principal, aud: app, iss: issuer,
+      iat: Math.floor(Date.now() / 1000) - 3600 } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['future issued token', { verified: { azp: app, webid: principal, aud: app, iss: issuer,
+      iat: Math.floor(Date.now() / 1000) + 300 } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
+    ['missing issuance timestamp', { verified: { azp: app, webid: principal, aud: app, iss: issuer } },
+      'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['wrong audience', { verified: { azp: app, webid: principal, aud: 'https://evil.example/app', iss: issuer } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['missing issuer', { verified: { azp: app, webid: principal, aud: app } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],
     ['wrong issuer', { verified: { azp: app, webid: principal, aud: app, iss: 'https://evil.example' } }, 'COLLECTIVE_AUTHENTICATION_REQUIRED'],

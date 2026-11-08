@@ -12,12 +12,12 @@
  */
 const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
+const { WORKER_ID_PATTERN, hashLeaseToken } = require('./utils/collective-worker-lease');
 
 const NS = 'http://activitypods.org/ns/core#';
 const PREFIX = 'urn:apods:collective:';
 const PURPOSE = 'provider.collective.worker.lease.v1';
 const ID = /^cg_[a-f0-9]{32}$/u;
-const WORKER = /^[A-Za-z0-9_-]{8,96}$/u;
 const HASH = /^[a-f0-9]{64}$/u;
 const LEASE_TTL_MS = 30000;
 
@@ -37,7 +37,7 @@ function unpack(row, field) {
 function validateInputs({ canonicalGroupId, workerId }, secret) {
   if (!secret || Buffer.byteLength(secret) < 32) fail('COLLECTIVE_WORKER_LEASE_DISABLED', 503);
   if (typeof canonicalGroupId !== 'string' || !ID.test(canonicalGroupId)) fail('COLLECTIVE_INVALID_ID', 400);
-  if (typeof workerId !== 'string' || !WORKER.test(workerId)) fail('COLLECTIVE_INVALID_WORKER', 400);
+  if (typeof workerId !== 'string' || !WORKER_ID_PATTERN.test(workerId)) fail('COLLECTIVE_INVALID_WORKER', 400);
 }
 function assertGrant(grant, secret, action, groupId, workerId, tokenHash = '', now = Date.now()) {
   if (!grant || grant.purpose !== PURPOSE || grant.operation !== action ||
@@ -54,11 +54,10 @@ function assertGrant(grant, secret, action, groupId, workerId, tokenHash = '', n
     fail('COLLECTIVE_WORKER_UNAUTHORIZED');
   }
 }
-function hashToken(token) {
-  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/u.test(token)) {
-    fail('COLLECTIVE_INVALID_LEASE_TOKEN', 400);
-  }
-  return crypto.createHash('sha256').update(token).digest('hex');
+function requireTokenHash(token) {
+  const hash = hashLeaseToken(token);
+  if (!hash) fail('COLLECTIVE_INVALID_LEASE_TOKEN', 400);
+  return hash;
 }
 function subject(id) { return '<' + PREFIX + id + '>'; }
 
@@ -80,7 +79,7 @@ module.exports = {
         validateInputs(ctx.params, this.settings.secret);
         assertGrant(ctx.params.workerGrant, this.settings.secret, 'claim', id, workerId);
         const token = crypto.randomBytes(32).toString('base64url');
-        const tokenHash = hashToken(token);
+        const tokenHash = requireTokenHash(token);
         const epoch = crypto.randomUUID();
         const now = Date.now();
         const until = now + this.settings.ttlMs;
@@ -117,7 +116,7 @@ module.exports = {
         if (!this.settings.enabled) fail('COLLECTIVE_WORKER_LEASE_DISABLED', 503);
         const { canonicalGroupId: id, workerId, leaseToken } = ctx.params;
         validateInputs(ctx.params, this.settings.secret);
-        const tokenHash = hashToken(leaseToken);
+        const tokenHash = requireTokenHash(leaseToken);
         assertGrant(ctx.params.workerGrant, this.settings.secret, 'renew', id, workerId, tokenHash);
         const before = await this._load(ctx, id);
         const now = Date.now();
@@ -149,7 +148,7 @@ module.exports = {
         if (!this.settings.enabled) fail('COLLECTIVE_WORKER_LEASE_DISABLED', 503);
         const { canonicalGroupId: id, workerId, leaseToken } = ctx.params;
         validateInputs(ctx.params, this.settings.secret);
-        const tokenHash = hashToken(leaseToken);
+        const tokenHash = requireTokenHash(leaseToken);
         assertGrant(ctx.params.workerGrant, this.settings.secret, 'release', id, workerId, tokenHash);
         const before = await this._load(ctx, id);
         if (!before || before.owner !== workerId || before.hash !== tokenHash) {

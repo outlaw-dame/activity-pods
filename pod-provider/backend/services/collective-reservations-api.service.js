@@ -13,6 +13,7 @@
  */
 const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
+const { approvedBrowserOrigins } = require('./utils/collective-endpoint-policy');
 const { reserveFingerprint } = require('./utils/collective-grant-claims');
 
 const PURPOSE = 'provider.collective.reservation.v1';
@@ -42,7 +43,8 @@ module.exports = {
       process.env.PROVIDER_COLLECTIVES_API_ENABLED === 'true' &&
       process.env.PROVIDER_COLLECTIVES_STEPUP_ENABLED === 'true',
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
-    grantSecret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || ''
+    grantSecret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
+    allowedOriginsConfig: process.env.PROVIDER_COLLECTIVES_ALLOWED_ORIGINS || ''
   },
 
   async started() {
@@ -58,6 +60,12 @@ module.exports = {
         authentication: false,
         authorization: false,
         bodyParsers: { json: true },
+        cors: {
+          origin: approvedBrowserOrigins(this.settings.providerOrigin, this.settings.allowedOriginsConfig),
+          methods: ['POST', 'OPTIONS'],
+          allowedHeaders: ['Authorization', 'DPoP', 'Idempotency-Key', 'Content-Type'],
+          credentials: false
+        },
         onBeforeCall(ctx, route, req) {
           ctx.meta.$collectivesAuthHeader = req.headers.authorization;
           ctx.meta.$collectivesIdempotencyKey = req.headers['idempotency-key'];

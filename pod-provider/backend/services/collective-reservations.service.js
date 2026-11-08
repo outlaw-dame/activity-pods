@@ -76,7 +76,7 @@ function assertGrant(grant, secret, principal, app, operation, requestHash, now 
   if (!safeCompare(grant.mac, hmac(secret, JSON.stringify(fields)))) throw problem('COLLECTIVE_UNAUTHORIZED');
 }
 
-function validateInput(params, baseUrl, secret) {
+function validateInput(params, baseUrl, identityKey) {
   const principal = exactHttps(params.principal).href;
   const app = exactHttps(params.app).href;
   const provider = exactHttps(baseUrl);
@@ -85,7 +85,7 @@ function validateInput(params, baseUrl, secret) {
   const displayName = requireString(params.displayName, /^[^\u0000-\u001f\u007f]{1,160}$/u, 'COLLECTIVE_INVALID_DISPLAY_NAME');
   const canonical = JSON.stringify([principal, app, idempotencyKey, displayName]);
   const requestHash = crypto.createHash('sha256').update(canonical).digest('hex');
-  const groupId = 'cg_' + hmac(secret, JSON.stringify([principal, app, idempotencyKey])).slice(0, 32);
+  const groupId = 'cg_' + hmac(identityKey, JSON.stringify([principal, app, idempotencyKey])).slice(0, 32);
   return { principal, app, displayName, idempotencyKey, requestHash, groupId,
     actorUri: baseUrl + '/groups/' + groupId, uri: PREFIX + groupId };
 }
@@ -95,7 +95,8 @@ module.exports = {
   settings: {
     enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true',
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
-    secret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || ''
+    secret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
+    identityKey: process.env.PROVIDER_COLLECTIVES_ID_KEY || ''
   },
   actions: {
     reserve: {
@@ -107,10 +108,11 @@ module.exports = {
       },
       async handler(ctx) {
         if (!this.settings.enabled) throw problem('COLLECTIVE_DISABLED', 503);
-        if (!this.settings.secret || Buffer.byteLength(this.settings.secret) < 32) {
+        if (!this.settings.secret || Buffer.byteLength(this.settings.secret) < 32 ||
+            !this.settings.identityKey || Buffer.byteLength(this.settings.identityKey) < 32) {
           throw problem('COLLECTIVE_DISABLED', 503);
         }
-        const p = validateInput(ctx.params, this.settings.providerOrigin, this.settings.secret);
+        const p = validateInput(ctx.params, this.settings.providerOrigin, this.settings.identityKey);
         assertGrant(ctx.params.grant, this.settings.secret, p.principal, p.app, 'reserve', p.requestHash);
         // The recorded creator application is provenance, NOT exclusive authority.
         const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';

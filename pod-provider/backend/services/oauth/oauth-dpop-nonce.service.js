@@ -114,7 +114,10 @@ module.exports = {
 
         const issuedAt = Number(payload.iat || 0);
         const now = nowEpochSec();
-        if (!Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > 300) {
+        // A proof may be at most 60 s ahead and 300 s behind. The replay
+        // marker must outlive this ENTIRE validity horizon, including skew.
+        if (!Number.isSafeInteger(issuedAt) || issuedAt > now + 60 ||
+            now - issuedAt > 300) {
           throw new MoleculerError('DPoP iat outside allowed skew', 401, 'INVALID_DPOP_PROOF');
         }
 
@@ -140,7 +143,11 @@ module.exports = {
         }
 
         const replayKey = `${this.settings.replayPrefix}:${jkt}:${proofJti}`;
-        const replaySet = await this.redis.set(replayKey, '1', 'EX', this.settings.replayTtlSec, 'NX');
+        // Even when an operator configured a shorter historical TTL,
+        // never permit the JTI marker to expire while the proof can still
+        // satisfy the verifier's asymmetric 60 s future + 300 s past window.
+        const replayTtlSec = Math.max(this.settings.replayTtlSec, 420);
+        const replaySet = await this.redis.set(replayKey, '1', 'EX', replayTtlSec, 'NX');
         if (replaySet !== 'OK') {
           throw new MoleculerError('DPoP replay detected', 401, 'DPOP_REPLAY_DETECTED');
         }

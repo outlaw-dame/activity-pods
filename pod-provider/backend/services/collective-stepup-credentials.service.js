@@ -10,6 +10,7 @@
  * assertion* for the same WebID, and for current SAI consent, before minting.
  */
 const crypto = require('node:crypto');
+const Redis = require('ioredis');
 const { SignJWT, jwtVerify } = require('jose');
 const { MoleculerError } = require('moleculer').Errors;
 const { verifyMintAttestation } = require('./utils/collective-mint-attestation');
@@ -57,7 +58,15 @@ module.exports = {
     secret: process.env.PROVIDER_COLLECTIVES_STEPUP_SECRET || '',
     issuerSecret: process.env.PROVIDER_COLLECTIVES_STEPUP_ISSUER_SECRET || '',
     approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || ''),
+    redisUrl: process.env.SEMAPPS_REDIS_CACHE_URL || 'redis://localhost:6379',
+    attestationPrefix: 'collective:stepup:mint',
     issuer: process.env.SEMAPPS_HOME_URL || ''
+  },
+  created() {
+    if (this.settings.enabled) this.redis = new Redis(this.settings.redisUrl);
+  },
+  async stopped() {
+    if (this.redis) await this.redis.quit().catch(() => this.redis.disconnect());
   },
   actions: {
     mint: {
@@ -67,7 +76,7 @@ module.exports = {
         issuerAttestation: 'string'
       },
       async handler(ctx) {
-        if (!this.settings.enabled) deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        if (!this.settings.enabled || !this.redis) deny('COLLECTIVE_STEPUP_DISABLED', 503);
         const { principal, app, jkt, verifiedAt, ticketHash, issuerAttestation } = ctx.params;
         const now = Math.floor(Date.now() / 1000);
         if (!validUri(principal, true) || !validUri(app) || !JKT.test(jkt) ||
@@ -84,6 +93,13 @@ module.exports = {
         await assertLiveCollectiveConsent(ctx, {
           principal, app, operation: 'reserve', approvedApps: this.settings.approvedApps
         });
+        // The attestation is purpose-limited and short-lived, but a broker
+        // retry or compromised internal caller must not mint a second token
+        // from the same verified WebAuthn assertion. Redis SET NX is atomic
+        // across replicas; failure to reach Redis fails closed.
+        const replayKey = this.settings.attestationPrefix + ':' + ticketHash;
+        const claimed = await this.redis.set(replayKey, '1', 'EX', 300, 'NX');
+        if (claimed !== 'OK') deny('COLLECTIVE_STEPUP_REPLAY');
         const issuer = issuerOrigin(this.settings.issuer);
         const token = await new SignJWT({
           purpose: PURPOSE, operation: 'reserve',

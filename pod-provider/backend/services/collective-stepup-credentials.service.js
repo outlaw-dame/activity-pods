@@ -76,7 +76,10 @@ module.exports = {
         issuerAttestation: 'string'
       },
       async handler(ctx) {
-        if (!this.settings.enabled || !this.redis) deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        if (!this.settings.enabled || !this.redis ||
+            !this.settings.issuerSecret || this.settings.secret === this.settings.issuerSecret) {
+          deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        }
         const { principal, app, jkt, verifiedAt, ticketHash, issuerAttestation } = ctx.params;
         const now = Math.floor(Date.now() / 1000);
         if (!validUri(principal, true) || !validUri(app) || !JKT.test(jkt) ||
@@ -116,7 +119,10 @@ module.exports = {
     verify: {
       params: { token: 'string' },
       async handler(ctx) {
-        if (!this.settings.enabled) deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        if (!this.settings.enabled ||
+            (this.settings.issuerSecret && this.settings.secret === this.settings.issuerSecret)) {
+          deny('COLLECTIVE_STEPUP_DISABLED', 503);
+        }
         const issuer = issuerOrigin(this.settings.issuer);
         let payload;
         try {

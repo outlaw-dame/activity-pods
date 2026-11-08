@@ -182,6 +182,15 @@ module.exports = {
           dataset: 'settings', webId: 'system',
           query: 'INSERT { ' + record + ' } WHERE { FILTER NOT EXISTS { <' + p.uri + '> ?existing ?value . } }'
         });
+        // This is a containment check, NOT a cross-store atomic fence.
+        // If the user revokes SAI while the Fuseki write is in flight, do not
+        // return a successful reservation. A private, inactive record can
+        // still be left behind; deployment remains disabled until a truly
+        // transactionally fenced policy/commit boundary exists.
+        await assertLiveCollectiveConsent(ctx, {
+          principal: p.principal, app: p.app, operation: 'reserve',
+          approvedApps: this.settings.approvedApps
+        });
         const stored = await this._load(ctx, p.groupId);
         if (!stored || stored.requestHash !== p.requestHash ||
             stored.owner !== p.principal || stored.app !== p.app ||

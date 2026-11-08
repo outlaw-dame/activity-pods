@@ -35,13 +35,18 @@ function readGrant(groupId, overrides = {}) {
 function advanceGrant(groupId, expectedRevision, nextStage, overrides = {}) {
   const issuedAt = Date.now() - 500;
   const expiresAt = issuedAt + 50000;
-  const fields = [WORKER_PURPOSE, groupId, expectedRevision, nextStage, issuedAt, expiresAt];
+  const workerId = overrides.workerId || TEST_WORKER_ID;
+  const leaseToken = overrides.leaseToken || TEST_LEASE_TOKEN;
+  const leaseEpoch = overrides.leaseEpoch || TEST_LEASE_EPOCH;
+  const leaseHash = sha(leaseToken);
+  const fields = [WORKER_PURPOSE, groupId, expectedRevision, nextStage,
+    workerId, leaseEpoch, leaseHash, issuedAt, expiresAt];
   const workerGrant = { purpose: WORKER_PURPOSE, groupId,
-    revision: expectedRevision, nextStage, issuedAt, expiresAt,
+    revision: expectedRevision, nextStage, workerId, leaseEpoch, leaseHash,
+    issuedAt, expiresAt,
     mac: crypto.createHmac('sha256', WORKER_SECRET).update(JSON.stringify(fields)).digest('hex') };
   return { principal: PRINCIPAL, app: APP, canonicalGroupId: groupId, expectedRevision, nextStage,
-    workerId: TEST_WORKER_ID, leaseToken: TEST_LEASE_TOKEN, leaseEpoch: TEST_LEASE_EPOCH,
-    workerGrant, ...overrides };
+    workerId, leaseToken, leaseEpoch, workerGrant, ...overrides };
 }
 function materialize(query) {
   const id = /<urn:apods:collective:([^>]+)> a <http:\/\/activitypods\.org\/ns\/core#CollectiveReservationV1>/u.exec(query)?.[1];
@@ -349,6 +354,19 @@ describe('G1 durable collective reservations — provider authority', () => {
     expect(next.stage).toBe('did-pending');
     await expectError(h.action('advance', advanceGrant(id, 3, 'ap-key-pending')), 'COLLECTIVE_INVALID_TRANSITION');
     expect(h.db.get(id).stage).not.toBe('active');
+  });
+
+  test('transition signing cannot be transplanted between two worker leases', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    const original = advanceGrant(id, 1, 'ap-key-pending');
+    const transplanted = {
+      ...original, workerId: 'another-worker-id',
+      leaseToken: 'y'.repeat(43),
+      leaseEpoch: '00000000-0000-4000-8000-000000000002'
+    };
+    await expectError(h.action('advance', transplanted), 'COLLECTIVE_WORKER_UNAUTHORIZED');
+    expect(h.db.get(id).stage).toBe('reserved');
   });
 
   test('stage mutation cannot bypass a missing, expired or transferred worker lease', async () => {

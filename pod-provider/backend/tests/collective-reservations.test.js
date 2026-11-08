@@ -95,7 +95,7 @@ function harness(db = new Map()) {
         const insert = /INSERT \{ [^\n]+ apods:collectiveStage ("[^"]+")\s+; apods:collectiveRevision ("[^"]+")/u.exec(args.query);
         if (!id || !m || !insert) throw new Error('Unexpected CAS SPARQL syntax');
         const row = db.get(id);
-        if (row && row.stage === JSON.parse(m[1]) && row.revision === Number(JSON.parse(m[2]) &&
+        if (row && row.stage === JSON.parse(m[1]) && row.revision === Number(JSON.parse(m[2])) &&
             row.leaseOwner === TEST_WORKER_ID && row.leaseHash === sha(TEST_LEASE_TOKEN) &&
             row.leaseEpoch === TEST_LEASE_EPOCH && row.leaseUntil > Date.now() &&
             args.query.includes('apods:collectiveLeaseOwner ' + JSON.stringify(row.leaseOwner)) &&

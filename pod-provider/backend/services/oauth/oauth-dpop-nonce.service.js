@@ -106,15 +106,6 @@ module.exports = {
           throw new MoleculerError('DPoP iat outside allowed skew', 401, 'INVALID_DPOP_PROOF');
         }
 
-        if (nonce) {
-          const proofNonce = String(payload.nonce || '').trim();
-          if (!proofNonce || proofNonce !== String(nonce).trim()) {
-            throw new MoleculerError('DPoP nonce is required or invalid', 401, 'INVALID_DPOP_NONCE');
-          }
-
-          await this.consumeNonce({ audience, nonce: proofNonce });
-        }
-
         const jkt = await calculateJwkThumbprint(protectedHeader.jwk, 'sha256');
         if (expectedJkt && String(expectedJkt).trim() !== jkt) {
           throw new MoleculerError('DPoP JKT mismatch', 401, 'INVALID_DPOP_PROOF');
@@ -125,6 +116,15 @@ module.exports = {
         if (expectedAth !== undefined &&
             (typeof payload.ath !== 'string' || payload.ath !== expectedAth)) {
           throw new MoleculerError('DPoP token hash mismatch', 401, 'INVALID_DPOP_PROOF');
+        }
+
+        if (nonce) {
+          const proofNonce = String(payload.nonce || '').trim();
+          if (!proofNonce || proofNonce !== String(nonce).trim()) {
+            throw new MoleculerError('DPoP nonce is required or invalid', 401, 'INVALID_DPOP_NONCE');
+          }
+
+          await this.consumeNonce({ audience, nonce: proofNonce });
         }
 
         const replayKey = `${this.settings.replayPrefix}:${jkt}:${proofJti}`;
@@ -145,11 +145,13 @@ module.exports = {
   methods: {
     async consumeNonce({ audience, nonce }) {
       const key = `${this.settings.noncePrefix}:${audience}:${nonce}`;
-      const payload = await this.redis.get(key);
+      // Atomic one-time consumption (Redis >= 6.2). GET+DEL allowed two
+      // parallel requests to consume the same challenge before either deleted.
+      // Do not silently downgrade to a non-atomic sequence.
+      const payload = await this.redis.call('GETDEL', key);
       if (!payload) {
         throw new MoleculerError('DPoP nonce is invalid or expired', 401, 'INVALID_DPOP_NONCE');
       }
-      await this.redis.del(key);
     }
   }
 };

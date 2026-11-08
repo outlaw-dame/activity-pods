@@ -41,11 +41,12 @@ function reserveParams(displayName = name) {
   return { principal, app, idempotencyKey: key, displayName,
     grant: grant('reserve', sha(JSON.stringify([principal, app, key, displayName]))) };
 }
-function advanceParams(id, revision, nextStage) {
+function advanceParams(id, revision, nextStage, lease) {
   const issuedAt = Date.now() - 1000;
   const expiresAt = issuedAt + 60000;
   const fields = [workerPurpose, id, revision, nextStage, issuedAt, expiresAt];
   return { canonicalGroupId: id, principal, app, expectedRevision: revision, nextStage,
+    workerId: lease.workerId, leaseToken: lease.leaseToken, leaseEpoch: lease.epoch,
     workerGrant: { purpose: workerPurpose, groupId: id, revision, nextStage, issuedAt, expiresAt,
       mac: crypto.createHmac('sha256', workerSecret).update(JSON.stringify(fields)).digest('hex') } };
 }
@@ -145,8 +146,9 @@ async function prepare() {
   await assert.rejects(call(instance(), 'reserve', reserveParams('Conflicting Request')),
     e => e.type === 'COLLECTIVE_RESERVATION_CONFLICT');
 
+  const transitionLease = await leaseCall('claim', leaseParams('claim', 'test-worker-stage'));
   const races = await Promise.allSettled(Array.from({ length: 12 },
-    () => call(instance(), 'advance', advanceParams(id, 1, 'ap-key-pending'))));
+    () => call(instance(), 'advance', advanceParams(id, 1, 'ap-key-pending', transitionLease))));
   const wins = races.filter(x => x.status === 'fulfilled');
   assert.equal(wins.length, 1, 'exactly one successful transition across replicas');
   assert(races.filter(x => x.status === 'rejected')
@@ -156,6 +158,8 @@ async function prepare() {
   });
   assert.equal(read.stage, 'ap-key-pending');
   assert.equal(read.revision, 2);
+  assert.equal((await leaseCall('release', leaseParams('release',
+    transitionLease.workerId, transitionLease.leaseToken))).released, true);
   const contestedLeases = await Promise.allSettled(
     Array.from({ length: 12 }, (_, i) => leaseCall('claim',
       leaseParams('claim', 'test-worker-' + String(i).padStart(2, '0'))))

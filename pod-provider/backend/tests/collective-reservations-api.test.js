@@ -175,11 +175,11 @@ describe('Provider-native Solid-OIDC Group reservation', () => {
   });
 
   test('read refuses missing or malformed Group IDs before issuing storage calls', async () => {
-    const h = harness();
     for (const id of ['../secret', 'cg_bad', '', 'cg_' + 'x'.repeat(32)]) {
-      await expect(h.read(id)).rejects.toBeDefined();
+      const h = harness();
+      await denied(() => h.read(id), 'COLLECTIVE_INVALID_ID');
+      expect(h.calls.map(x => x.action)).toEqual(['jwk.verifyToken']);
     }
-    expect(h.calls.some(x => x.action === 'collective-reservations.get')).toBe(false);
   });
 
   test('does not report success if provider persistence fails', async () => {

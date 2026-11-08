@@ -1,6 +1,10 @@
 'use strict';
 
 const crypto = require('node:crypto');
+// passkeys-api imports the shared provider configuration, which normally
+// comes from the provider's .env. Supply only the required test defaults.
+process.env.SEMAPPS_AVAILABLE_LOCALES ||= 'en';
+process.env.SEMAPPS_AUTH_RESERVED_USER_NAMES ||= 'admin';
 const passkeys = require('../services/passkeys-api.service');
 
 const ORIGIN = 'https://provider.example';

@@ -112,7 +112,8 @@ module.exports = {
         }
         const p = validateInput(ctx.params, this.settings.providerOrigin, this.settings.secret);
         assertGrant(ctx.params.grant, this.settings.secret, p.principal, p.app, 'reserve', p.requestHash);
-        // The recorded creator application is provenance, NOT exclusive authority.\n        const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';
+        // The recorded creator application is provenance, NOT exclusive authority.
+        const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';
         const record = '<' + p.uri + '> a <' + NS + TYPE + '> ;\n' +
           q('canonicalGroupId', p.groupId) +
           q('activityPubActorId', p.actorUri) +

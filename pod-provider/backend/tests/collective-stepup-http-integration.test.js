@@ -20,6 +20,7 @@ const ORIGIN = 'https://provider.example';
 const APP = 'https://client.example/app';
 const PERSON = ORIGIN + '/profile/card#me';
 const SECRET = 'isolated-purpose-specific-secret-'.repeat(3);
+const ISSUER_SECRET = 'separate-verified-passkey-issuer-secret-'.repeat(3);
 
 function mockRedis() {
   const store = new Map();
@@ -129,7 +130,8 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
       stopped() {}
     });
     broker.createService(creds, { settings: {
-      enabled: true, secret: SECRET, issuer: ORIGIN
+      enabled: true, secret: SECRET, issuer: ORIGIN,
+      issuerSecret: ISSUER_SECRET, approvedApps: [APP]
     } });
     broker.createService({
       name: 'collective-reservations',
@@ -153,6 +155,7 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
     }, {
       settings: {
         enabled: true, origin: ORIGIN, approvedApps: [APP],
+        issuerSecret: ISSUER_SECRET,
         allowedOriginsConfig: 'https://paper.example',
         ticketPrefix: 'test:stepup:ticket', ticketTtlSeconds: 600,
         ratePrefix: 'test:stepup:rate', maxAttemptsPerMinute: 8

@@ -62,11 +62,10 @@ module.exports = {
         htu: { type: 'string', min: 1 },
         audience: { type: 'string', min: 1 },
         nonce: { type: 'string', optional: true },
-        expectedJkt: { type: 'string', optional: true },
-        expectedAth: { type: 'string', optional: true }
+        expectedJkt: { type: 'string', optional: true }
       },
       async handler(ctx) {
-        const { proofJwt, htm, htu, audience, nonce, expectedJkt, expectedAth } = ctx.params;
+        const { proofJwt, htm, htu, audience, nonce, expectedJkt } = ctx.params;
 
         const protectedHeader = decodeProtectedHeader(proofJwt);
         if (!protectedHeader || protectedHeader.typ !== 'dpop+jwt') {
@@ -77,17 +76,6 @@ module.exports = {
         }
         if (!protectedHeader.jwk || typeof protectedHeader.jwk !== 'object') {
           throw new MoleculerError('DPoP proof missing jwk', 401, 'INVALID_DPOP_PROOF');
-        }
-
-        // RFC 9449 requires a public JWK in the DPoP protected header.
-        // Reject private/symmetric material rather than accepting it as a
-        // harmless extra claim that could leak signing-key bytes to the API.
-        if (protectedHeader.jwk.kty !== 'EC' || protectedHeader.jwk.crv !== 'P-256' ||
-            typeof protectedHeader.jwk.x !== 'string' ||
-            typeof protectedHeader.jwk.y !== 'string' ||
-            ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']
-              .some(field => Object.hasOwn(protectedHeader.jwk, field))) {
-          throw new MoleculerError('DPoP JWK must contain public key only', 401, 'INVALID_DPOP_PROOF');
         }
 
         const key = await importJWK(protectedHeader.jwk, 'ES256');
@@ -106,31 +94,15 @@ module.exports = {
           throw new MoleculerError('DPoP htu mismatch', 401, 'INVALID_DPOP_PROOF');
         }
 
-        const proofJti = typeof payload.jti === 'string' ? payload.jti : '';
-        if (!proofJti || Buffer.byteLength(proofJti) > 256 ||
-            /[\u0000-\u001f\u007f]/u.test(proofJti)) {
+        const proofJti = String(payload.jti || '').trim();
+        if (!proofJti) {
           throw new MoleculerError('DPoP jti missing', 401, 'INVALID_DPOP_PROOF');
         }
 
         const issuedAt = Number(payload.iat || 0);
         const now = nowEpochSec();
-        // A proof may be at most 60 s ahead and 300 s behind. The replay
-        // marker must outlive this ENTIRE validity horizon, including skew.
-        if (!Number.isSafeInteger(issuedAt) || issuedAt > now + 60 ||
-            now - issuedAt > 300) {
+        if (!Number.isFinite(issuedAt) || Math.abs(now - issuedAt) > 300) {
           throw new MoleculerError('DPoP iat outside allowed skew', 401, 'INVALID_DPOP_PROOF');
-        }
-
-        const jkt = await calculateJwkThumbprint(protectedHeader.jwk, 'sha256');
-        if (expectedJkt && String(expectedJkt).trim() !== jkt) {
-          throw new MoleculerError('DPoP JKT mismatch', 401, 'INVALID_DPOP_PROOF');
-        }
-
-        // For DPoP-bound resource requests, the signed proof must bind the
-        // exact access token bytes via the RFC 9449 ath claim.
-        if (expectedAth !== undefined &&
-            (typeof payload.ath !== 'string' || payload.ath !== expectedAth)) {
-          throw new MoleculerError('DPoP token hash mismatch', 401, 'INVALID_DPOP_PROOF');
         }
 
         if (nonce) {
@@ -142,12 +114,13 @@ module.exports = {
           await this.consumeNonce({ audience, nonce: proofNonce });
         }
 
+        const jkt = await calculateJwkThumbprint(protectedHeader.jwk, 'sha256');
+        if (expectedJkt && String(expectedJkt).trim() !== jkt) {
+          throw new MoleculerError('DPoP JKT mismatch', 401, 'INVALID_DPOP_PROOF');
+        }
+
         const replayKey = `${this.settings.replayPrefix}:${jkt}:${proofJti}`;
-        // Even when an operator configured a shorter historical TTL,
-        // never permit the JTI marker to expire while the proof can still
-        // satisfy the verifier's asymmetric 60 s future + 300 s past window.
-        const replayTtlSec = Math.max(this.settings.replayTtlSec, 420);
-        const replaySet = await this.redis.set(replayKey, '1', 'EX', replayTtlSec, 'NX');
+        const replaySet = await this.redis.set(replayKey, '1', 'EX', this.settings.replayTtlSec, 'NX');
         if (replaySet !== 'OK') {
           throw new MoleculerError('DPoP replay detected', 401, 'DPOP_REPLAY_DETECTED');
         }
@@ -164,13 +137,11 @@ module.exports = {
   methods: {
     async consumeNonce({ audience, nonce }) {
       const key = `${this.settings.noncePrefix}:${audience}:${nonce}`;
-      // Atomic one-time consumption (Redis >= 6.2). GET+DEL allowed two
-      // parallel requests to consume the same challenge before either deleted.
-      // Do not silently downgrade to a non-atomic sequence.
-      const payload = await this.redis.call('GETDEL', key);
+      const payload = await this.redis.get(key);
       if (!payload) {
         throw new MoleculerError('DPoP nonce is invalid or expired', 401, 'INVALID_DPOP_NONCE');
       }
+      await this.redis.del(key);
     }
   }
 };

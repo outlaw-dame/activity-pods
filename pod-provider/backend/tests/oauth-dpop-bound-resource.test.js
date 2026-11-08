@@ -12,13 +12,19 @@ const tokenHash = token => crypto.createHash('sha256').update(token).digest('bas
 function fixture() {
   const keys = new Map();
   const instance = {
-    settings: { replayPrefix: 'test:replay', replayTtlSec: 300 },
+    settings: { replayPrefix: 'test:replay', replayTtlSec: 300, noncePrefix: 'test:nonce' },
     redis: {
       async set(key, value, _ex, _ttl, nx) {
         if (nx !== 'NX') throw Error('expected atomic replay NX');
         if (keys.has(key)) return null;
         keys.set(key, value);
         return 'OK';
+      },
+      async call(command, key) {
+        if (command !== 'GETDEL') throw Error('Expected atomic Redis GETDEL');
+        const val = keys.get(key) || null;
+        keys.delete(key);
+        return val;
       }
     }
   };
@@ -85,6 +91,33 @@ describe('DPoP access-token hash verification', () => {
       params: { ...params(proof), expectedJkt: 'a'.repeat(43) }
     })).rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
     expect(store.keys.size).toBe(0);
+  });
+
+  test('only one concurrent request can consume a DPoP nonce', async () => {
+    const f = fixture();
+    const key = 'test:nonce:client-a:random-nonce';
+    f.keys.set(key, JSON.stringify({ issuedAt: Date.now() }));
+    const calls = await Promise.allSettled([
+      service.methods.consumeNonce.call(f.instance, { audience: 'client-a', nonce: 'random-nonce' }),
+      service.methods.consumeNonce.call(f.instance, { audience: 'client-a', nonce: 'random-nonce' })
+    ]);
+    expect(calls.filter(v => v.status === 'fulfilled')).toHaveLength(1);
+    expect(calls.filter(v => v.status === 'rejected')).toHaveLength(1);
+    expect(calls.filter(v => v.status === 'rejected')[0].reason.type).toBe('INVALID_DPOP_NONCE');
+    expect(f.keys.has(key)).toBe(false);
+  });
+
+  test('invalid ath does not consume nonce before valid proof can use it', async () => {
+    const f = fixture();
+    const nonce = 'unique-bound-nonce';
+    const audience = 'https://client.example/app';
+    f.keys.set('test:nonce:' + audience + ':' + nonce, '{"valid":true}');
+    const proof = await signedProof({ nonce });
+    await expect(service.actions.verifyProof.handler.call(
+      { ...f.instance, consumeNonce: service.methods.consumeNonce.bind(f.instance) },
+      { params: { ...params(proof), nonce, expectedAth: tokenHash('wrong bearer') } }
+    )).rejects.toMatchObject({ type: 'INVALID_DPOP_PROOF' });
+    expect(f.keys.has('test:nonce:' + audience + ':' + nonce)).toBe(true);
   });
 
   test('rejects proof bound to a different URL or HTTP operation', async () => {

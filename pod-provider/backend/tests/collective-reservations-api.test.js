@@ -145,7 +145,8 @@ describe('Provider-native Solid-OIDC Group reservation', () => {
   ])('rejects %s idempotency key', async (_case, key) => {
     const h = harness({ key });
     await denied(h.run, 'COLLECTIVE_INVALID_IDEMPOTENCY');
-    expect(h.calls.map(x => x.action)).toEqual(['jwk.verifyToken']);
+    expect(h.calls).toEqual([]);
+    expect(h.ctx.meta).not.toHaveProperty('$collectivesAuthHeader');
   });
 
   test('read uses the existing Solid login with a distinct, Group-bound ReadGroups grant', async () => {

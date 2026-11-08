@@ -27,14 +27,18 @@ function problem(code, status = 403) {
   return new MoleculerError(code, status, code);
 }
 
-function exactHttps(value) {
+function exactHttps(value, { allowFragment = false } = {}) {
   if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\]/u.test(value)) {
     throw problem('COLLECTIVE_INVALID_URI', 400);
   }
   let parsed;
   try { parsed = new URL(value); } catch { throw problem('COLLECTIVE_INVALID_URI', 400); }
+  // Solid WebIDs can contain #me, but an application actor URI used as an
+  // app-scoped grant identifier must remain an exact, fragment-free URI.
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
-      parsed.href !== value || parsed.search || parsed.hash) throw problem('COLLECTIVE_INVALID_URI', 400);
+      parsed.href !== value || parsed.search || (!allowFragment && parsed.hash)) {
+    throw problem('COLLECTIVE_INVALID_URI', 400);
+  }
   return parsed;
 }
 
@@ -98,7 +102,7 @@ function assertWorkerGrant(grant, secret, groupId, revision, nextStage, now = Da
 }
 
 function validateInput(params, baseUrl, identityKey) {
-  const principal = exactHttps(params.principal).href;
+  const principal = exactHttps(params.principal, { allowFragment: true }).href;
   const app = exactHttps(params.app).href;
   // Provider origin is a bare HTTPS origin; WHATWG serializes it with a
   // trailing slash. Do not apply resource-URL exactness rules to an origin.
@@ -185,7 +189,7 @@ module.exports = {
       async handler(ctx) {
         if (!this.settings.enabled) throw problem('COLLECTIVE_DISABLED', 503);
         const groupId = requireString(ctx.params.canonicalGroupId, /^cg_[a-f0-9]{32}$/u, 'COLLECTIVE_INVALID_ID');
-        const principal = exactHttps(ctx.params.principal).href;
+        const principal = exactHttps(ctx.params.principal, { allowFragment: true }).href;
         const app = exactHttps(ctx.params.app).href;
         assertGrant(ctx.params.grant, this.settings.secret, principal, app, 'read', groupId);
         await assertLiveCollectiveConsent(ctx, {
@@ -206,7 +210,7 @@ module.exports = {
       async handler(ctx) {
         if (!this.settings.enabled) throw problem('COLLECTIVE_DISABLED', 503);
         const groupId = requireString(ctx.params.canonicalGroupId, /^cg_[a-f0-9]{32}$/u, 'COLLECTIVE_INVALID_ID');
-        const principal = exactHttps(ctx.params.principal).href;
+        const principal = exactHttps(ctx.params.principal, { allowFragment: true }).href;
         const app = exactHttps(ctx.params.app).href;
         const next = ctx.params.nextStage, revision = ctx.params.expectedRevision;
         assertWorkerGrant(ctx.params.workerGrant, this.settings.workerSecret, groupId, revision, next);

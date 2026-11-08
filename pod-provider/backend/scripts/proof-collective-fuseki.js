@@ -20,6 +20,8 @@ const app = 'https://group-client.example/application';
 const key = 'g1fusekiintegrationidempotent01';
 const name = 'G1 Real Fuseki Proof';
 const secret = 's'.repeat(48);
+const workerSecret = 'w'.repeat(48);
+const workerPurpose = 'provider.collective.worker.advance.v1';
 const identityKey = 'i'.repeat(48);
 const purpose = 'provider.collective.reservation.v1';
 const endpoint = (process.env.FUSEKI_URL || 'http://127.0.0.1:3040').replace(/\/+$/u, '');
@@ -39,8 +41,12 @@ function reserveParams(displayName = name) {
     grant: grant('reserve', sha(JSON.stringify([principal, app, key, displayName]))) };
 }
 function advanceParams(id, revision, nextStage) {
+  const issuedAt = Date.now() - 1000;
+  const expiresAt = issuedAt + 60000;
+  const fields = [workerPurpose, id, revision, nextStage, issuedAt, expiresAt];
   return { canonicalGroupId: id, principal, app, expectedRevision: revision, nextStage,
-    grant: grant('advance', sha(JSON.stringify([id, revision, nextStage]))) };
+    workerGrant: { purpose: workerPurpose, groupId: id, revision, nextStage, issuedAt, expiresAt,
+      mac: crypto.createHmac('sha256', workerSecret).update(JSON.stringify(fields)).digest('hex') } };
 }
 const id = 'cg_' + crypto.createHmac('sha256', identityKey)
   .update(JSON.stringify([principal, app, key])).digest('hex').slice(0, 32);
@@ -68,7 +74,7 @@ async function fuseki(method, query) {
 
 function instance() {
   const obj = {
-    settings: { enabled: true, providerOrigin: origin, secret, identityKey, approvedApps: [app] }
+    settings: { enabled: true, providerOrigin: origin, secret, identityKey, workerSecret, approvedApps: [app] }
   };
   obj._load = service.methods._load.bind(obj);
   return obj;

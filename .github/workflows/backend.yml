@@ -42,7 +42,23 @@ jobs:
           fi
 
       - name: Install backend dependencies
-        run: yarn install
+        run: |
+          set -euo pipefail
+          # Preserve real postinstall/native dependency behavior. Sharp's
+          # upstream libvips release download occasionally returns 504;
+          # retry boundedly rather than silently skipping build scripts.
+          for attempt in 1 2 3; do
+            if yarn install; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Backend dependency installation failed after 3 attempts"
+              exit 1
+            fi
+            delay=$(( 7 * attempt * attempt ))
+            echo "::warning::Dependency installation failed; retry $(( attempt + 1 ))/3 in ${delay}s"
+            sleep "$delay"
+          done
 
       - name: Report backend lockfile drift
         run: |

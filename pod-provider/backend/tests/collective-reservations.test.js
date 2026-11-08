@@ -47,11 +47,16 @@ function materialize(query) {
 function harness(db = new Map()) {
   const calls = [];
   let failWrite = false;
-  const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48) } };
+  let registered = true;
+  let rights = ['apods:CreateGroup', 'apods:ReadGroups'];
+  const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48), approvedApps: [APP, 'https://forum.example/app'] } };
   instance._load = service.methods._load.bind(instance);
   const ctx = params => ({
     params, call: async (name, args) => {
       calls.push({ name, args });
+      if (name === 'auth.account.findByWebId') return { webId: args.webId };
+      if (name === 'app-registrations.isRegistered') return registered;
+      if (name === 'access-authorizations.getSpecialRights') return rights;
       if (!['triplestore.query', 'triplestore.update'].includes(name)) throw new Error('Unexpected service call');
       expect(args.dataset).toBe('settings');
       expect(args.webId).toBe('system');
@@ -83,7 +88,8 @@ function harness(db = new Map()) {
   async function action(name, params) {
     return service.actions[name].handler.call(instance, ctx(params));
   }
-  return { db, calls, instance, action, setFailWrite(v) { failWrite = v; } };
+  return { db, calls, instance, action, setFailWrite(v) { failWrite = v; },
+    setRegistration(v) { registered = v; }, setRights(v) { rights = v; } };
 }
 async function expectError(promise, code) {
   try { await promise; } catch (err) { expect(err.type).toBe(code); return; }
@@ -225,6 +231,32 @@ describe('G1 durable collective reservations — provider authority', () => {
     ]) await expectError(h.action('reserve', bad), 'COLLECTIVE_UNAUTHORIZED');
     expect(h.db.size).toBe(0);
     expect(h.calls.length).toBe(0);
+  });
+
+  test('revoking SAI permissions rejects new operations despite still-valid HMAC grants', async () => {
+    const h = harness();
+    const first = await h.action('reserve', reservation());
+    h.setRights([]);
+    await expectError(h.action('get', readGrant(first.canonicalGroupId)), 'COLLECTIVE_APP_CONSENT_MISSING');
+    await expectError(h.action('reserve', reservation({ idempotencyKey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' })),
+      'COLLECTIVE_APP_CONSENT_MISSING');
+    expect(h.db.size).toBe(1);
+  });
+
+  test('removing app registration prevents new Group reads and reservations', async () => {
+    const h = harness();
+    const first = await h.action('reserve', reservation());
+    h.setRegistration(false);
+    await expectError(h.action('get', readGrant(first.canonicalGroupId)), 'COLLECTIVE_APP_NOT_REGISTERED');
+    await expectError(h.action('reserve', reservation({ idempotencyKey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' })),
+      'COLLECTIVE_APP_NOT_REGISTERED');
+  });
+
+  test('provider-approved app allowlist is enforced independently of signed grant', async () => {
+    const h = harness();
+    h.instance.settings.approvedApps = [];
+    await expectError(h.action('reserve', reservation()), 'COLLECTIVE_APP_NOT_APPROVED');
+    expect(h.db.size).toBe(0);
   });
 
   test('provider policy disabled and missing issuer secret fail before database access', async () => {

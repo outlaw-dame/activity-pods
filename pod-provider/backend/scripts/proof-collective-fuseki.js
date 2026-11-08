@@ -68,7 +68,7 @@ async function fuseki(method, query) {
 
 function instance() {
   const obj = {
-    settings: { enabled: true, providerOrigin: origin, secret, identityKey }
+    settings: { enabled: true, providerOrigin: origin, secret, identityKey, approvedApps: [app] }
   };
   obj._load = service.methods._load.bind(obj);
   return obj;
@@ -77,6 +77,11 @@ async function call(instanceObj, actionName, params) {
   const ctx = {
     params,
     call: async (serviceName, args) => {
+      // SAI fixtures isolate persistence semantics; live SAI must be verified
+      // in a separate authenticated end-to-end integration test.
+      if (serviceName === 'auth.account.findByWebId') return { webId: args.webId };
+      if (serviceName === 'app-registrations.isRegistered') return true;
+      if (serviceName === 'access-authorizations.getSpecialRights') return ['apods:CreateGroup', 'apods:ReadGroups'];
       assert.equal(args.dataset, 'settings');
       assert.equal(args.webId, 'system');
       if (serviceName === 'triplestore.update') return fuseki('update', args.query);

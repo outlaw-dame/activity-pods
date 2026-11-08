@@ -30,6 +30,14 @@ const specialRights = {
     label: 'app.authorization.query_sparql_endpoint',
     icon: SearchIcon
   },
+  'apods:CreateGroup': {
+    label: 'app.authorization.create_social_group',
+    icon: GroupAddIcon
+  },
+  'apods:ReadGroups': {
+    label: 'app.authorization.read_social_groups',
+    icon: FolderIcon
+  },
   'apods:CreateWacGroup': {
     label: 'app.authorization.create_wac_group',
     icon: GroupAddIcon

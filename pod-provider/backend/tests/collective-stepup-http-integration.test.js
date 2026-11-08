@@ -13,6 +13,7 @@ const { SignJWT, jwtVerify, generateKeyPair, exportJWK } = require('jose');
 const apiStepup = require('../services/collective-stepup-api.service');
 const creds = require('../services/collective-stepup-credentials.service');
 const apiReserve = require('../services/collective-reservations-api.service');
+const { assertLiveCollectiveConsent } = require('../services/utils/collective-access-policy');
 const dpopService = require('../services/oauth/oauth-dpop-nonce.service');
 
 const ORIGIN = 'https://provider.example';
@@ -133,10 +134,13 @@ describe('running Moleculer-Web G1 sign-in, consent, reserve and revocation', ()
     broker.createService({
       name: 'collective-reservations',
       actions: {
-        reserve: ctx => {
-          if (!personRights.has('apods:CreateGroup')) {
-            throw new Error('Current SAI consent has been revoked');
-          }
+        async reserve(ctx) {
+          // Exercise the actual, production consent enforcement function
+          // inside the running HTTP path—not a generic mocked server error.
+          await assertLiveCollectiveConsent(ctx, {
+            principal: ctx.params.principal, app: ctx.params.app,
+            operation: 'reserve', approvedApps: [APP]
+          });
           return { canonicalGroupId: 'cg_' + groupKey, stage: 'reserved',
             actorUri: ORIGIN + '/groups/cg_' + groupKey };
         }

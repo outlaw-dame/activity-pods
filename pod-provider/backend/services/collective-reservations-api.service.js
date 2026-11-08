@@ -123,7 +123,7 @@ module.exports = {
         }
         const dpop = ctx.meta?.$collectivesDpopProof;
         if (typeof dpop !== 'string' || dpop.length > 8192 ||
-            !/^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/u.test(dpop)) {
+            !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(dpop)) {
           fail('COLLECTIVE_DPOP_REQUIRED', 401);
         }
         const issuerOrigin = expectedIssuer(this.settings.providerOrigin);

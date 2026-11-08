@@ -1,6 +1,13 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
 
+// Provider-owned social Group capability grants are NOT WebACL permissions
+// on a person's Pod collections/files. These rights are enforced by the
+// provider's collective identity service only.
+const GROUP_ONLY_RIGHTS = new Set(['apods:CreateGroup', 'apods:ReadGroups']);
+const onlyGroupRights = rights =>
+  Array.isArray(rights) && rights.length > 0 && rights.every(right => GROUP_ONLY_RIGHTS.has(right));
+
 // Return true if all elements of a1 can be found on a2. Order does not matter.
 const arraysEqual = (a1, a2) =>
   arrayOf(a1).length === arrayOf(a2).length && arrayOf(a1).every(i => arrayOf(a2).includes(i));
@@ -153,6 +160,7 @@ module.exports = {
     },
     async addPermissionsFromSpecialRights(ctx) {
       const { podOwner, appUri, specialRightsUris } = ctx.params;
+      if (onlyGroupRights(specialRightsUris)) return;
 
       // Give read permissions on all activities, if requested
       if (specialRightsUris.includes('apods:ReadInbox') || specialRightsUris.includes('apods:ReadOutbox')) {
@@ -227,6 +235,7 @@ module.exports = {
     },
     async removePermissionsFromSpecialRights(ctx) {
       const { podOwner, appUri, specialRightsUris } = ctx.params;
+      if (onlyGroupRights(specialRightsUris)) return;
 
       // Remove read permissions on all activities, if requested
       if (specialRightsUris.includes('apods:ReadInbox') || specialRightsUris.includes('apods:ReadOutbox')) {

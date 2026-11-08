@@ -67,8 +67,16 @@ function testBroker(client, { rights = ['apods:CreateGroup'] } = {}) {
   };
   const stepupInst = {
     settings: { enabled: true, origin: ISSUER, approvedApps: [APP],
-      ticketPrefix: 'test:stepup', ticketTtlSeconds: 600 },
-    redis: dpopInst.redis
+      ticketPrefix: 'test:stepup', ticketTtlSeconds: 600,
+      ratePrefix: 'test:stepup:rate', maxAttemptsPerMinute: 8 },
+    redis: {
+      ...dpopInst.redis,
+      async eval(lua, numKeys, key, seconds) {
+        expect(numKeys).toBe(1);
+        expect(seconds).toBe(60);
+        return 1;
+      }
+    }
   };
   const reserveInst = {
     settings: { enabled: true, providerOrigin: ISSUER, grantSecret: GRANT_SECRET }

@@ -62,10 +62,11 @@ module.exports = {
         htu: { type: 'string', min: 1 },
         audience: { type: 'string', min: 1 },
         nonce: { type: 'string', optional: true },
-        expectedJkt: { type: 'string', optional: true }
+        expectedJkt: { type: 'string', optional: true },
+        expectedAth: { type: 'string', optional: true }
       },
       async handler(ctx) {
-        const { proofJwt, htm, htu, audience, nonce, expectedJkt } = ctx.params;
+        const { proofJwt, htm, htu, audience, nonce, expectedJkt, expectedAth } = ctx.params;
 
         const protectedHeader = decodeProtectedHeader(proofJwt);
         if (!protectedHeader || protectedHeader.typ !== 'dpop+jwt') {
@@ -117,6 +118,13 @@ module.exports = {
         const jkt = await calculateJwkThumbprint(protectedHeader.jwk, 'sha256');
         if (expectedJkt && String(expectedJkt).trim() !== jkt) {
           throw new MoleculerError('DPoP JKT mismatch', 401, 'INVALID_DPOP_PROOF');
+        }
+
+        // For DPoP-bound resource requests, the signed proof must bind the
+        // exact access token bytes via the RFC 9449 ath claim.
+        if (expectedAth !== undefined &&
+            (typeof payload.ath !== 'string' || payload.ath !== expectedAth)) {
+          throw new MoleculerError('DPoP token hash mismatch', 401, 'INVALID_DPOP_PROOF');
         }
 
         const replayKey = `${this.settings.replayPrefix}:${jkt}:${proofJti}`;

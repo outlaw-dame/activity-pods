@@ -15,6 +15,7 @@ const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
 const { reserveFingerprint } = require('./utils/collective-grant-claims');
+const { leaseReference } = require('./utils/collective-worker-lease');
 
 const NS = 'http://activitypods.org/ns/core#';
 const TYPE = 'CollectiveReservationV1';
@@ -210,6 +211,7 @@ module.exports = {
       params: { canonicalGroupId: 'string|min:12', principal: 'string|min:1',
         app: 'string|min:1', expectedRevision: 'number|integer|min:1',
         nextStage: { type: 'enum', values: STAGES.slice(1) },
+        workerId: 'string', leaseEpoch: 'string', leaseToken: 'string',
         workerGrant: { type: 'object', strict: false } },
       async handler(ctx) {
         if (!this.settings.enabled) throw problem('COLLECTIVE_DISABLED', 503);
@@ -218,6 +220,9 @@ module.exports = {
         const app = exactHttps(ctx.params.app).href;
         const next = ctx.params.nextStage, revision = ctx.params.expectedRevision;
         assertWorkerGrant(ctx.params.workerGrant, this.settings.workerSecret, groupId, revision, next);
+        const lease = leaseReference(ctx.params);
+        if (!lease) throw problem('COLLECTIVE_WORKER_UNAUTHORIZED');
+        const now = Date.now();
         const before = await this._load(ctx, groupId);
         if (!before || before.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);
         if (before.revision !== revision) throw problem('COLLECTIVE_STALE_REVISION', 409);
@@ -229,7 +234,7 @@ module.exports = {
         const transitionId = crypto.randomUUID();
         await ctx.call('triplestore.update', {
           dataset: 'settings', webId: 'system',
-          query: 'PREFIX apods: <' + NS + '>\n' +
+          query: 'PREFIX apods: <' + NS + '>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n' +
             'DELETE { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(before.stage) +
             ' ; apods:collectiveRevision ' + sparqlString(String(revision)) +
             ' . <' + PREFIX + groupId + '> apods:collectiveLastTransition ?previousTransition . }\n' +
@@ -238,7 +243,12 @@ module.exports = {
             ' ; apods:collectiveLastTransition ' + sparqlString(transitionId) + ' . }\n' +
             'WHERE { <' + PREFIX + groupId + '> apods:collectiveStage ' + sparqlString(before.stage) +
             ' ; apods:collectiveRevision ' + sparqlString(String(revision)) +
-            ' . OPTIONAL { <' + PREFIX + groupId + '> apods:collectiveLastTransition ?previousTransition . } }'
+            ' ; apods:collectiveLeaseOwner ' + sparqlString(lease.workerId) +
+            ' ; apods:collectiveLeaseHash ' + sparqlString(lease.hash) +
+            ' ; apods:collectiveLeaseEpoch ' + sparqlString(lease.leaseEpoch) +
+            ' ; apods:collectiveLeaseUntil ?heldUntil . ' +
+            'FILTER(xsd:integer(?heldUntil) > ' + now + ') ' +
+            'OPTIONAL { <' + PREFIX + groupId + '> apods:collectiveLastTransition ?previousTransition . } }'
         });
         const after = await this._load(ctx, groupId);
         if (!after || after.stage !== next || after.revision !== revision + 1 || after.lastTransition !== transitionId) {

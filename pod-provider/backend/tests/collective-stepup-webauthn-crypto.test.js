@@ -1,10 +1,14 @@
 'use strict';
 
 const crypto = require('node:crypto');
-// passkeys-api imports the shared provider configuration, which normally
-// comes from the provider's .env. Supply only the required test defaults.
-process.env.SEMAPPS_AVAILABLE_LOCALES ||= 'en';
-process.env.SEMAPPS_AUTH_RESERVED_USER_NAMES ||= 'admin';
+// Isolate the passkey cryptographic contract from unrelated instance env.
+// esbuild-jest hoists static requires, so process.env assignments made above
+// require() are NOT a reliable way to initialize CONFIG during this test.
+jest.mock('../config/config', () => ({
+  BASE_URL: 'https://provider.example',
+  FRONTEND_URL: 'https://provider.example',
+  COOKIE_SECRET: 'test-credential-signing-secret-for-webauthn'
+}));
 const passkeys = require('../services/passkeys-api.service');
 
 const ORIGIN = 'https://provider.example';

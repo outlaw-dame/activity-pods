@@ -70,6 +70,19 @@ function reserve(id) {
     'FILTER NOT EXISTS { ' + reservation(id) + ' ' +
     p('collectiveReservationCommit') + ' ?existing . } }';
 }
+// A later grant must advance the revision. A stale reservation carrying an
+// earlier observed revision is invalid even after consent becomes active again.
+function regrant(id) {
+  return 'DELETE { ' + consent(id) + ' ' +
+    p('collectiveConsentActive') + ' "false" ; ' +
+    p('collectiveConsentRevision') + ' "2" . }\\n' +
+    'INSERT { ' + consent(id) + ' ' +
+    p('collectiveConsentActive') + ' "true" ; ' +
+    p('collectiveConsentRevision') + ' "3" . }\\n' +
+    'WHERE { ' + consent(id) + ' ' +
+    p('collectiveConsentActive') + ' "false" ; ' +
+    p('collectiveConsentRevision') + ' "2" . }';
+}
 async function state(id) {
   const rows = await sparql('query', 'SELECT ?active ?rev ?committed WHERE { ' +
     consent(id) + ' ' + p('collectiveConsentActive') + ' ?active ; ' +
@@ -102,6 +115,16 @@ async function prepare() {
   assert.deepEqual(await state('reserve-first'),
     { active: 'false', rev: '2', committed: 'committed' });
 
+  // Revocation followed by a regrant must not resurrect a request that
+  // captured revision 1. Explicit fresh-revision reservations are handled by
+  // a separate operation in the eventual production API, never by replay.
+  await initialize('stale-after-regrant');
+  await sparql('update', revoke('stale-after-regrant'));
+  await sparql('update', regrant('stale-after-regrant'));
+  await sparql('update', reserve('stale-after-regrant'));
+  assert.deepEqual(await state('stale-after-regrant'),
+    { active: 'true', rev: '3', committed: null });
+
   // Several HTTP clients contend for a same-dataset transaction. Every
   // completed run must leave a valid serialized state. It is legitimate for
   // the reservation to win before revocation; not legitimate for active=true
@@ -127,6 +150,8 @@ async function verify() {
     { active: 'false', rev: '2', committed: null });
   assert.deepEqual(await state('reserve-first'),
     { active: 'false', rev: '2', committed: 'committed' });
+  assert.deepEqual(await state('stale-after-regrant'),
+    { active: 'true', rev: '3', committed: null });
   for (let i = 0; i < 8; i++) {
     const result = await state('contended-' + i);
     assert.equal(result.active, 'false');

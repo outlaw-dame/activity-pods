@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/services/collective-reservations.service.js'
+      - 'pod-provider/backend/services/collective-consent-fence.service.js'
+      - 'pod-provider/backend/services/sai/access-authorizations.js'
+      - 'pod-provider/backend/services/sai/app-registrations.js'
+      - 'pod-provider/backend/services/utils/collective-release-gate.js'
+      - 'pod-provider/backend/tests/collective-consent-fence.test.js'
+      - 'pod-provider/backend/tests/collective-release-gate.test.js'
       - 'pod-provider/backend/services/collective-provisioning-leases.service.js'
       - 'pod-provider/backend/services/utils/collective-worker-lease.js'
       - 'pod-provider/backend/scripts/proof-collective-fuseki.js'

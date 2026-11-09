@@ -12,6 +12,7 @@
  * service does not issue grants itself. Disabled unless explicitly configured.
  */
 const crypto = require('node:crypto');
+const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
 const { MoleculerError } = require('moleculer').Errors;
 const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
 const { reserveFingerprint } = require('./utils/collective-grant-claims');
@@ -136,7 +137,7 @@ function validateInput(params, baseUrl, identityKey) {
 module.exports = {
   name: 'collective-reservations',
   settings: {
-    enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true',
+    enabled: CONSENT_BRIDGE_RELEASED && process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true',
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
     secret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
     identityKey: process.env.PROVIDER_COLLECTIVES_ID_KEY || '',

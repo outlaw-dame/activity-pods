@@ -194,6 +194,31 @@ describe('G1 durable collective reservations — provider authority', () => {
     expect(h.db.size).toBe(1);
   });
 
+  test('fenced worker refuses legacy or revoked SAI consent before stage write', async () => {
+    const h = harness();
+    const { canonicalGroupId: id } = await h.action('reserve', reservation());
+    h.instance.settings.consentBridgeEnabled = true;
+    const next = advanceGrant(id, 1, 'ap-key-pending');
+
+    // Legacy reservations without a recorded consent revision cannot be
+    // activated by flipping deployment flags.
+    await expectError(h.action('advance', next), 'COLLECTIVE_CONSENT_FENCE_REQUIRED');
+    expect(h.db.get(id).stage).toBe('reserved');
+
+    h.db.get(id).consentRevision = '1';
+    h.setRights([]);
+    await expectError(h.action('advance', next), 'COLLECTIVE_APP_CONSENT_MISSING');
+    expect(h.db.get(id).stage).toBe('reserved');
+
+    h.setRights(['apods:CreateGroup', 'apods:ReadGroups']);
+    // The storage CAS must check the owner/app ledger and the original
+    // revision in the *same* Fuseki update as the stage transition.
+    await h.action('advance', next);
+    const writes = h.calls.filter(c => c.name === 'triplestore.update');
+    expect(writes[writes.length - 1].args.query).toContain('collectiveConsentRevision ?liveConsentRevision');
+    expect(writes[writes.length - 1].args.query).toContain('collectivePendingMutation ?pending');
+  });
+
   test('different authorized app can advance the same provider-owned group', async () => {
     const h = harness();
     const { canonicalGroupId: id } = await h.action('reserve', reservation());

@@ -75,10 +75,10 @@ function reserve(id) {
 function regrant(id) {
   return 'DELETE { ' + consent(id) + ' ' +
     p('collectiveConsentActive') + ' "false" ; ' +
-    p('collectiveConsentRevision') + ' "2" . }\\n' +
+    p('collectiveConsentRevision') + ' "2" . }\n' +
     'INSERT { ' + consent(id) + ' ' +
     p('collectiveConsentActive') + ' "true" ; ' +
-    p('collectiveConsentRevision') + ' "3" . }\\n' +
+    p('collectiveConsentRevision') + ' "3" . }\n' +
     'WHERE { ' + consent(id) + ' ' +
     p('collectiveConsentActive') + ' "false" ; ' +
     p('collectiveConsentRevision') + ' "2" . }';

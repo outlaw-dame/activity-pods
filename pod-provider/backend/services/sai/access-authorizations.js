@@ -8,6 +8,22 @@ const GROUP_ONLY_RIGHTS = new Set(['apods:CreateGroup', 'apods:ReadGroups']);
 const onlyGroupRights = rights =>
   Array.isArray(rights) && rights.length > 0 && rights.every(right => GROUP_ONLY_RIGHTS.has(right));
 
+// Never store internal mutation tokens in propagating ctx.meta or client data.
+const inFlightGroupMutations = new WeakMap();
+async function beginGroupMutation(ctx, resource) {
+  const principal = resource['interop:grantedBy'];
+  const app = resource['interop:grantee'];
+  const { token } = await ctx.call('collective-consent-fence.begin', { principal, app });
+  inFlightGroupMutations.set(ctx, { principal, app, token });
+}
+async function finishGroupMutation(ctx) {
+  const held = inFlightGroupMutations.get(ctx);
+  if (!held) return;
+  // A failed after-hook intentionally leaves durable pending state blocked.
+  await ctx.call('collective-consent-fence.finish', held);
+  inFlightGroupMutations.delete(ctx);
+}
+
 // Return true if all elements of a1 can be found on a2. Order does not matter.
 const arraysEqual = (a1, a2) =>
   arrayOf(a1).length === arrayOf(a2).length && arrayOf(a1).every(i => arrayOf(a2).includes(i));
@@ -335,10 +351,7 @@ module.exports = {
         const resource = ctx.params.resource || {};
         const rights = arrayOf(resource['apods:hasSpecialRights']);
         if (!rights.some(right => GROUP_ONLY_RIGHTS.has(right))) return;
-        await ctx.call('collective-consent-fence.invalidate', {
-          principal: resource['interop:grantedBy'],
-          app: resource['interop:grantee']
-        });
+        await beginGroupMutation(ctx, resource);
       },
       async delete(ctx) {
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
@@ -349,10 +362,7 @@ module.exports = {
         });
         if (!arrayOf(resource?.['apods:hasSpecialRights'])
           .some(right => GROUP_ONLY_RIGHTS.has(right))) return;
-        await ctx.call('collective-consent-fence.invalidate', {
-          principal: resource['interop:grantedBy'],
-          app: resource['interop:grantee']
-        });
+        await beginGroupMutation(ctx, resource);
       }
     },
     after: {
@@ -366,7 +376,10 @@ module.exports = {
         });
 
         // For migration, we don't want this to go further
-        if (ctx.meta.isMigration === true) return;
+        if (ctx.meta.isMigration === true) {
+          await finishGroupMutation(ctx);
+          return;
+        }
 
         // Add permissions based on the special rights
         await this.actions.addPermissionsFromSpecialRights(
@@ -396,6 +409,7 @@ module.exports = {
           contentType: MIME_TYPES.JSON
         });
 
+        await finishGroupMutation(ctx);
         return res;
       },
       // Mirror of the above hook
@@ -427,6 +441,7 @@ module.exports = {
           });
         }
 
+        await finishGroupMutation(ctx);
         return res;
       }
     }

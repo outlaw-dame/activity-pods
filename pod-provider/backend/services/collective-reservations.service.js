@@ -177,7 +177,7 @@ module.exports = {
           q('collectiveApp', p.app) +
           q('collectiveRequestHash', p.requestHash) +
           q('collectiveDisplayName', p.displayName) +
-          (ledger ? '  <' + NS + 'collectiveConsentRevision> ?consentRevision ;\\n' : '') +
+          (ledger ? '  <' + NS + 'collectiveConsentRevision> ?consentRevision ;\n' : '') +
           q('collectiveStage', 'reserved') +
           q('collectiveRevision', '1') +
           '  <' + NS + 'collectiveCreatedAt> ' + sparqlString(new Date().toISOString()) + ' .';

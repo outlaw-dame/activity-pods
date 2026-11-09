@@ -60,16 +60,19 @@ function revoke(id) {
     p('collectiveConsentActive') + ' "true" ; ' +
     p('collectiveConsentRevision') + ' "1" . }';
 }
-function reserve(id) {
+function reserveAtRevision(id, revision) {
+  if (![1, 3].includes(revision)) throw new Error('Invalid synthetic proof revision');
+  const version = '"' + revision + '"';
   return 'INSERT { ' + reservation(id) + ' ' +
-    p('collectiveConsentRevision') + ' "1" ; ' +
+    p('collectiveConsentRevision') + ' ' + version + ' ; ' +
     p('collectiveReservationCommit') + ' "committed" . }\n' +
     'WHERE { ' + consent(id) + ' ' +
     p('collectiveConsentActive') + ' "true" ; ' +
-    p('collectiveConsentRevision') + ' "1" .\n' +
+    p('collectiveConsentRevision') + ' ' + version + ' .\n' +
     'FILTER NOT EXISTS { ' + reservation(id) + ' ' +
     p('collectiveReservationCommit') + ' ?existing . } }';
 }
+const reserve = id => reserveAtRevision(id, 1);
 // A later grant must advance the revision. A stale reservation carrying an
 // earlier observed revision is invalid even after consent becomes active again.
 function regrant(id) {
@@ -125,6 +128,12 @@ async function prepare() {
   assert.deepEqual(await state('stale-after-regrant'),
     { active: 'true', rev: '3', committed: null });
 
+  // A newly authorized request using revision 3 *can* commit. This is
+  // distinct from reviving the invalidated revision-1 request.
+  await sparql('update', reserveAtRevision('stale-after-regrant', 3));
+  assert.deepEqual(await state('stale-after-regrant'),
+    { active: 'true', rev: '3', committed: 'committed' });
+
   // Several HTTP clients contend for a same-dataset transaction. Every
   // completed run must leave a valid serialized state. It is legitimate for
   // the reservation to win before revocation; not legitimate for active=true
@@ -151,7 +160,7 @@ async function verify() {
   assert.deepEqual(await state('reserve-first'),
     { active: 'false', rev: '2', committed: 'committed' });
   assert.deepEqual(await state('stale-after-regrant'),
-    { active: 'true', rev: '3', committed: null });
+    { active: 'true', rev: '3', committed: 'committed' });
   for (let i = 0; i < 8; i++) {
     const result = await state('contended-' + i);
     assert.equal(result.active, 'false');

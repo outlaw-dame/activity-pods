@@ -104,21 +104,26 @@ async function state(id) {
 // triplestore mock. It never marks an SAI permission as granted.
 const fencePrincipal = 'https://provider-proof.example/users/alice#me';
 const fenceApp = 'https://paper-proof.example/app';
-async function invalidateLive() {
+const pendingPrincipal = 'https://provider-proof.example/users/bob#me';
+const pendingApp = 'https://paper-proof.example/app';
+async function callLiveFence(action, principal, app, token) {
   const ctx = {
-    params: { principal: fencePrincipal, app: fenceApp },
-    call: async (action, params) => {
+    params: { principal, app, ...(token ? { token } : {}) },
+    call: async (name, params) => {
       assert.equal(params.dataset, 'settings');
       assert.equal(params.webId, 'system');
-      if (action === 'triplestore.update') return sparql('update', params.query);
-      if (action === 'triplestore.query') return sparql('query', params.query);
-      throw new Error('unexpected fence action ' + action);
+      if (name === 'triplestore.update') return sparql('update', params.query);
+      if (name === 'triplestore.query') return sparql('query', params.query);
+      throw new Error('unexpected fence action ' + name);
     }
   };
-  return liveFence.actions.invalidate.handler.call({ settings: { enabled: true } }, ctx);
+  return liveFence.actions[action].handler.call({ settings: { enabled: true } }, ctx);
 }
-async function liveState() {
-  const rows = await sparql('query', liveFence._test.stateQuery(fencePrincipal, fenceApp));
+async function invalidateLive() {
+  return callLiveFence('invalidate', fencePrincipal, fenceApp);
+}
+async function liveState(principal = fencePrincipal, app = fenceApp) {
+  const rows = await sparql('query', liveFence._test.stateQuery(principal, app));
   assert.equal(rows.length, 1);
   return { status: rows[0].status.value, revision: Number(rows[0].revision.value) };
 }
@@ -178,6 +183,21 @@ async function prepare() {
   assert.deepEqual(await invalidateLive(), { status: 'blocked', revision: 1 });
   assert.deepEqual(await invalidateLive(), { status: 'blocked', revision: 2 });
   assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
+  // Two concurrent SAI mutations must BOTH finish before the provider
+  // status may return to stable. A crash with an outstanding token remains
+  // blocked, rather than assuming the user still authorized creation.
+  const [first, second] = await Promise.all([
+    callLiveFence('begin', pendingPrincipal, pendingApp),
+    callLiveFence('begin', pendingPrincipal, pendingApp)
+  ]);
+  assert.notEqual(first.token, second.token);
+  assert.equal((await liveState(pendingPrincipal, pendingApp)).status, 'blocked');
+  assert.equal((await callLiveFence('finish', pendingPrincipal, pendingApp, first.token)).status, 'blocked');
+  assert.deepEqual(await callLiveFence('finish', pendingPrincipal, pendingApp, second.token),
+    { status: 'stable', revision: 2 });
+  assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
+    { status: 'stable', revision: 2 });
+
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'prepare', caveat: 'synthetic authority only; SAI bridge not implemented' }));
 }
@@ -195,6 +215,8 @@ async function verify() {
     assert([null, 'committed'].includes(result.committed));
   }
   assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
+  assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
+    { status: 'stable', revision: 2 });
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'verify', caveat: 'synthetic authority only; SAI bridge not implemented' }));
 }

@@ -14,6 +14,8 @@
  *   node backend/scripts/proof-collective-consent-fence.js verify
  */
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const reservations = require('../services/collective-reservations.service');
 const liveFence = require('../services/collective-consent-fence.service');
 
 const base = (process.env.FUSEKI_URL || 'http://127.0.0.1:3040').replace(/\/+$/u, '');
@@ -127,6 +129,72 @@ async function liveState(principal = fencePrincipal, app = fenceApp) {
   assert.equal(rows.length, 1);
   return { status: rows[0].status.value, revision: Number(rows[0].revision.value) };
 }
+const reservationSecret = 's'.repeat(48);
+const reservationIdentityKey = 'i'.repeat(48);
+const reservationPurpose = 'provider.collective.reservation.v1';
+const fencedKeyA = 'g1fencedreservationproof00000001';
+const fencedKeyB = 'g1fencedreservationproof00000002';
+function fencedId(key) {
+  return 'cg_' + crypto.createHmac('sha256', reservationIdentityKey)
+    .update(JSON.stringify([pendingPrincipal, pendingApp, key])).digest('hex').slice(0, 32);
+}
+function fencedReservationParams(key) {
+  const name = 'Fuseki Consent Fence Proof';
+  const hash = crypto.createHash('sha256').update(JSON.stringify([
+    pendingPrincipal, pendingApp, key, name
+  ])).digest('hex');
+  const issuedAt = Date.now() - 1000;
+  const expiresAt = issuedAt + 60000;
+  const fields = [reservationPurpose, pendingPrincipal, pendingApp,
+    'reserve', hash, issuedAt, expiresAt];
+  return {
+    principal: pendingPrincipal, app: pendingApp, idempotencyKey: key,
+    displayName: name,
+    grant: {
+      purpose: reservationPurpose, principal: pendingPrincipal, app: pendingApp,
+      operation: 'reserve', requestHash: hash, issuedAt, expiresAt,
+      mac: crypto.createHmac('sha256', reservationSecret)
+        .update(JSON.stringify(fields)).digest('hex')
+    }
+  };
+}
+function reservationInstance() {
+  const obj = { settings: {
+    enabled: true,
+    providerOrigin: 'https://provider-proof.example',
+    secret: reservationSecret,
+    identityKey: reservationIdentityKey,
+    approvedApps: [pendingApp],
+    consentBridgeEnabled: true
+  } };
+  obj._load = reservations.methods._load.bind(obj);
+  return obj;
+}
+function reservationCtx(params) {
+  return {
+    params,
+    call: async (action, args) => {
+      if (action === 'auth.account.findByWebId') return { webId: args.webId };
+      if (action === 'app-registrations.isRegistered') return true;
+      if (action === 'access-authorizations.getSpecialRights') return ['apods:CreateGroup'];
+      assert.equal(args.dataset, 'settings');
+      assert.equal(args.webId, 'system');
+      if (action === 'triplestore.update') return sparql('update', args.query);
+      if (action === 'triplestore.query') return sparql('query', args.query);
+      throw new Error('unexpected reservation action ' + action);
+    }
+  };
+}
+async function createFencedReservation(key) {
+  const obj = reservationInstance();
+  return reservations.actions.reserve.handler.call(obj,
+    reservationCtx(fencedReservationParams(key)));
+}
+async function loadFencedReservation(key) {
+  const obj = reservationInstance();
+  return obj._load(reservationCtx({}), fencedId(key));
+}
+
 async function initialize(id) {
   await sparql('update', seed(id));
 }
@@ -197,6 +265,25 @@ async function prepare() {
     { status: 'stable', revision: 2 });
   assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
     { status: 'stable', revision: 2 });
+  // Actual reservation code must atomically reject an in-flight SAI mutation.
+  // The SAI consent and registration responses in this proof are deliberately
+  // controlled fixtures; the storage transaction is REAL Fuseki.
+  const third = await callLiveFence('begin', pendingPrincipal, pendingApp);
+  await assert.rejects(createFencedReservation(fencedKeyA),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_REQUIRED');
+  await callLiveFence('finish', pendingPrincipal, pendingApp, third.token);
+  const committed = await createFencedReservation(fencedKeyA);
+  assert.equal(committed.canonicalGroupId, fencedId(fencedKeyA));
+  assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
+
+  const fourth = await callLiveFence('begin', pendingPrincipal, pendingApp);
+  await assert.rejects(createFencedReservation(fencedKeyB),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_REQUIRED');
+  await callLiveFence('finish', pendingPrincipal, pendingApp, fourth.token);
+  const newer = await createFencedReservation(fencedKeyB);
+  assert.equal(newer.canonicalGroupId, fencedId(fencedKeyB));
+  assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
+
 
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'prepare', caveat: 'synthetic authority only; SAI bridge not implemented' }));
@@ -216,7 +303,9 @@ async function verify() {
   }
   assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
   assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
-    { status: 'stable', revision: 2 });
+    { status: 'stable', revision: 4 });
+  assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
+  assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'verify', caveat: 'synthetic authority only; SAI bridge not implemented' }));
 }

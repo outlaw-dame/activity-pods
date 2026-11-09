@@ -121,9 +121,6 @@ async function callLiveFence(action, principal, app, token) {
   };
   return liveFence.actions[action].handler.call({ settings: { enabled: true } }, ctx);
 }
-async function invalidateLive() {
-  return callLiveFence('invalidate', fencePrincipal, fenceApp);
-}
 async function liveState(principal = fencePrincipal, app = fenceApp) {
   const rows = await sparql('query', liveFence._test.stateQuery(principal, app));
   assert.equal(rows.length, 1);
@@ -247,9 +244,10 @@ async function prepare() {
     assert.equal(result.rev, '2');
     assert([null, 'committed'].includes(result.committed));
   }
-  // Deny-first invalidations advance monotonically and are persistent.
-  assert.deepEqual(await invalidateLive(), { status: 'blocked', revision: 1 });
-  assert.deepEqual(await invalidateLive(), { status: 'blocked', revision: 2 });
+  // A crashed/unfinished SAI mutation must persist as blocked through restart.
+  const abandonedA = await callLiveFence('begin', fencePrincipal, fenceApp);
+  const abandonedB = await callLiveFence('begin', fencePrincipal, fenceApp);
+  assert.notEqual(abandonedA.token, abandonedB.token);
   assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
   // Two concurrent SAI mutations must BOTH finish before the provider
   // status may return to stable. A crash with an outstanding token remains

@@ -325,6 +325,36 @@ module.exports = {
     }
   },
   hooks: {
+    before: {
+      // Pre-write barrier: a group-capability mutation must be persisted as
+      // blocked BEFORE the native SAI LDP post/delete is allowed to commit.
+      // This is deny-first only. There is intentionally no unsafe automatic
+      // regrant until all SAI and account mutation paths are serialized.
+      async post(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = ctx.params.resource || {};
+        const rights = arrayOf(resource['apods:hasSpecialRights']);
+        if (!rights.some(right => GROUP_ONLY_RIGHTS.has(right))) return;
+        await ctx.call('collective-consent-fence.invalidate', {
+          principal: resource['interop:grantedBy'],
+          app: resource['interop:grantee']
+        });
+      },
+      async delete(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        // Read authoritative persisted authorization: callers cannot decide
+        // whether their own deletion requires a barrier.
+        const resource = await ctx.call('access-authorizations.get', {
+          resourceUri: ctx.params.resourceUri, webId: 'system'
+        });
+        if (!arrayOf(resource?.['apods:hasSpecialRights'])
+          .some(right => GROUP_ONLY_RIGHTS.has(right))) return;
+        await ctx.call('collective-consent-fence.invalidate', {
+          principal: resource['interop:grantedBy'],
+          app: resource['interop:grantee']
+        });
+      }
+    },
     after: {
       async post(ctx, res) {
         const podOwner = ctx.params.resource['interop:grantedBy'];

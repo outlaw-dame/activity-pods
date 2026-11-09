@@ -250,6 +250,16 @@ module.exports = {
         const before = await this._load(ctx, groupId);
         if (!before || before.owner !== principal) throw problem('COLLECTIVE_NOT_FOUND', 404);
         if (before.revision !== revision) throw problem('COLLECTIVE_STALE_REVISION', 409);
+        // A worker grant authorizes only the worker; it does not supersede the
+        // person's SAI consent. Any later consent revision blocks provisioning
+        // until a deliberately reviewed recovery path authorizes it.
+        if (this.settings.consentBridgeEnabled) {
+          if (!before.consentRevision) throw problem('COLLECTIVE_CONSENT_FENCE_REQUIRED', 503);
+          await assertLiveCollectiveConsent(ctx, {
+            principal, app: before.app, operation: 'reserve',
+            approvedApps: this.settings.approvedApps
+          });
+        }
         if (STAGES.indexOf(next) !== STAGES.indexOf(before.stage) + 1) {
           throw problem('COLLECTIVE_INVALID_TRANSITION', 409);
         }
@@ -271,6 +281,13 @@ module.exports = {
             ' ; apods:collectiveLeaseHash ' + sparqlString(lease.hash) +
             ' ; apods:collectiveLeaseEpoch ' + sparqlString(lease.leaseEpoch) +
             ' ; apods:collectiveLeaseUntil ?heldUntil . ' +
+            (this.settings.consentBridgeEnabled ?
+              '<' + PREFIX + groupId + '> apods:collectiveConsentRevision ?reservationConsentRevision . ' +
+              consentSubject(before.owner, before.app) +
+              ' apods:collectiveConsentStatus "stable" ; apods:collectiveConsentRevision ?liveConsentRevision . ' +
+              'FILTER(?reservationConsentRevision = ?liveConsentRevision) ' +
+              'FILTER NOT EXISTS { ' + consentSubject(before.owner, before.app) +
+              ' apods:collectivePendingMutation ?pending . } ' : '') +
             'FILTER(xsd:integer(?heldUntil) > ' + now + ') ' +
             'OPTIONAL { <' + PREFIX + groupId + '> apods:collectiveLastTransition ?previousTransition . } }'
         });
@@ -289,14 +306,15 @@ module.exports = {
       const rows = await ctx.call('triplestore.query', {
         dataset: 'settings', webId: 'system',
         query: 'PREFIX apods: <' + NS + '>\n' +
-          'SELECT ?owner ?app ?requestHash ?actorUri ?displayName ?stage ?revision ?lastTransition WHERE {\n' +
+          'SELECT ?owner ?app ?requestHash ?actorUri ?displayName ?stage ?revision ?lastTransition ?consentRevision WHERE {\n' +
           '  <' + subject + '> a apods:' + TYPE + ' ;\n' +
           '    apods:collectiveOwner ?owner ; apods:collectiveApp ?app ;\n' +
           '    apods:collectiveRequestHash ?requestHash ;\n' +
           '    apods:activityPubActorId ?actorUri ;\n' +
           '    apods:collectiveDisplayName ?displayName ;\n' +
           '    apods:collectiveStage ?stage ; apods:collectiveRevision ?revision .\n' +
-          '  OPTIONAL { <' + subject + '> apods:collectiveLastTransition ?lastTransition . }\n}\nLIMIT 2'
+          '  OPTIONAL { <' + subject + '> apods:collectiveLastTransition ?lastTransition . }\n' +
+          '  OPTIONAL { <' + subject + '> apods:collectiveConsentRevision ?consentRevision . }\n}\nLIMIT 2'
       });
       if (!Array.isArray(rows) || rows.length === 0) return null;
       if (rows.length !== 1) throw problem('COLLECTIVE_CORRUPT_STATE', 500);
@@ -307,7 +325,8 @@ module.exports = {
       }
       return { owner: unpack(row, 'owner'), app: unpack(row, 'app'),
         requestHash: unpack(row, 'requestHash'), actorUri: unpack(row, 'actorUri'),
-        displayName: unpack(row, 'displayName'), lastTransition: unpack(row, 'lastTransition'), stage, revision };
+        displayName: unpack(row, 'displayName'), lastTransition: unpack(row, 'lastTransition'),
+        consentRevision: unpack(row, 'consentRevision'), stage, revision };
     }
   }
 };

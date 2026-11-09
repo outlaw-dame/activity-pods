@@ -40,6 +40,41 @@ describe('durable deny-first collective consent fence', () => {
   ])('rejects invalid principal/app identifiers (%s, %s)', (person, client) => {
     expect(() => fence._test.subject(person, client)).toThrow();
   });
+  test('begin allocates a durable pending token and increments revision', async () => {
+    const f = fenceCtx();
+    const result = await fence.actions.begin.handler.call({ settings: { enabled: true } }, f.ctx);
+    expect(result.status).toBe('blocked');
+    expect(result.revision).toBe(2);
+    expect(result.token).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+    expect(f.calls.map(x => x.name)).toEqual(['triplestore.update', 'triplestore.query']);
+    expect(f.calls[0].params.query).toContain('collectivePendingMutation');
+    expect(f.calls[1].params.query).toContain(result.token);
+  });
+  test('finish requires a proven completed-token marker; no other pending writes', async () => {
+    const token = '11111111-1111-4111-8111-111111111111';
+    const f = fenceCtx({ rows: [{ status: { value: 'stable' }, revision: { value: '3' } }] });
+    const result = await fence.actions.finish.handler.call({ settings: { enabled: true } }, {
+      ...f.ctx, params: { principal, app, token }
+    });
+    expect(result).toEqual({ status: 'stable', revision: 3 });
+    expect(f.calls[0].params.query).toContain('collectiveCompletedMutation');
+    expect(f.calls[0].params.query).toContain('FILTER NOT EXISTS');
+    expect(f.calls[1].params.query).toContain(token);
+  });
+  test('finish cannot accept forged/non-UUID tokens', async () => {
+    const f = fenceCtx();
+    await expect(fence.actions.finish.handler.call({ settings: { enabled: true } }, {
+      ...f.ctx, params: { principal, app, token: 'bogus' }
+    })).rejects.toMatchObject({ type: 'COLLECTIVE_INVALID_MUTATION_TOKEN' });
+    expect(f.calls).toHaveLength(0);
+  });
+  test('unknown finish token remains unverified, never accepted', async () => {
+    const f = fenceCtx({ rows: [] });
+    await expect(fence.actions.finish.handler.call({ settings: { enabled: true } }, {
+      ...f.ctx, params: { principal, app, token: '11111111-1111-4111-8111-111111111111' }
+    })).rejects.toMatchObject({ type: 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED' });
+  });
+
   test('disabled configuration cannot write a fence', async () => {
     const f = fenceCtx();
     await expect(fence.actions.invalidate.handler.call({ settings: { enabled: false } }, f.ctx))

@@ -208,4 +208,5 @@ module.exports = {
   }
 };
 
+module.exports.consentSubject = subject;
 module.exports._test = { subject, invalidateQuery, stateQuery, beginQuery, completeQuery, pendingQuery, completedQuery };

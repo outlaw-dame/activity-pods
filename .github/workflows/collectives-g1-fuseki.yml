@@ -7,6 +7,7 @@ on:
       - 'pod-provider/backend/services/collective-provisioning-leases.service.js'
       - 'pod-provider/backend/services/utils/collective-worker-lease.js'
       - 'pod-provider/backend/scripts/proof-collective-fuseki.js'
+      - 'pod-provider/backend/scripts/proof-collective-consent-fence.js'
       - '.github/workflows/collectives-g1-fuseki.yml'
   workflow_dispatch:
 
@@ -53,6 +54,11 @@ jobs:
           FUSEKI_URL: http://127.0.0.1:3040
         run: node backend/scripts/proof-collective-fuseki.js prepare
 
+      - name: Prove same-dataset consent and reservation transactions on real Fuseki
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: node backend/scripts/proof-collective-consent-fence.js prepare
+
       - name: Restart Fuseki without discarding its persistent volume
         run: |
           set -euo pipefail
@@ -63,6 +69,11 @@ jobs:
         env:
           FUSEKI_URL: http://127.0.0.1:3040
         run: node backend/scripts/proof-collective-fuseki.js verify
+
+      - name: Verify consent revisions and reservations survived restart
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: node backend/scripts/proof-collective-consent-fence.js verify
 
       - name: Capture isolated diagnostic logs on failure
         if: failure()

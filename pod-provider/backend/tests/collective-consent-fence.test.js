@@ -71,6 +71,9 @@ describe('durable deny-first collective consent fence', () => {
   });
 });
 
+const testBegin = () => ({ token: '11111111-1111-4111-8111-111111111111',
+  status: 'blocked', revision: 1 });
+
 describe('SAI authorization and app-registration pre-mutation barriers', () => {
   const original = process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED;
   beforeEach(() => { process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED = 'true'; });
@@ -86,7 +89,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
         'interop:grantedBy': principal, 'interop:grantee': app,
         'apods:hasSpecialRights': groupRights
       } },
-      async call(name, args) { actions.push({ name, args }); return true; }
+      async call(name, args) { actions.push({ name, args }); return testBegin(); }
     };
     await authorizations.hooks.before.post(ctx);
     expect(actions).toEqual([{
@@ -116,7 +119,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
           'interop:grantedBy': principal, 'interop:grantee': app,
           'apods:hasSpecialRights': groupRights
         };
-        return true;
+        return testBegin();
       }
     });
     expect(calls.map(c => c.name)).toEqual([
@@ -133,7 +136,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
         if (name === 'app-registrations.get') return {
           'interop:registeredBy': principal, 'interop:registeredAgent': app
         };
-        return true;
+        return testBegin();
       }
     });
     expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.begin']);
@@ -145,7 +148,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
       params: { resource: {
         'interop:registeredBy': principal, 'interop:registeredAgent': app
       } },
-      call: async name => { seen.push(name); }
+      call: async name => { seen.push(name); return testBegin(); }
     });
     expect(seen).toEqual(['collective-consent-fence.begin']);
   });

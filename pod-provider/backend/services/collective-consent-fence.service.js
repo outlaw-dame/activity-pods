@@ -23,7 +23,7 @@ function invalid() {
 }
 
 function httpsUri(raw, fragment) {
-  if (typeof raw !== 'string' || raw.length > 2048 || /[\\u0000-\\u0020\\u007f\\\\]/u.test(raw)) throw invalid();
+  if (typeof raw !== 'string' || raw.length > 2048 || /[\u0000-\u0020\u007f\\]/u.test(raw)) throw invalid();
   let uri;
   try { uri = new URL(raw); } catch { throw invalid(); }
   if (uri.protocol !== 'https:' || uri.href !== raw || uri.username ||

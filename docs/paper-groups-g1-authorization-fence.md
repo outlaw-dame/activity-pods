@@ -69,3 +69,7 @@ Keep both `PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED` and `PROVIDER_COLLECTIVES_
 - Added `backend/scripts/proof-collective-consent-fence.js`: real TDB2 **synthetic** same-settings-dataset serialization demonstration for ordered revoke/reserve, concurrent requests, and restart durability. Connected it to `.github/workflows/collectives-g1-fuseki.yml`; backend syntax check includes the new script.
 - This proves only that a single-dataset conditional-update primitive can be exercised. It **does not** establish the complete SAI-to-authoritative-ledger mutation bridge, close generic mutation bypasses, or validate crash recovery at every migration transition. Neither the Group HTTP route nor provisioning is authorized to launch on this basis.
 - The next implementation must close `access-authorizations.generateFromAccessNeedGroups` (including replacement and orphan deletion), `access-authorizations` direct post/delete, and `app-registrations` removal, then account/provider revocations. There must be no two-store authorization gap during bootstrap/reconciliation.
+
+### Revision-replay regression (2026-11-09)
+
+The isolated TDB2 proof now explicitly checks a consent transition `granted@1 → revoked@2 → granted@3`: a stale request bound to revision 1 is denied, while a genuinely fresh request bound to revision 3 may commit. Both the authorized result and monotonic revision must survive database restart. These are **synthetic consent rows**, not live SAI registrations, and the production authorization bridge is still blocked.

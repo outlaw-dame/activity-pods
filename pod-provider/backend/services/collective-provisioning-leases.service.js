@@ -65,7 +65,9 @@ function subject(id) { return '<' + PREFIX + id + '>'; }
 module.exports = {
   name: 'collective-provisioning-leases',
   settings: {
-    enabled: CONSENT_BRIDGE_RELEASED && process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
+    enabled: CONSENT_BRIDGE_RELEASED &&
+      process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED === 'true' &&
+      process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
       process.env.PROVIDER_COLLECTIVES_WORKER_LEASES_ENABLED === 'true',
     secret: process.env.PROVIDER_COLLECTIVES_WORKER_SECRET || '',
     ttlMs: LEASE_TTL_MS

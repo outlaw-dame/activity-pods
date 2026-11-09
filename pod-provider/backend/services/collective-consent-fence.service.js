@@ -3,7 +3,7 @@
 /**
  * Deny-first half of the Group/SAI bridge.
  *
- * A successful SAI mutation PRE-hook must first persist an invalidation in the
+ * A successful SAI mutation PRE-hook must first persist a pending marker in the
  * provider's settings dataset. This service deliberately has no "grant" action:
  * re-enabling Group reservations without a complete, serialized reconciliation
  * protocol would recreate the SAI/Fuseki race. A blocked row always denies.
@@ -36,19 +36,6 @@ function subject(principal, app) {
   const client = httpsUri(app, false);
   const hash = crypto.createHash('sha256').update(JSON.stringify([person, client, RIGHT])).digest('hex');
   return '<' + PREFIX + hash + '>';
-}
-
-function invalidateQuery(principal, app) {
-  const s = subject(principal, app);
-  return 'PREFIX apods: <' + NS + '>\n' +
-    'PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n' +
-    'DELETE { ' + s + ' apods:collectiveConsentRevision ?oldRevision ; ' +
-    'apods:collectiveConsentStatus ?oldStatus . }\n' +
-    'INSERT { ' + s + ' apods:collectiveConsentRevision ?nextRevision ; ' +
-    'apods:collectiveConsentStatus "blocked" . }\n' +
-    'WHERE { OPTIONAL { ' + s + ' apods:collectiveConsentRevision ?oldRevision ; ' +
-    'apods:collectiveConsentStatus ?oldStatus . } ' +
-    'BIND(IF(BOUND(?oldRevision), xsd:integer(?oldRevision) + 1, 1) AS ?nextRevision) }';
 }
 
 function stateQuery(principal, app) {
@@ -177,36 +164,9 @@ module.exports = {
         });
         return ensureRevision(rows);
       }
-    },
-    invalidate: {
-      params: { principal: 'string|min:1', app: 'string|min:1' },
-      async handler(ctx) {
-        if (!this.settings.enabled) {
-          throw new MoleculerError('COLLECTIVE_CONSENT_BRIDGE_DISABLED', 503,
-            'COLLECTIVE_CONSENT_BRIDGE_DISABLED');
-        }
-        // No authorization decision may depend on a merely requested write.
-        // Failure or an ambiguous response leaves the mutation aborted.
-        await ctx.call('triplestore.update', {
-          dataset: 'settings', webId: 'system',
-          query: invalidateQuery(ctx.params.principal, ctx.params.app)
-        });
-        const rows = await ctx.call('triplestore.query', {
-          dataset: 'settings', webId: 'system',
-          query: stateQuery(ctx.params.principal, ctx.params.app)
-        });
-        if (!Array.isArray(rows) || rows.length !== 1 ||
-            readBinding(rows[0], 'status') !== 'blocked' ||
-            !/^[1-9][0-9]*$/u.test(String(readBinding(rows[0], 'revision'))) ||
-            !Number.isSafeInteger(Number(readBinding(rows[0], 'revision')))) {
-          throw new MoleculerError('COLLECTIVE_CONSENT_FENCE_UNVERIFIED', 503,
-            'COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
-        }
-        return { status: 'blocked', revision: Number(readBinding(rows[0], 'revision')) };
-      }
     }
   }
 };
 
 module.exports.consentSubject = subject;
-module.exports._test = { subject, invalidateQuery, stateQuery, beginQuery, completeQuery, pendingQuery, completedQuery };
+module.exports._test = { subject, stateQuery, beginQuery, completeQuery, pendingQuery, completedQuery };

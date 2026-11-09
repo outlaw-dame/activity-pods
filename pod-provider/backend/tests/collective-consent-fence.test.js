@@ -77,14 +77,14 @@ describe('durable deny-first collective consent fence', () => {
 
   test('disabled configuration cannot write a fence', async () => {
     const f = fenceCtx();
-    await expect(fence.actions.invalidate.handler.call({ settings: { enabled: false } }, f.ctx))
+    await expect(fence.actions.begin.handler.call({ settings: { enabled: false } }, f.ctx))
       .rejects.toMatchObject({ type: 'COLLECTIVE_CONSENT_BRIDGE_DISABLED' });
     expect(f.calls).toHaveLength(0);
   });
-  test('invalidates before acknowledging; reads back committed revision', async () => {
+  test('begin blocks before acknowledging; reads back committed revision', async () => {
     const f = fenceCtx();
-    const result = await fence.actions.invalidate.handler.call({ settings: { enabled: true } }, f.ctx);
-    expect(result).toEqual({ status: 'blocked', revision: 2 });
+    const result = await fence.actions.begin.handler.call({ settings: { enabled: true } }, f.ctx);
+    expect(result).toMatchObject({ status: 'blocked', revision: 2 });
     expect(f.calls.map(x => x.name)).toEqual(['triplestore.update', 'triplestore.query']);
     expect(f.calls.every(x => x.params.dataset === 'settings' && x.params.webId === 'system')).toBe(true);
     expect(f.calls[0].params.query).toContain('collectiveConsentStatus "blocked"');
@@ -97,11 +97,11 @@ describe('durable deny-first collective consent fence', () => {
     { rows: [{ status: { value: 'blocked' }, revision: { value: '2' } },
       { status: { value: 'blocked' }, revision: { value: '3' } }] }
   ])('rejects unverifiable state rather than acknowledging SAI mutation', async fixture => {
-    await expect(fence.actions.invalidate.handler.call({ settings: { enabled: true } }, fenceCtx(fixture).ctx))
+    await expect(fence.actions.begin.handler.call({ settings: { enabled: true } }, fenceCtx(fixture).ctx))
       .rejects.toMatchObject({ type: 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED' });
   });
   test.each(['triplestore.update', 'triplestore.query'])('fails closed on %s error', async name => {
-    await expect(fence.actions.invalidate.handler.call({ settings: { enabled: true } },
+    await expect(fence.actions.begin.handler.call({ settings: { enabled: true } },
       fenceCtx({ throwOn: name }).ctx)).rejects.toThrow('storage unavailable');
   });
 });

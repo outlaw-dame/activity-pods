@@ -11,6 +11,7 @@
  * MUST sign lease requests and must never expose its signing key to applications.
  */
 const crypto = require('node:crypto');
+const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
 const { MoleculerError } = require('moleculer').Errors;
 const { WORKER_ID_PATTERN, hashLeaseToken } = require('./utils/collective-worker-lease');
 
@@ -64,7 +65,7 @@ function subject(id) { return '<' + PREFIX + id + '>'; }
 module.exports = {
   name: 'collective-provisioning-leases',
   settings: {
-    enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
+    enabled: CONSENT_BRIDGE_RELEASED && process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
       process.env.PROVIDER_COLLECTIVES_WORKER_LEASES_ENABLED === 'true',
     secret: process.env.PROVIDER_COLLECTIVES_WORKER_SECRET || '',
     ttlMs: LEASE_TTL_MS

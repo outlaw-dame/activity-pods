@@ -13,6 +13,7 @@
  */
 const crypto = require('node:crypto');
 const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
+const { consentSubject } = require('./collective-consent-fence.service');
 const { MoleculerError } = require('moleculer').Errors;
 const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
 const { reserveFingerprint } = require('./utils/collective-grant-claims');
@@ -142,7 +143,8 @@ module.exports = {
     secret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
     identityKey: process.env.PROVIDER_COLLECTIVES_ID_KEY || '',
     workerSecret: process.env.PROVIDER_COLLECTIVES_WORKER_SECRET || '',
-    approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || '')
+    approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || ''),
+    consentBridgeEnabled: CONSENT_BRIDGE_RELEASED
   },
   actions: {
     reserve: {
@@ -166,6 +168,8 @@ module.exports = {
         });
         // The recorded creator application is provenance, NOT exclusive authority.
         const q = (predicate, value) => '  <' + NS + predicate + '> ' + sparqlString(value) + ' ;\n';
+        const ledger = this.settings.consentBridgeEnabled
+          ? consentSubject(p.principal, p.app) : null;
         const record = '<' + p.uri + '> a <' + NS + TYPE + '> ;\n' +
           q('canonicalGroupId', p.groupId) +
           q('activityPubActorId', p.actorUri) +
@@ -173,6 +177,7 @@ module.exports = {
           q('collectiveApp', p.app) +
           q('collectiveRequestHash', p.requestHash) +
           q('collectiveDisplayName', p.displayName) +
+          (ledger ? '  <' + NS + 'collectiveConsentRevision> ?consentRevision ;\\n' : '') +
           q('collectiveStage', 'reserved') +
           q('collectiveRevision', '1') +
           '  <' + NS + 'collectiveCreatedAt> ' + sparqlString(new Date().toISOString()) + ' .';
@@ -181,7 +186,12 @@ module.exports = {
         // request-scoped idempotency independently of individual worker memory.
         await ctx.call('triplestore.update', {
           dataset: 'settings', webId: 'system',
-          query: 'INSERT { ' + record + ' } WHERE { FILTER NOT EXISTS { <' + p.uri + '> ?existing ?value . } }'
+          query: 'INSERT { ' + record + ' } WHERE { ' +
+            (ledger ? ledger + ' <' + NS + 'collectiveConsentStatus> "stable" ; ' +
+              '<' + NS + 'collectiveConsentRevision> ?consentRevision . ' +
+              'FILTER NOT EXISTS { ' + ledger + ' <' + NS +
+              'collectivePendingMutation> ?pending . } ' : '') +
+            'FILTER NOT EXISTS { <' + p.uri + '> ?existing ?value . } }'
         });
         // This is a containment check, NOT a cross-store atomic fence.
         // If the user revokes SAI while the Fuseki write is in flight, do not
@@ -193,6 +203,7 @@ module.exports = {
           approvedApps: this.settings.approvedApps
         });
         const stored = await this._load(ctx, p.groupId);
+        if (ledger && !stored) throw problem('COLLECTIVE_CONSENT_FENCE_REQUIRED', 503);
         if (!stored || stored.requestHash !== p.requestHash ||
             stored.owner !== p.principal || stored.app !== p.app ||
             stored.actorUri !== p.actorUri) throw problem('COLLECTIVE_RESERVATION_CONFLICT', 409);

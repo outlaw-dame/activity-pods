@@ -14,6 +14,7 @@
  *   node backend/scripts/proof-collective-consent-fence.js verify
  */
 const assert = require('node:assert/strict');
+const liveFence = require('../services/collective-consent-fence.service');
 
 const base = (process.env.FUSEKI_URL || 'http://127.0.0.1:3040').replace(/\/+$/u, '');
 const auth = 'Basic ' + Buffer.from((process.env.FUSEKI_USER || 'admin') +
@@ -99,6 +100,28 @@ async function state(id) {
     committed: rows[0].committed?.value || null
   };
 }
+// Exercise the real deny-first service against Fuseki, not a simulated
+// triplestore mock. It never marks an SAI permission as granted.
+const fencePrincipal = 'https://provider-proof.example/users/alice#me';
+const fenceApp = 'https://paper-proof.example/app';
+async function invalidateLive() {
+  const ctx = {
+    params: { principal: fencePrincipal, app: fenceApp },
+    call: async (action, params) => {
+      assert.equal(params.dataset, 'settings');
+      assert.equal(params.webId, 'system');
+      if (action === 'triplestore.update') return sparql('update', params.query);
+      if (action === 'triplestore.query') return sparql('query', params.query);
+      throw new Error('unexpected fence action ' + action);
+    }
+  };
+  return liveFence.actions.invalidate.handler.call({ settings: { enabled: true } }, ctx);
+}
+async function liveState() {
+  const rows = await sparql('query', liveFence._test.stateQuery(fencePrincipal, fenceApp));
+  assert.equal(rows.length, 1);
+  return { status: rows[0].status.value, revision: Number(rows[0].revision.value) };
+}
 async function initialize(id) {
   await sparql('update', seed(id));
 }
@@ -151,6 +174,10 @@ async function prepare() {
     assert.equal(result.rev, '2');
     assert([null, 'committed'].includes(result.committed));
   }
+  // Deny-first invalidations advance monotonically and are persistent.
+  assert.deepEqual(await invalidateLive(), { status: 'blocked', revision: 1 });
+  assert.deepEqual(await invalidateLive(), { status: 'blocked', revision: 2 });
+  assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'prepare', caveat: 'synthetic authority only; SAI bridge not implemented' }));
 }
@@ -167,6 +194,7 @@ async function verify() {
     assert.equal(result.rev, '2');
     assert([null, 'committed'].includes(result.committed));
   }
+  assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'verify', caveat: 'synthetic authority only; SAI bridge not implemented' }));
 }

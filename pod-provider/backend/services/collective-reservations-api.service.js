@@ -13,6 +13,7 @@
  * revoke-versus-write transaction fencing.
  */
 const crypto = require('node:crypto');
+const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
 const { MoleculerError } = require('moleculer').Errors;
 const { approvedBrowserOrigins, canonicalOrigin } = require('./utils/collective-endpoint-policy');
 const { reserveFingerprint } = require('./utils/collective-grant-claims');
@@ -71,7 +72,7 @@ module.exports = {
   name: 'collective-reservations-api',
   dependencies: ['api', 'jwk', 'collective-reservations'],
   settings: {
-    enabled: process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
+    enabled: CONSENT_BRIDGE_RELEASED && process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true' &&
       process.env.PROVIDER_COLLECTIVES_API_ENABLED === 'true',
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
     grantSecret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',

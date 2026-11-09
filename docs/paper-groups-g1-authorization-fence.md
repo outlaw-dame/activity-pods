@@ -73,3 +73,24 @@ Keep both `PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED` and `PROVIDER_COLLECTIVES_
 ### Revision-replay regression (2026-11-09)
 
 The isolated TDB2 proof now explicitly checks a consent transition `granted@1 → revoked@2 → granted@3`: a stale request bound to revision 1 is denied, while a genuinely fresh request bound to revision 3 may commit. Both the authorized result and monotonic revision must survive database restart. These are **synthetic consent rows**, not live SAI registrations, and the production authorization bridge is still blocked.
+
+## G1b implementation status — 2026-11-09
+
+Implemented on PR #117 (subject to final CI):
+
+- Provider settings-dataset consent ledger with deterministic per-(WebID, application, CreateGroup) identity, monotonically advancing revision, and durable per-mutation pending markers.
+- SAI AccessAuthorization post/delete and ApplicationRegistration put/delete pre-hooks block before native LDP writes; post-hooks finish only after related registry, grant, and cache updates. Failed post-hooks deliberately leave pending markers blocked.
+- Same-dataset reservation INSERT condition now requires stable status, no pending writes, and captures the matching revision. Worker transitions require the stored and live consent revisions to match, and recheck SAI.
+- Real Fuseki integration proof exercises overlapping begin/finish, blocked reservation rejection, revision-bound reservations, and restart durability; SAI/account inputs in the proof are fixtures, not deployed-provider evidence.
+- A code-level release fuse (CONSENT_BRIDGE_RELEASED=false) prevents environment variables alone from enabling the incomplete production flow.
+
+### Remaining production release blockers
+
+1. Enumerate and close every generic LDP/direct triplestore/migration bypass, including account disable, suspension, deletion, and provider allowlist changes. The upstream SemApps auth.account mutation implementation is not yet instrumented.
+2. Implement fail-closed initial bootstrap of existing SAI authorizations to stable revisions, without any untracked mutation interval.
+3. Build a privileged recovery mechanism for stranded pending markers with proof that no prior mutation is still running, plus bounded completed-token retention.
+4. Validate native Solid-OIDC + SAI end-to-end against a deployed provider and prove the pre/post hooks are invoked for every mutation entry point, including raw HTTP/LDP operations.
+5. Verify revocation versus worker provisioning, process crashes, and all ACTUAL AP signing-key/DID/federation side effects.
+6. Require final-head CI, live-provider tests, and release review before lifting the code-level fuse.
+
+The new work does not establish a complete production authorization bridge. Keep the public route, the worker lease service, and reservation operations disabled until all items above are verified.

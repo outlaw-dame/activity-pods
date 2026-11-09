@@ -63,3 +63,9 @@ This inventory is based on direct source inspection; **other mutation surfaces m
 ## Release gate
 
 Keep both `PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED` and `PROVIDER_COLLECTIVES_API_ENABLED` false in production until G1a–G1d pass and are reviewed. Do not merge or mark PR #117 release-ready solely on mocked permissions, post-write rechecks or green CI.
+
+## G1a progress — 2026-11-09
+
+- Added `backend/scripts/proof-collective-consent-fence.js`: real TDB2 **synthetic** same-settings-dataset serialization demonstration for ordered revoke/reserve, concurrent requests, and restart durability. Connected it to `.github/workflows/collectives-g1-fuseki.yml`; backend syntax check includes the new script.
+- This proves only that a single-dataset conditional-update primitive can be exercised. It **does not** establish the complete SAI-to-authoritative-ledger mutation bridge, close generic mutation bypasses, or validate crash recovery at every migration transition. Neither the Group HTTP route nor provisioning is authorized to launch on this basis.
+- The next implementation must close `access-authorizations.generateFromAccessNeedGroups` (including replacement and orphan deletion), `access-authorizations` direct post/delete, and `app-registrations` removal, then account/provider revocations. There must be no two-store authorization gap during bootstrap/reconciliation.

@@ -1,0 +1,65 @@
+# Paper Groups G1 — SAI Revocation/Reservation Commit Fence
+
+Status: **design gate; not implemented**  
+Scope: `outlaw-dame/activity-pods`, PR #117, `feat/collectives-g1-authority-boundary`  
+Updated: 2026-11-09
+
+## Decision and safety invariant
+
+Paper's Group authority lives with the **Pod provider**, not a user's Pod, the UI, the Fedify sidecar, or an ATProto PDS. Authentication continues to use the existing **Solid-OIDC** infrastructure. Consent continues to use **Solid Application Interoperability (SAI)**; group capabilities `apods:CreateGroup` and `apods:ReadGroups` are **not WebACL file/collection rights**. Do not introduce group-specific passkeys, a new login flow, or a separately trusted client issuer.
+
+**Required invariant:** If an SAI revocation of `CreateGroup` commits before a Group reservation commits, that reservation cannot commit as authorized. Conversely, every successful reservation must have a linearization point at which valid consent and provider registration/approval hold. An in-flight revocation must not be allowed to finish before a conflicting reservation without a deterministic, persisted order. No eventual-consistency cache, read-before-write/read-after-write check, revision stamp *in a different store*, or process-local mutex alone proves this.
+
+PR #117 does not meet this invariant. Its pre/post consent checks correctly fail closed at request boundaries, but they cannot undo an intervening Fuseki insert. The HTTP route must remain **off**; an inactive private reservation is still a write, and an accidental later provisioning worker must never interpret an unfenced reservation as authorized.
+
+## Observed code paths (PR #117)
+
+- `pod-provider/backend/services/sai/access-authorizations.js`: `generateFromAccessNeedGroups` replaces/deletes authorizations; `post` and `delete` hooks update the authorization registry, special-right handling and matching access grants; `deleteOrphans` also deletes authorizations.
+- `pod-provider/backend/services/sai/access-grants.js`: derived `AccessGrant` resources, not an independent consent authority. A grant's existence must never override revoked `AccessAuthorization`.
+- `pod-provider/backend/services/sai/auth-registry.js`: index/reference management, not a serialized consent ledger.
+- `pod-provider/backend/services/utils/collective-access-policy.js`: validates provider app allowlist, local account, app registration, and current SAI special rights.
+- `pod-provider/backend/services/collective-reservations.service.js`: transactionally conditional Fuseki reservation and post-write consent check, but SAI consent reads and the settings dataset write are independent.
+- `pod-provider/backend/services/collective-reservations-api.service.js`: Solid-OIDC-facing route gated by `PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED` and `PROVIDER_COLLECTIVES_API_ENABLED`.
+
+This inventory is based on direct source inspection; **other mutation surfaces must still be enumerated** before the gate can be claimed complete. In particular inspect generic LDP delete/post, authorization registry patching, registration removal/disable, account disable/deletion, migrations, admin actions, and any direct RDF/SPARQL writes. It is insufficient to instrument only the consent UI.
+
+## Preferred architecture: provider-owned serialized authority
+
+1. Establish a **single provider-owned authorization ledger** with a durable revision/fencing value per `(podOwner, appUri, right)` (or a deliberately coarser scope). All revocation and grant mutations affecting `CreateGroup` must go through the same serialization boundary as Group reservations. Choose a transaction primitive proven on the deployed Fuseki/TDB2 settings dataset, *or* move both the relevant authority record and reservation write into one existing transactional database. Merely reading the SAI authorization from another dataset inside a settings-dataset transaction does not provide atomicity.
+2. Persist a normalized consent projection (including explicit active/revoked status and monotonically advancing revision), with provenance to the actual SAI `AccessAuthorization` and current app registration. Treat the projection as operational authorization **only after** bootstrapping and reconciling it against SAI source-of-truth, with a no-gap mutation bridge. Missing, invalid, unreconciled or stale projection must deny.
+3. On mutation, obtain the same transaction/fence, update the revision and effective right, then commit. On reservation, obtain that transaction/fence, verify active right plus current account/app eligibility, then conditionally insert the reservation in that same atomic commit. Recheck sensitive identities at the boundary; neither the HTTP request nor sidecar can provide a trusted permission snapshot.
+4. If a native cross-store transaction is not available, use a **durable intent/outbox and explicit reconciliation state machine** with a hard fail-closed provisioning gate. Prove a concrete linearization order and crash recovery, including revocation while the worker runs. Do not describe this as atomic until verified.
+5. Every reservation must record its authorization decision metadata: subject, app, capability, consent revision and transaction epoch; provisioning workers must validate the same authority before creating keys, actors, DID identities or federation effects. Keep the current worker lease and worker-only grant boundary independent from app consent.
+
+## Mutation-surface closure checklist
+
+- Authorization create, delete, replacement, orphan cleanup and any import/migration path.
+- Group special-right grants and revocations through every frontend and API flow.
+- App unregister, disable, ownership/identifier change, and provider allowlist removal.
+- User disable/suspend/delete and account-to-WebID identity changes.
+- Direct write bypasses: generic LDP routes, admin tools, background jobs, RDF writes, schema migration and repair.
+- Failure halfway through registry synchronization, mirrored `AccessGrant` maintenance, or denied ACL updates.
+- Reconciliation after process crash, broker retry, duplicate delivery, or provider restart.
+
+## Tests required before enablement
+
+1. Real Fuseki/TDB2 concurrent interleaving, using barriers rather than timing sleeps: grant/revoke/regrant vs two identical and conflicting idempotent reservations.
+2. For every mutation path above, assert one durable revision/epoch change and no bypass; write-failure injection must not silently leave a granted effective state.
+3. Kill/restart at each state transition; replay retries; verify monotonic revisions, idempotency, and absence of orphan *activatable* records.
+4. Cross-process concurrency (not only mocked Moleculer calls); verify read-after-restart and authoritative rollback behavior.
+5. Solid-OIDC HTTP integration against a deployed test provider: correct `azp`, `webid`, issuer/audience and registration checks; no client-provided headers or meta can substitute for verified identity.
+6. SAI consent E2E: grant, read, revoke, concurrent revoke, app unregister and account suspension. Prove private Pod ACLs are unchanged by group-only rights.
+7. Worker transition: a reservation with revoked/unreconciled authorization must never publish AP actor, signing key or ATProto DID, even after restart.
+8. Full existing CI, SAI/ACL isolation suite, G1 reservation suites and real Fuseki proof must remain green.
+
+## Execution order
+
+**G1a** — Enumerate/close all existing mutation paths and choose the transaction/serialization primitive; prove it in an isolated integration harness.  
+**G1b** — Implement authoritative revision/fence and audit trail with fail-closed migration/reconciliation.  
+**G1c** — Wire reservation and worker paths through that fence; exercise concurrent revoke/commit and crashes.  
+**G1d** — Validate deployed-provider Solid-OIDC + SAI consent HTTP E2E.  
+**G2** — Only then implement Group actor identity, signing-key custody and ATProto DID provisioning behind worker/federation gates, with Fedify interoperability.
+
+## Release gate
+
+Keep both `PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED` and `PROVIDER_COLLECTIVES_API_ENABLED` false in production until G1a–G1d pass and are reviewed. Do not merge or mark PR #117 release-ready solely on mocked permissions, post-write rechecks or green CI.

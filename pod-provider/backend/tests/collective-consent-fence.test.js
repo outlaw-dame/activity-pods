@@ -177,6 +177,64 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
     expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.begin']);
   });
 
+  test('registration update finishes only after native storage/cache hook completes', async () => {
+    const seen = [];
+    const ctx = {
+      params: { resource: { 'interop:registeredBy': principal,
+        'interop:registeredAgent': app } },
+      async call(name) {
+        seen.push(name);
+        if (name === 'collective-consent-fence.begin') return testBegin();
+        return true;
+      }
+    };
+    await registrations.hooks.before.put(ctx);
+    await registrations.hooks.after.put(ctx, {});
+    expect(seen).toEqual([
+      'collective-consent-fence.begin',
+      'ldp.remote.store',
+      'collective-consent-fence.finish'
+    ]);
+  });
+  test('registration cleanup keeps provider blocked until related grants are removed', async () => {
+    const seen = [];
+    const ctx = {
+      params: { resourceUri: 'https://provider.example/registrations/1' },
+      async call(name) {
+        seen.push(name);
+        if (name === 'app-registrations.get') return {
+          'interop:registeredBy': principal, 'interop:registeredAgent': app
+        };
+        if (name === 'collective-consent-fence.begin') return testBegin();
+        if (name === 'access-authorizations.getForApp') return [];
+        return true;
+      }
+    };
+    await registrations.hooks.before.delete(ctx);
+    await registrations.hooks.after.delete(ctx, {
+      oldData: { 'interop:registeredBy': principal, 'interop:registeredAgent': app },
+      resourceUri: ctx.params.resourceUri
+    });
+    expect(seen.indexOf('collective-consent-fence.finish')).toBe(seen.length - 1);
+    expect(seen).toContain('agent-registry.remove');
+  });
+  test('mutation cleanup failure leaves fence blocked (no finish callback)', async () => {
+    const seen = [];
+    const ctx = {
+      params: { resource: { 'interop:registeredBy': principal,
+        'interop:registeredAgent': app } },
+      async call(name) {
+        seen.push(name);
+        if (name === 'collective-consent-fence.begin') return testBegin();
+        if (name === 'ldp.remote.store') throw new Error('cache write failed');
+        return true;
+      }
+    };
+    await registrations.hooks.before.put(ctx);
+    await expect(registrations.hooks.after.put(ctx, {})).rejects.toThrow('cache write failed');
+    expect(seen).not.toContain('collective-consent-fence.finish');
+  });
+
   test('app registration update invalidates before updating grant links', async () => {
     const seen = [];
     await registrations.hooks.before.put({

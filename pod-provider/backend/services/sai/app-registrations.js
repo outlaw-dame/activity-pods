@@ -99,6 +99,28 @@ module.exports = {
     }
   },
   hooks: {
+    before: {
+      async put(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        // A registration update can change the effective app authority.
+        // Revocation is committed first, irrespective of API/UI origin.
+        const resource = ctx.params.resource || {};
+        await ctx.call('collective-consent-fence.invalidate', {
+          principal: resource['interop:registeredBy'],
+          app: resource['interop:registeredAgent']
+        });
+      },
+      async delete(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = await ctx.call('app-registrations.get', {
+          resourceUri: ctx.params.resourceUri, webId: 'system'
+        });
+        await ctx.call('collective-consent-fence.invalidate', {
+          principal: resource['interop:registeredBy'],
+          app: resource['interop:registeredAgent']
+        });
+      }
+    },
     after: {
       async post(ctx, res) {
         const appUri = ctx.params.resource['interop:registeredAgent'];

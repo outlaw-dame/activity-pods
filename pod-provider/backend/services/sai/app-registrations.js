@@ -1,6 +1,21 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
 
+// Per-action, non-propagating context. Crashed/failed writes stay blocked.
+const inFlightRegistrations = new WeakMap();
+async function beginRegistrationMutation(ctx, resource) {
+  const principal = resource['interop:registeredBy'];
+  const app = resource['interop:registeredAgent'];
+  const { token } = await ctx.call('collective-consent-fence.begin', { principal, app });
+  inFlightRegistrations.set(ctx, { principal, app, token });
+}
+async function finishRegistrationMutation(ctx) {
+  const held = inFlightRegistrations.get(ctx);
+  if (!held) return;
+  await ctx.call('collective-consent-fence.finish', held);
+  inFlightRegistrations.delete(ctx);
+}
+
 module.exports = {
   name: 'app-registrations',
   mixins: [ControlledContainerMixin],
@@ -105,20 +120,14 @@ module.exports = {
         // A registration update can change the effective app authority.
         // Revocation is committed first, irrespective of API/UI origin.
         const resource = ctx.params.resource || {};
-        await ctx.call('collective-consent-fence.invalidate', {
-          principal: resource['interop:registeredBy'],
-          app: resource['interop:registeredAgent']
-        });
+        await beginRegistrationMutation(ctx, resource);
       },
       async delete(ctx) {
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
         const resource = await ctx.call('app-registrations.get', {
           resourceUri: ctx.params.resourceUri, webId: 'system'
         });
-        await ctx.call('collective-consent-fence.invalidate', {
-          principal: resource['interop:registeredBy'],
-          app: resource['interop:registeredAgent']
-        });
+        await beginRegistrationMutation(ctx, resource);
       }
     },
     after: {
@@ -138,6 +147,7 @@ module.exports = {
           appRegistrationUri: res
         });
 
+        await finishRegistrationMutation(ctx);
         return res;
       },
       async put(ctx, res) {
@@ -146,6 +156,7 @@ module.exports = {
         const webId = ctx.params.resource['interop:registeredBy'];
         await ctx.call('ldp.remote.store', { resourceUri: appUri, webId });
 
+        await finishRegistrationMutation(ctx);
         return res;
       },
       async delete(ctx, res) {
@@ -184,6 +195,7 @@ module.exports = {
           appRegistrationUri: res.resourceUri
         });
 
+        await finishRegistrationMutation(ctx);
         return res;
       }
     }

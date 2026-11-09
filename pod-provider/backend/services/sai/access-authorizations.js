@@ -13,7 +13,12 @@ const inFlightGroupMutations = new WeakMap();
 async function beginGroupMutation(ctx, resource) {
   const principal = resource['interop:grantedBy'];
   const app = resource['interop:grantee'];
-  const { token } = await ctx.call('collective-consent-fence.begin', { principal, app });
+  const result = await ctx.call('collective-consent-fence.begin', { principal, app });
+  if (!result || result.status !== 'blocked' || typeof result.token !== 'string' ||
+      !/^[0-9a-f-]{36}$/u.test(result.token)) {
+    throw new Error('COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
+  }
+  const { token } = result;
   inFlightGroupMutations.set(ctx, { principal, app, token });
 }
 async function finishGroupMutation(ctx) {

@@ -90,7 +90,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
     };
     await authorizations.hooks.before.post(ctx);
     expect(actions).toEqual([{
-      name: 'collective-consent-fence.invalidate', args: { principal, app }
+      name: 'collective-consent-fence.begin', args: { principal, app }
     }]);
     await expect(authorizations.hooks.before.post({
       ...ctx, call: async () => { throw new Error('fence offline'); }
@@ -120,7 +120,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
       }
     });
     expect(calls.map(c => c.name)).toEqual([
-      'access-authorizations.get', 'collective-consent-fence.invalidate'
+      'access-authorizations.get', 'collective-consent-fence.begin'
     ]);
   });
 
@@ -136,7 +136,7 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
         return true;
       }
     });
-    expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.invalidate']);
+    expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.begin']);
   });
 
   test('app registration update invalidates before updating grant links', async () => {
@@ -147,6 +147,6 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
       } },
       call: async name => { seen.push(name); }
     });
-    expect(seen).toEqual(['collective-consent-fence.invalidate']);
+    expect(seen).toEqual(['collective-consent-fence.begin']);
   });
 });

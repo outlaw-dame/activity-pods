@@ -113,6 +113,84 @@ function createCandidateService({ pool, fixtureOnly = false } = {}) {
     name: 'collective-postgres-candidate',
     settings: { enabled: false },
     actions: {
+      // Provider SAI revocation listener is NOT attached. Invoking this
+      // candidate requires the explicit disposable test constructor.
+      // Do not expose through HTTP, callbacks, or delegated application APIs.
+      revokeConsent: {
+        params: {
+          owner: 'string', app: 'string',
+          operationId: 'string',
+          expectedConsentRevision: { type: 'number', integer: true, min: 1 }
+        },
+        async handler(ctx) {
+          if (!fixtureOnly || this.settings.enabled !== true) {
+            fail('GROUP_POSTGRES_NOT_RELEASED', 503);
+          }
+          const p = ctx.params;
+          rdf.validateActor(p.owner);
+          rdf.validateActor(p.app);
+          if (!Number.isSafeInteger(p.expectedConsentRevision) ||
+              p.expectedConsentRevision < 1 ||
+              typeof p.operationId !== 'string' ||
+              !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(p.operationId)) {
+            fail('GROUP_POSTGRES_INVALID_INPUT', 400);
+          }
+          return transaction(pool, async client => {
+            // Lock ordering matches all member updates. Revocation is
+            // still permitted for disabled owners; it must not resurrect
+            // an earlier SAI grant after identity reactivation.
+            const identity = await client.query(
+              'SELECT lifecycle_revision FROM ' + SCHEMA +
+              '.identities WHERE webid=$1 FOR SHARE', [p.owner]
+            );
+            if (identity.rowCount !== 1) fail('GROUP_POSTGRES_AUTHORITY_DENIED');
+            const consent = await client.query(
+              'SELECT granted,revision FROM ' + SCHEMA +
+              '.consent WHERE owner_webid=$1 AND app_uri=$2 FOR UPDATE',
+              [p.owner,p.app]
+            );
+            if (consent.rowCount !== 1) fail('GROUP_POSTGRES_AUTHORITY_DENIED');
+            const previous = await client.query(
+              'SELECT revision FROM ' + SCHEMA +
+              '.consent_revocations WHERE owner_webid=$1 AND app_uri=$2 ' +
+              'AND operation_id=$3::uuid', [p.owner,p.app,p.operationId]
+            );
+            if (previous.rowCount === 1) {
+              const revision = Number(previous.rows[0].revision);
+              if (!Number.isSafeInteger(revision)) fail('GROUP_POSTGRES_EPOCH_UNVERIFIED', 503);
+              // A historical revocation operation cannot claim that a
+              // later re-granted consent is still revoked. Replays are valid
+              // only for the exact current state and original input epoch.
+              if (consent.rows[0].granted !== false ||
+                  Number(consent.rows[0].revision) !== revision ||
+                  p.expectedConsentRevision !== revision - 1) {
+                fail('GROUP_POSTGRES_STALE_CONSENT_REVISION', 409);
+              }
+              return { consentRevision: revision, replay: true, granted: false };
+            }
+            const before = Number(consent.rows[0].revision);
+            if (!Number.isSafeInteger(before) || before < 1 ||
+                before !== p.expectedConsentRevision || consent.rows[0].granted !== true) {
+              fail('GROUP_POSTGRES_STALE_CONSENT_REVISION', 409);
+            }
+            const after = before + 1;
+            if (!Number.isSafeInteger(after)) fail('GROUP_POSTGRES_EPOCH_OVERFLOW', 409);
+            await client.query(
+              'UPDATE ' + SCHEMA +
+              '.consent SET granted=false,revision=$1 ' +
+              'WHERE owner_webid=$2 AND app_uri=$3 AND revision=$4',
+              [after,p.owner,p.app,before]
+            );
+            await client.query(
+              'INSERT INTO ' + SCHEMA +
+              '.consent_revocations (owner_webid,app_uri,operation_id,revision) ' +
+              'VALUES ($1,$2,$3::uuid,$4)',
+              [p.owner,p.app,p.operationId,after]
+            );
+            return { consentRevision: after, replay: false, granted: false };
+          });
+        }
+      },
       list: {
         params: {
           groupId: 'string', owner: 'string', app: 'string',

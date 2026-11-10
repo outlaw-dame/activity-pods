@@ -44,14 +44,10 @@ jobs:
           sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
           yarn install --ignore-scripts --frozen-lockfile
 
-      - name: Install isolated Jest runner
-        working-directory: tests
-        run: yarn install --ignore-scripts --frozen-lockfile
-
       - name: Execute issuer, authority, and existing G1 provider gateway regression
         run: |
           set -euo pipefail
-          NODE_ENV=test node tests/node_modules/jest/bin/jest.js \
+          NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
             --runInBand --testEnvironment=node \
             --runTestsByPath \
             pod-provider/backend/tests/collective-membership-issuer.test.js \

@@ -226,12 +226,29 @@ async function main() {
     'OIDC authorized app does not match its registered client identifier');
   assert.equal(canonicalClientId, app + '/app',
     'Solid-OIDC and SAI must share one exact app URI');
+  // Do not accept disjoint success from two unrelated test users: the very
+  // WebID in the signed native OIDC token must grant the same canonical
+  // app URI through the existing native SAI registration endpoint.
+  const consent = await response(base + '/.auth-agent/register-app', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'Bearer ' + person.token
+    },
+    body: JSON.stringify({
+      appUri: canonicalClientId,
+      acceptedAccessNeeds: [],
+      acceptedSpecialRights: ['apods:CreateGroup', 'apods:ReadGroups']
+    })
+  });
+  ensure(consent, await json(consent), [200, 201], 'Same-user SAI consent');
+
   console.log(JSON.stringify({
     ok: true, proof: 'real-provider-solid-oidc-authorization-code',
     webId: person.webId,
     issuer: discovery.issuer,
     clientIdType: 'https-url',
-    flow: 'native interaction cookie, session login, PKCE code exchange, issuer JWKS signature verified',
+    flow: 'native interaction cookie, PKCE, issuer JWKS verified, same-user SAI consent for exact client URI',
     caveat: 'This automates native HTTP browser interactions, not a rendered frontend/Playwright UI'
   }));
 }

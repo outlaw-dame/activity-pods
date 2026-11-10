@@ -38,7 +38,7 @@ const need = {
   id: accessNeedUri,
   type: 'interop:AccessNeedGroup',
   'interop:accessNecessity': 'interop:AccessRequired',
-  'apods:hasSpecialRights': ['apods:CreateGroup', 'apods:ReadGroups']
+  'apods:hasSpecialRights': ['apods:CreateGroup', 'apods:ReadGroups', 'apods:ManageMembers']
 };
 const proxy = https.createServer({
   cert: fs.readFileSync(process.env.G1_E2E_CERT),

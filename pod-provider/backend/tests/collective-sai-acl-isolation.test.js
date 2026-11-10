@@ -28,6 +28,8 @@ describe('SAI social Group rights are not personal Pod ACL rights', () => {
       for (const rights of [
         ['apods:CreateGroup'],
         ['apods:ReadGroups'],
+        ['apods:ManageMembers'],
+        ['http://activitypods.org/ns/core#ManageMembers'],
         ['apods:ReadGroups', 'apods:CreateGroup'],
         ['http://activitypods.org/ns/core#CreateGroup'],
         ['http://activitypods.org/ns/core#ReadGroups'],

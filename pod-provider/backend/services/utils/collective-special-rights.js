@@ -8,7 +8,8 @@
 const NS = 'http://activitypods.org/ns/core#';
 const CANONICAL = Object.freeze({
   CreateGroup: Object.freeze(['apods:CreateGroup', NS + 'CreateGroup']),
-  ReadGroups: Object.freeze(['apods:ReadGroups', NS + 'ReadGroups'])
+  ReadGroups: Object.freeze(['apods:ReadGroups', NS + 'ReadGroups']),
+  ManageMembers: Object.freeze(['apods:ManageMembers', NS + 'ManageMembers'])
 });
 const EXACT = new Set(Object.values(CANONICAL).flat());
 

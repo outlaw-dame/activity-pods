@@ -146,7 +146,7 @@ async function main() {
   const before = await registrationRows(username, webId);
   assert.equal(before.length, 0, 'Unexpected app registration before consent');
 
-  await doSai('register-app', token, ['apods:CreateGroup', 'apods:ReadGroups']);
+  await doSai('register-app', token, ['apods:CreateGroup', 'apods:ReadGroups', 'apods:ManageMembers']);
   const reg = await registrationRows(username, webId);
   assert.equal(reg.length, 1, 'Native SAI registration not persisted on Pod');
   const rights = await authorizationRows(username, webId);
@@ -173,6 +173,9 @@ async function main() {
     }));
     throw new Error('Native SAI CreateGroup authorization not persisted');
   }
+  assert(rights.some(row =>
+    row.right.value === 'http://activitypods.org/ns/core#ManageMembers'),
+    'Native SAI ManageMembers right not persisted');
   const revision1 = await ledger(webId);
   assert(revision1 >= 2, 'Expected registration and grant mutation revisions');
 
@@ -182,9 +185,12 @@ async function main() {
   const revision2 = await ledger(webId);
   assert(revision2 > revision1, 'Revoke must advance ledger revision');
 
-  await doSai('upgrade-app', token, ['apods:CreateGroup', 'apods:ReadGroups']);
+  await doSai('upgrade-app', token, ['apods:CreateGroup', 'apods:ReadGroups', 'apods:ManageMembers']);
   assert((await authorizationRows(username, webId)).some(x => x.right.value === 'http://activitypods.org/ns/core#CreateGroup'),
     'Regrant did not persist SAI CreateGroup right');
+  assert((await authorizationRows(username, webId)).some(x =>
+    x.right.value === 'http://activitypods.org/ns/core#ManageMembers'),
+    'Regrant did not persist SAI ManageMembers right');
   const revision3 = await ledger(webId);
   assert(revision3 > revision2, 'Regrant must advance ledger revision');
 

@@ -96,6 +96,13 @@ describe('live SAI consent gate', () => {
     await deny(verify(f.ctx, 'reserve'), 'COLLECTIVE_APP_CONSENT_MISSING');
   });
 
+  test('membership management requires independently granted ManageMembers capability', async () => {
+    const denied = fake({ rights: ['apods:CreateGroup', 'apods:ReadGroups'] });
+    await deny(verify(denied.ctx, 'members'), 'COLLECTIVE_APP_CONSENT_MISSING');
+    const allowed = fake({ rights: ['http://activitypods.org/ns/core#ManageMembers'] });
+    expect(await verify(allowed.ctx, 'members')).toBe(true);
+    await deny(verify(allowed.ctx, 'reserve'), 'COLLECTIVE_APP_CONSENT_MISSING');
+  });
   test('read requires ReadGroups rather than CreateGroup', async () => {
     const f = fake({ rights: ['apods:CreateGroup'] });
     await deny(verify(f.ctx, 'read'), 'COLLECTIVE_APP_CONSENT_MISSING');

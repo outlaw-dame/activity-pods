@@ -1,0 +1,57 @@
+name: Paper Groups G2 — TDB2 Membership Authority Proof
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/utils/collective-membership-rdf.js'
+      - 'pod-provider/backend/scripts/proof-collective-membership-fuseki.js'
+      - '.github/workflows/paper-groups-g2-membership.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  membership-tdb2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax-check membership templates and real Fuseki proof
+        run: |
+          node --check backend/utils/collective-membership-rdf.js
+          node --check backend/scripts/proof-collective-membership-fuseki.js
+      - name: Start disposable TDB2 settings dataset
+        run: |
+          set -euo pipefail
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+      - name: Prove membership initialization, optimistic CAS and keyset paging
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
+        run: node backend/scripts/proof-collective-membership-fuseki.js prepare
+      - name: Restart real Fuseki with persistent dataset
+        run: |
+          docker compose -f docker-compose-test.yml restart fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+      - name: Prove membership revision and bans persisted across restart
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
+        run: node backend/scripts/proof-collective-membership-fuseki.js verify
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color --tail=200 fuseki_test
+      - name: Tear down disposable Fuseki
+        if: always()
+        run: docker compose -f docker-compose-test.yml down -v

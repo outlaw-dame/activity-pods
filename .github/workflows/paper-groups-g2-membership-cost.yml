@@ -24,10 +24,6 @@ jobs:
   membership-cost:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        members: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{0}]', inputs.members) || '[1000,10000,100000]') }}
     defaults:
       run:
         working-directory: pod-provider
@@ -38,32 +34,46 @@ jobs:
           node-version: '22.12.0'
       - name: Static-check cost probe
         run: node --check backend/scripts/benchmark-collective-membership-tdb2.js
-      - name: Start isolated TDB2 settings dataset
-        run: |
-          set -euo pipefail
-          mkdir -p data/fuseki_test
-          docker compose -f docker-compose-test.yml up -d fuseki_test
-          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
-      - name: Record first/middle/deep keyset latency
+      - name: Run ordered cardinalities on one physical runner
         env:
           FUSEKI_URL: http://127.0.0.1:3040
           FUSEKI_USER: admin
           FUSEKI_PASSWORD: admin
           G2_BENCH_DISPOSABLE: confirmed
-          G2_BENCH_MEMBERS: ${{ matrix.members }}
+          MODE: ${{ github.event_name }}
+          SELECTED_MEMBERS: ${{ github.event_name == 'workflow_dispatch' && inputs.members || '1000' }}
         run: |
           set -euo pipefail
-          node backend/scripts/benchmark-collective-membership-tdb2.js |
-            tee /tmp/g2-membership-cost.jsonl
+          if [ "$MODE" = workflow_dispatch ]; then
+            cardinalities=("$SELECTED_MEMBERS")
+          else
+            cardinalities=(1000 10000 100000)
+          fi
+          printf 'runner=%s cpu=%s nproc=%s\n' "$RUNNER_NAME" "$(grep -m1 'model name' /proc/cpuinfo || true)" "$(nproc)"
+          : > /tmp/g2-membership-cost.jsonl
+          for members in "${cardinalities[@]}"; do
+            case "$members" in 1000|10000|100000) ;; *) echo "Invalid cardinality" >&2; exit 1;; esac
+            docker compose -f docker-compose-test.yml down -v || true
+            sudo rm -rf data/fuseki_test
+            mkdir -p data/fuseki_test
+            docker compose -f docker-compose-test.yml up -d fuseki_test
+            FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+            G2_BENCH_MEMBERS="$members" node backend/scripts/benchmark-collective-membership-tdb2.js |
+              tee -a /tmp/g2-membership-cost.jsonl
+          done
       - name: Upload measured cost evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: g2-membership-tdb2-query-cost-${{ matrix.members }}
+          name: g2-membership-tdb2-query-cost-matched-host
           path: /tmp/g2-membership-cost.jsonl
+          if-no-files-found: warn
           retention-days: 14
       - name: Diagnostics if real query probe fails
         if: failure()
         run: docker compose -f docker-compose-test.yml logs --no-color --tail=150 fuseki_test
       - name: Delete disposable test database
         if: always()
-        run: docker compose -f docker-compose-test.yml down -v
+        run: |
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test

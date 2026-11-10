@@ -73,6 +73,7 @@ jobs:
       - name: Prove persisted SAI grant/revoke/regrant against real Group fence
         env:
           FUSEKI_URL: http://127.0.0.1:3040
+          PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
         run: node backend/scripts/proof-collective-sai-persistence.js prepare
 
       - name: Restart both persistent datasets
@@ -84,6 +85,7 @@ jobs:
       - name: Verify consent data, ledger and stale-replay denial after restart
         env:
           FUSEKI_URL: http://127.0.0.1:3040
+          PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
         run: node backend/scripts/proof-collective-sai-persistence.js verify
 
       - name: Show Fuseki logs on failure

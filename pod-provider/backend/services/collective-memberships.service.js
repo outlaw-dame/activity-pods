@@ -13,7 +13,7 @@
 const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
-const { parseApprovedApps } = require('./utils/collective-access-policy');
+const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
 const rdf = require('../utils/collective-membership-rdf');
 
 const PURPOSE = 'provider.collective.membership.v1';
@@ -81,8 +81,8 @@ async function query(ctx, sparql) {
 async function update(ctx, sparql) {
   return ctx.call('triplestore.update', { dataset: 'settings', webId: 'system', query: sparql });
 }
-async function currentEpoch(ctx, groupId, owner) {
-  const rows = await query(ctx, rdf.readEpochQuery({ groupId, owner }));
+async function currentEpoch(ctx, groupId, owner, app) {
+  const rows = await query(ctx, rdf.readEpochQuery({ groupId, owner, app }));
   if (!Array.isArray(rows) || rows.length !== 1 ||
       !/^[1-9][0-9]*$/u.test(String(getValue(rows[0], 'epoch')))) {
     deny('GROUP_MEMBERSHIP_EPOCH_UNVERIFIED', 503);
@@ -108,8 +108,16 @@ module.exports = {
         grant: { type: 'object', strict: false } },
       async handler(ctx) {
         authenticate(this.settings, ctx.params, 'initialize');
+        await assertLiveCollectiveConsent(ctx, {
+          principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
+          approvedApps: this.settings.approvedApps
+        });
         await update(ctx, rdf.initializeQuery(ctx.params));
-        const epoch = await currentEpoch(ctx, ctx.params.groupId, ctx.params.owner);
+        const epoch = await currentEpoch(ctx, ctx.params.groupId, ctx.params.owner, ctx.params.app);
+        await assertLiveCollectiveConsent(ctx, {
+          principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
+          approvedApps: this.settings.approvedApps
+        });
         if (epoch !== 1) deny('GROUP_MEMBERSHIP_INIT_CONFLICT', 409);
         return { groupId: ctx.params.groupId, membershipRevision: 1 };
       }
@@ -120,9 +128,17 @@ module.exports = {
         grant: { type: 'object', strict: false } },
       async handler(ctx) {
         authenticate(this.settings, ctx.params, 'change');
+        await assertLiveCollectiveConsent(ctx, {
+          principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
+          approvedApps: this.settings.approvedApps
+        });
         const receipt = crypto.randomUUID();
         await update(ctx, rdf.mutateQuery({ ...ctx.params, receipt }));
         const rows = await query(ctx, rdf.readMutationQuery(ctx.params));
+        await assertLiveCollectiveConsent(ctx, {
+          principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
+          approvedApps: this.settings.approvedApps
+        });
         if (!Array.isArray(rows) || rows.length !== 1 ||
             Number(getValue(rows[0], 'epoch')) !== ctx.params.expectedEpoch + 1 ||
             getValue(rows[0], 'role') !== ctx.params.role ||
@@ -145,7 +161,15 @@ module.exports = {
       },
       async handler(ctx) {
         authenticate(this.settings, ctx.params, 'list');
+        await assertLiveCollectiveConsent(ctx, {
+          principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
+          approvedApps: this.settings.approvedApps
+        });
         const rows = await query(ctx, rdf.listQuery(ctx.params));
+        await assertLiveCollectiveConsent(ctx, {
+          principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
+          approvedApps: this.settings.approvedApps
+        });
         if (!Array.isArray(rows) || rows.length < 1 || rows.length > ctx.params.limit + 1) {
           deny('GROUP_MEMBERSHIP_SNAPSHOT_UNVERIFIED', 503);
         }

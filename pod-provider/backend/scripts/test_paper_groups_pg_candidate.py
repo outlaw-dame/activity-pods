@@ -139,6 +139,48 @@ class CandidateIntegration(unittest.TestCase):
             ).fetchone()[0]
             self.assertEqual(rev,13)
 
+    def test_03b_roster_snapshot_group_lock_blocks_concurrent_writer(self):
+        g=gid(199)
+        reserve_group(self.admin,g,OWNER,APP)
+        acquired=threading.Event()
+        allow_release=threading.Event()
+        completed=threading.Event()
+        failures=[]
+        def reader_hold():
+            with connection() as conn:
+                with conn.transaction():
+                    conn.execute(
+                        "SELECT revision FROM paper_groups_candidate.groups "
+                        "WHERE group_id=%s FOR SHARE",(g,)
+                    )
+                    acquired.set()
+                    if not allow_release.wait(timeout=5):
+                        failures.append("reader release timeout")
+        def competing_writer():
+            try:
+                with connection() as conn:
+                    mutate(conn,g,30,revision=1)
+                completed.set()
+            except BaseException as e:
+                failures.append(str(e))
+                completed.set()
+        a=threading.Thread(target=reader_hold,daemon=True)
+        a.start()
+        self.assertTrue(acquired.wait(timeout=3))
+        b=threading.Thread(target=competing_writer,daemon=True)
+        b.start()
+        self.assertFalse(completed.wait(timeout=0.15),
+                         "Writer bypassed Group snapshot revision lock")
+        allow_release.set()
+        a.join(timeout=5)
+        b.join(timeout=5)
+        self.assertFalse(a.is_alive() or b.is_alive())
+        self.assertEqual(failures,[])
+        self.assertTrue(completed.is_set())
+        page=list_members(self.admin,group=g,owner=OWNER,app=APP)
+        self.assertEqual(page["revision"],2)
+        self.assertIn(actor(30),[x["actorUri"] for x in page["members"]])
+
     def test_04_revoke_fences_new_mutations_and_private_reads(self):
         g=gid(201)
         reserve_group(self.admin,g,OWNER,APP)

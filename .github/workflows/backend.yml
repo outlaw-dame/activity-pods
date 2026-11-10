@@ -51,6 +51,7 @@ jobs:
                       pod-provider/backend/tests/oauth-dpop-bound-resource.test.js \
                       pod-provider/backend/scripts/proof-collective-fuseki.js \
                       pod-provider/backend/scripts/proof-collective-consent-fence.js \
+                      pod-provider/backend/scripts/proof-collective-sai-persistence.js \
                       pod-provider/backend/scripts/recover-collective-consent-offline.js; do
             [ -f "$file" ] || continue
             node --check "$file"

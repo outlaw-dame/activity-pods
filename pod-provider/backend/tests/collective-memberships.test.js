@@ -158,6 +158,34 @@ describe('G2 owner-scoped membership authority release boundary', () => {
     expect(queries[0].args.query).toContain('LIMIT 3');
     expect(queries[0].args.query).not.toContain('OFFSET');
   });
+  test('1000-member page uses one bounded Fuseki query and fixed SAI checks', async () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => ({
+      actor: binding('https://members.example/users/u' + String(i).padStart(5, '0')),
+      role: binding('member'),
+      epoch: binding(12)
+    }));
+    const t = fakeCtx(authorized('list', { limit: 1000 }), rows);
+    const result = await service.actions.list.handler.call({ settings }, t.ctx);
+    expect(result.members).toHaveLength(1000);
+    expect(result.hasMore).toBe(false);
+    const calls = t.calls.map(c => c.name);
+    expect(calls.filter(name => name === 'triplestore.query')).toHaveLength(1);
+    expect(calls.filter(name => name === 'triplestore.update')).toHaveLength(0);
+    expect(calls.filter(name => name === 'auth.account.findByWebId')).toHaveLength(2);
+    expect(calls.filter(name => name === 'app-registrations.isRegistered')).toHaveLength(2);
+    expect(calls.filter(name => name === 'access-authorizations.getSpecialRights')).toHaveLength(2);
+    expect(t.calls.find(c => c.name === 'triplestore.query').args.query).toContain('LIMIT 1001');
+  });
+  test('SAI revoke during private membership page prevents returning members', async () => {
+    let reads = 0;
+    const t = fakeCtx(authorized('list', { limit: 2 }), [
+      { actor: binding(member), role: binding('member'), epoch: binding(5) }
+    ], () => ++reads === 1 ? ['apods:ManageMembers'] : []);
+    await expect(service.actions.list.handler.call({ settings }, t.ctx))
+      .rejects.toMatchObject({ type: 'COLLECTIVE_APP_CONSENT_MISSING' });
+    expect(reads).toBe(2);
+    expect(t.calls.filter(c => c.name === 'triplestore.query')).toHaveLength(1);
+  });
   test('membership template rejects excessive page limits and inconsistent actor URL', () => {
     expect(() => rdf.listQuery({ groupId, owner, app, limit: 1001 })).toThrow('limit');
     expect(() => rdf.mutateQuery({

@@ -34,6 +34,7 @@ async function* readVerifiedBase({ groupId, baseRevision, expectedBaseCount,
   let cursor = null;
   let total = 0;
   let count = 0;
+  let ownerCount = 0;
   while (true) {
     if (++count > maxBasePages) fail('GROUP_COMPACTION_BASE_PAGE_LIMIT');
     const data = await readBasePage({ groupId, revision: baseRevision, cursor });
@@ -50,6 +51,7 @@ async function* readVerifiedBase({ groupId, baseRevision, expectedBaseCount,
         fail('GROUP_COMPACTION_BASE_CORRUPT');
       }
       previous = actorUri;
+      if (item.role === 'owner' && ++ownerCount > 1) fail('GROUP_COMPACTION_OWNER_CORRUPT');
       if (++total > expectedBaseCount) fail('GROUP_COMPACTION_BASE_COUNT_MISMATCH');
       yield { actorUri, role: item.role };
     }
@@ -59,6 +61,7 @@ async function* readVerifiedBase({ groupId, baseRevision, expectedBaseCount,
     cursor = expectedCursor;
   }
   if (total !== expectedBaseCount) fail('GROUP_COMPACTION_BASE_COUNT_MISMATCH');
+  if (ownerCount !== 1) fail('GROUP_COMPACTION_OWNER_CORRUPT');
 }
 
 /** Ordered merge (O(total members + <=512 changes), bounded memory). */
@@ -138,6 +141,7 @@ async function stageCompactedMembership({
   let cursor = null;
   let outputCount = 0;
   let pageCount = 0;
+  let ownerCount = 0;
   let digest = crypto.createHash('sha256').update(JSON.stringify([
     groupId, baseRevision, revision, expectedBaseCount, 'g2-compaction-v1'
   ])).digest('hex');
@@ -164,6 +168,9 @@ async function stageCompactedMembership({
     return page;
   }
   for await (const row of merged) {
+    if (row.role === 'owner') {
+      if (row.actorUri !== ownerUri || ++ownerCount > 1) fail('GROUP_COMPACTION_OWNER_CORRUPT');
+    }
     buffer.push(row);
     if (buffer.length >= PAGE_WINDOW) await persist(take(true));
   }
@@ -173,6 +180,7 @@ async function stageCompactedMembership({
     await persist(take(false));
   }
   if (pageCount === 0) fail('GROUP_COMPACTION_EMPTY');
+  if (ownerCount !== 1) fail('GROUP_COMPACTION_OWNER_CORRUPT');
   if (pages.length) await stagePages(Object.freeze(pages));
 
   return Object.freeze({

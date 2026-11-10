@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const reservations = require('../services/collective-reservations.service');
 const liveFence = require('../services/collective-consent-fence.service');
+const recovery = require('../services/utils/collective-consent-recovery');
 
 const base = (process.env.FUSEKI_URL || 'http://127.0.0.1:3040').replace(/\/+$/u, '');
 const auth = 'Basic ' + Buffer.from((process.env.FUSEKI_USER || 'admin') +
@@ -252,6 +253,19 @@ async function prepare() {
   const abandonedB = await callLiveFence('begin', fencePrincipal, fenceApp);
   assert.notEqual(abandonedA.token, abandonedB.token);
   assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
+  // Simulate an OFFLINE operator recovery with provider writers stopped.
+  // It must invalidate all abandoned tokens and leave the grant BLOCKED.
+  const offlineNonce = recovery.freshNonce();
+  await sparql('update', recovery.resetQuery({
+    principal: fencePrincipal, app: fenceApp, expectedRevision: 2, nonce: offlineNonce
+  }));
+  assert.deepEqual(await liveState(), { status: 'blocked', revision: 3 });
+  const recoveredRows = await sparql('query', recovery.queryState(fencePrincipal, fenceApp));
+  assert(recoveredRows.every(row => !row.pending), 'offline recovery retained pending tokens');
+  assert(recoveredRows.some(row => row.recovery?.value === offlineNonce));
+  await assert.rejects(callLiveFence('finish', fencePrincipal, fenceApp, abandonedA.token),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
+
   // Two concurrent SAI mutations must BOTH finish before the provider
   // status may return to stable. A crash with an outstanding token remains
   // blocked, rather than assuming the user still authorized creation.
@@ -316,7 +330,10 @@ async function verify() {
     assert.equal(result.rev, '2');
     assert([null, 'committed'].includes(result.committed));
   }
-  assert.deepEqual(await liveState(), { status: 'blocked', revision: 2 });
+  assert.deepEqual(await liveState(), { status: 'blocked', revision: 3 });
+  const recovered = await sparql('query', recovery.queryState(fencePrincipal, fenceApp));
+  assert(recovered.every(row => !row.pending), 'pending mutation survived operator recovery');
+
   assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
     { status: 'stable', revision: 4 });
   assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');

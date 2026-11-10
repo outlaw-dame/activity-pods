@@ -93,9 +93,10 @@ Real disposable PostgreSQL integration tests check:
 Evidence: [Group candidate authority CI](https://github.com/outlaw-dame/activity-pods/actions/runs/42898121395), verified against the actual SQL schema and candidate adapter, not an in-memory mock.
 
 - **Nine PostgreSQL integration tests passed**, including revoke concurrency, owner disable, idempotent operation UUID, cross-Group rejection and exact revision-bound cursor pagination.
-- At **100,001 rows**, first/middle/deep 100-member pages took 1.84 / 1.64 / 1.67ms respectively in this particular runner sample. EXPLAIN confirmed indexed access rather than a sequential scan.
-- With **16 Group writers and 384 total updates**, throughput was approximately 493 mutations/second; p95 44.96ms and maximum 57.7ms in the disposable run.
-- These values are samples from one warmed test host, not statistically characterized production p95/p99 or durable SAI-connected operation cost. Concurrent reads/writes on the shared identity+consent rows and WAL/storage behavior need longer tests.
+- At **100,001 rows**, first/middle/deep 100-member pages took 1.78 / 1.53 / 1.41ms on the latest CI runner. EXPLAIN confirmed indexed access, not a sequential table scan.
+- That synthetic member table plus its indexes used **38,035,456 bytes** (approximately 36.3 MiB), of which indexes used **24,363,008 bytes** (approximately 23.2 MiB). Dropping one unused INCLUDE field saved about 1 MiB of indexes compared with the preceding run; this is one fixture, not a general cost guarantee.
+- **16 separate Group writers and 384 changes per trial** recorded 471.24, 470.55 and 491.58 mutations/second across three trials, with per-trial p95 mutation latencies of 49.07, 48.23 and 45.27ms.
+- A different CI runner previously ranged from ~205 to ~529 writes/second in single samples. These timings therefore have substantial host/run variance; they are not statistically characterized production capacity or an end-to-end SAI-connected SLA. Shared consent lock load, long-running mixed writes, WAL/index growth, replication and dollar cost still need longer tests.
 
 ## Production migration acceptance (NOT IMPLEMENTED)
 

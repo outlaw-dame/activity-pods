@@ -5,6 +5,7 @@
  * No production datasets or credentials are ever inferred.
  */
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const rdf = require('../utils/collective-membership-rdf');
 
 const base = process.env.FUSEKI_URL;
@@ -19,6 +20,7 @@ const carol = 'https://remote-proof.example/users/carol';
 const dan = 'https://remote-proof.example/users/dan';
 const wrongOwner = 'https://paper-proof.example/users/eve#me';
 const g = rdf.groupSubject(groupId);
+const mutation = opts => rdf.mutateQuery({ ...opts, receipt: crypto.randomUUID() });
 const uri = base.replace(/\/+$/u, '') + '/' + dataset;
 const headers = {
   ...(process.env.FUSEKI_PASSWORD ? {
@@ -71,17 +73,17 @@ async function prepare() {
   assert.equal(val(rows, 'actor'), owner);
   assert.equal(val(rows, 'role'), 'owner');
 
-  await request('update', rdf.mutateQuery({
+  await request('update', mutation({
     groupId, owner, member: bob, role: 'member', status: 'active', expectedEpoch: 1
   }));
   assert.equal(await epoch(), 2);
   // The same optimistic epoch cannot authorize both mutations. TDB2
   // serializes updates in the authoritative settings dataset.
   await Promise.all([
-    request('update', rdf.mutateQuery({
+    request('update', mutation({
       groupId, owner, member: carol, role: 'member', status: 'active', expectedEpoch: 2
     })),
-    request('update', rdf.mutateQuery({
+    request('update', mutation({
       groupId, owner, member: dan, role: 'member', status: 'active', expectedEpoch: 2
     }))
   ]);
@@ -91,7 +93,7 @@ async function prepare() {
   const winner = rows.map(x => x.actor.value).find(x => x === carol || x === dan);
   assert(winner);
   // A foreign owner must not write despite knowing the Group and epoch.
-  await request('update', rdf.mutateQuery({
+  await request('update', mutation({
     groupId, owner: wrongOwner, member: dan, role: 'admin',
     status: 'active', expectedEpoch: 3
   }));
@@ -99,7 +101,7 @@ async function prepare() {
 
   // Status tombstones preserve revision; banned members are excluded from
   // delivery snapshots without erasing audit/evolution semantics.
-  await request('update', rdf.mutateQuery({
+  await request('update', mutation({
     groupId, owner, member: bob, role: 'member', status: 'banned', expectedEpoch: 3
   }));
   assert.equal(await epoch(), 4);

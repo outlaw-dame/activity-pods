@@ -152,6 +152,40 @@ describe('G1 durable collective reservations — provider authority', () => {
     expect(h.calls.filter(c => c.name === 'triplestore.update').every(c => c.args.dataset === 'settings')).toBe(true);
   });
 
+  test('Group reserve/read work stays bounded as unrelated provider records grow', async () => {
+    const baseline = harness();
+    const first = await baseline.action('reserve', reservation());
+    const baselineActions = baseline.calls.length;
+    const large = harness();
+    // A provider-size growth guard: unrelated reservations must not cause
+    // per-reservation Moleculer work or result materialization to grow.
+    for (let i = 0; i < 3000; i++) {
+      large.db.set('cg_' + i.toString(16).padStart(32, '0'), {
+        id: 'cg_' + i.toString(16).padStart(32, '0'),
+        owner: 'https://social.example/users/unrelated',
+        revision: 1, stage: 'reserved'
+      });
+    }
+    const created = await large.action('reserve', reservation());
+    expect(created.canonicalGroupId).toBe(first.canonicalGroupId);
+    expect(large.calls.length).toBe(baselineActions);
+    expect(large.calls.length).toBeLessThanOrEqual(10);
+    const storeCalls = large.calls.filter(c => c.name.startsWith('triplestore.'));
+    expect(storeCalls).toHaveLength(2);
+    expect(storeCalls.every(c => c.args.dataset === 'settings')).toBe(true);
+    expect(storeCalls[0].args.query).toContain('FILTER NOT EXISTS');
+    expect(storeCalls[1].args.query).toContain('LIMIT 2');
+    expect(storeCalls[1].args.query).toContain('<urn:apods:collective:' + first.canonicalGroupId + '>');
+    expect(storeCalls.every(c => !/OFFSET|SELECT\s+\*/iu.test(c.args.query))).toBe(true);
+
+    const beforeRead = large.calls.length;
+    const read = await large.action('get', readGrant(first.canonicalGroupId));
+    expect(read.canonicalGroupId).toBe(first.canonicalGroupId);
+    const readCalls = large.calls.slice(beforeRead);
+    expect(readCalls).toHaveLength(4);
+    expect(readCalls.filter(c => c.name === 'triplestore.query')).toHaveLength(1);
+  });
+
   test('mid-flight SAI revocation denies success, even if an inactive record was written', async () => {
     const h = harness();
     h.setBeforeWrite(() => h.setRights([]));

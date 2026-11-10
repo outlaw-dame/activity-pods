@@ -46,3 +46,12 @@ The read rejects changed revisions, wrong cursor/digest and unauthorized
 results. There is no public endpoint or automatic fallback to an unindexed
 Group-wide SPARQL scan. The real TDB2 write/replica fault proof is still
 required before using this in a running compactor.
+
+A separate `verifyStagedCompactionManifest` routine now re-reads every
+**persisted** page under the exact immutable target revision, verifying its
+SHA-256 checksum, all cursor links, deterministic chained manifest digest,
+exact page/member totals, sorted actors and unique correct Group owner.
+Missing, corrupted, truncated and substituted pages fail closed. This is
+an offline verification kernel: publication must still be guarded by a
+provider authenticated, current-epoch TDB2 CAS and durable multi-replica
+lease/repair contract, which is not present in this PR.

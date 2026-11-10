@@ -9,7 +9,6 @@ on:
       - 'pod-provider/backend/tests/collective-membership-issuer.test.js'
       - 'pod-provider/backend/tests/collective-memberships.test.js'
       - 'pod-provider/backend/tests/collective-reservations-api.test.js'
-      - 'pod-provider/backend/tests/collective-solid-oidc-http.test.js'
       - '.github/workflows/paper-groups-g2-membership-issuer.yml'
   workflow_dispatch:
 
@@ -45,7 +44,9 @@ jobs:
           sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
           yarn install --ignore-scripts --frozen-lockfile
 
-      - name: Execute issuer, authority, and existing G1 provider gateway regression
+      # Native Sharp/Libvips is intentionally excluded from this light unit lane.
+      # The existing full Backend checks workflow runs the real HTTP gateway suite.
+      - name: Execute issuer, authority, and existing G1 provider gateway unit regression
         run: |
           set -euo pipefail
           NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
@@ -53,5 +54,4 @@ jobs:
             --runTestsByPath \
             pod-provider/backend/tests/collective-membership-issuer.test.js \
             pod-provider/backend/tests/collective-memberships.test.js \
-            pod-provider/backend/tests/collective-reservations-api.test.js \
-            pod-provider/backend/tests/collective-solid-oidc-http.test.js
+            pod-provider/backend/tests/collective-reservations-api.test.js

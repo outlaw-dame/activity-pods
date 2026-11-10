@@ -9,6 +9,7 @@ on:
       - 'pod-provider/backend/tests/collective-membership-issuer.test.js'
       - 'pod-provider/backend/tests/collective-memberships.test.js'
       - 'pod-provider/backend/tests/collective-reservations-api.test.js'
+      - 'pod-provider/backend/tests/collective-solid-oidc-http.test.js'
       - '.github/workflows/paper-groups-g2-membership-issuer.yml'
   workflow_dispatch:
 
@@ -52,4 +53,5 @@ jobs:
             --runTestsByPath \
             pod-provider/backend/tests/collective-membership-issuer.test.js \
             pod-provider/backend/tests/collective-memberships.test.js \
-            pod-provider/backend/tests/collective-reservations-api.test.js
+            pod-provider/backend/tests/collective-reservations-api.test.js \
+            pod-provider/backend/tests/collective-solid-oidc-http.test.js

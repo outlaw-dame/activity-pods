@@ -40,11 +40,28 @@ describe('Paper G2 local and remote bounded fan-out planning', () => {
     const result = plan([], recipients);
     expect(result.localBatches).toHaveLength(0);
     expect(result.remoteRecipientCount).toBe(n);
-    expect(result.remoteBatches).toHaveLength(Math.ceil(n / MAX_REMOTE_BATCH));
+    // One public sharedInbox = one remote delivery intent; batching
+    // recipient metadata must never multiply HTTP POST destinations.
+    expect(result.remoteBatches).toHaveLength(1);
     expect(result.remoteBatches.every(b =>
       b.destination === 'https://remote.example/inbox' && b.mode === 'sharedInbox')).toBe(true);
     expect(result.remoteBatches.flatMap(b => b.recipientActors)).toHaveLength(n);
   });
+  test('same sharedInbox for 1000 users is one remote delivery intent, not 16 duplicate sends', () => {
+    const result = plan([], Array.from({ length: 1000 }, (_, i) => remote(i)));
+    expect(result.remoteBatches).toHaveLength(1);
+    expect(result.remoteBatches[0].recipientActors).toHaveLength(1000);
+    expect(result.remoteBatches[0].destination).toBe('https://remote.example/inbox');
+  });
+  test('different direct actor recipients never coalesce even on same inbox URI', () => {
+    const result = plan([], [
+      { ...remote(1), sharedInboxUrl: null, inboxUrl: 'https://remote.example/inbox' },
+      { ...remote(2), sharedInboxUrl: null, inboxUrl: 'https://remote.example/inbox' }
+    ]);
+    expect(result.remoteBatches).toHaveLength(2);
+    expect(result.remoteBatches.every(batch => batch.mode === 'actorInbox')).toBe(true);
+  });
+
   test('members-only and unlisted groups never use sharedInbox', () => {
     for (const visibility of ['members', 'unlisted']) {
       const result = plan([], [remote(1), remote(2)], visibility);

@@ -195,6 +195,36 @@ async function main() {
     alternatives.push(record('direct-term'));
     indexMetrics.push(record('indexed'));
   }
+  // Index data are private: revoking the stable SAI ledger must deny
+  // reads even when the same page and index epoch physically exist.
+  await request('update', 'PREFIX apods: <http://activitypods.org/ns/core#> ' +
+    'DELETE DATA { ' + ledger + ' apods:collectiveConsentStatus "stable" . }; ' +
+    'INSERT DATA { ' + ledger + ' apods:collectiveConsentStatus "blocked" . }');
+  assert.equal((await request('query', index.readPageQuery({
+    groupId, owner, app, revision, cursor: null
+  }))).length, 0, 'Revoked consent exposed indexed members');
+  await request('update', 'PREFIX apods: <http://activitypods.org/ns/core#> ' +
+    'DELETE DATA { ' + ledger + ' apods:collectiveConsentStatus "blocked" . }; ' +
+    'INSERT DATA { ' + ledger + ' apods:collectiveConsentStatus "stable" . }');
+  const disabled = '<http://semapps.org/ns/core#disabled>';
+  await request('update', 'INSERT DATA { ' + account + ' ' + disabled + ' true . }');
+  assert.equal((await request('query', index.readPageQuery({
+    groupId, owner, app, revision, cursor: null
+  }))).length, 0, 'Disabled owner exposed indexed members');
+  await request('update', 'DELETE DATA { ' + account + ' ' + disabled + ' true . }');
+  const duplicate = '<urn:apods:benchmark:duplicate-owner>';
+  await request('update', 'INSERT DATA { ' + duplicate +
+    ' a <http://semapps.org/ns/core#AuthAccount> ; ' +
+    '<http://semapps.org/ns/core#webId> ' + JSON.stringify(owner) + ' . }');
+  assert.equal((await request('query', index.readPageQuery({
+    groupId, owner, app, revision, cursor: null
+  }))).length, 0, 'Duplicate owner exposed indexed members');
+  await request('update', 'DELETE DATA { ' + duplicate +
+    ' a <http://semapps.org/ns/core#AuthAccount> ; ' +
+    '<http://semapps.org/ns/core#webId> ' + JSON.stringify(owner) + ' . }');
+  assert.equal((await request('query', index.readPageQuery({
+    groupId, owner, app, revision, cursor: null
+  }))).length, 1, 'Authorized index read did not recover after controls restored');
   // After authoritative epoch changes, the sealed projection must become
   // unreadable even though the old stage records physically remain.
   const before = await request('query', index.readPageQuery({

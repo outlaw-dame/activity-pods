@@ -1,0 +1,24 @@
+services:
+  backend:
+    # Disposable HTTPS origins only. Keep G1 public routes and worker leases
+    # disabled with the immutable code release fuse.
+    extra_hosts:
+      - "paper-e2e.test:host-gateway"
+      - "app-e2e.test:host-gateway"
+    volumes:
+      - ./e2e-tls:/app/e2e-tls:ro
+    environment:
+      SEMAPPS_HOME_URL: 'https://paper-e2e.test:3443/'
+      SEMAPPS_FRONTEND_URL: 'https://paper-e2e.test:3443/'
+      NODE_EXTRA_CA_CERTS: '/app/e2e-tls/ca.crt'
+      PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
+      PROVIDER_COLLECTIVES_APPROVED_APPS: 'https://app-e2e.test:3443/app'
+      PROVIDER_COLLECTIVES_API_ENABLED: 'false'
+      PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED: 'false'
+      APODS_AUTO_PROVISION_ATPROTO_ON_SIGNUP: 'false'
+      APODS_FORCE_COMPLETE_SIGNUP_BOOTSTRAP: 'true'
+      APODS_DEFER_COMPLETE_SIGNUP_BOOTSTRAP: 'true'
+      REDIS_URL: 'redis://redis:6379'
+      SEMAPPS_REDIS_CACHE_URL: 'redis://redis:6379/10'
+      SEMAPPS_ACTIVITYPUB_REMOTE_DELIVERY_MODE: 'native'
+      SIDECAR_WEBHOOK_URL: ''

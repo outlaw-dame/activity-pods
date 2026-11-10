@@ -49,6 +49,7 @@ function assertInput(params, operation) {
 async function transaction(pool, fn) {
   const client = await pool.connect();
   let inTransaction = false;
+  let connectionBroken = false;
   try {
     await client.query('BEGIN');
     inTransaction = true;
@@ -61,11 +62,14 @@ async function transaction(pool, fn) {
     return result;
   } catch (error) {
     if (inTransaction) {
-      try { await client.query('ROLLBACK'); } catch (_) { /* preserve error */ }
+      try { await client.query('ROLLBACK'); }
+      catch (_) { connectionBroken = true; /* preserve original error */ }
     }
     throw error;
   } finally {
-    client.release();
+    // Failed rollback leaves unknown transaction state. A poisoned
+    // connection must never be returned to the shared pool.
+    client.release(connectionBroken);
   }
 }
 async function authority(client, { owner, app, groupId }, groupMode) {
@@ -93,8 +97,13 @@ async function authority(client, { owner, app, groupId }, groupMode) {
   if (group.rowCount !== 1 || group.rows[0].state === 'suspended') {
     fail('GROUP_POSTGRES_AUTHORITY_DENIED');
   }
-  return { revision: Number(group.rows[0].revision),
-    consentRevision: Number(consent.rows[0].revision) };
+  const revision = Number(group.rows[0].revision);
+  const consentRevision = Number(consent.rows[0].revision);
+  if (!Number.isSafeInteger(revision) || revision < 1 ||
+      !Number.isSafeInteger(consentRevision) || consentRevision < 1) {
+    fail('GROUP_POSTGRES_EPOCH_UNVERIFIED', 503);
+  }
+  return { revision, consentRevision };
 }
 function createCandidateService({ pool, fixtureOnly = false } = {}) {
   if (!pool || typeof pool.connect !== 'function') {

@@ -53,6 +53,7 @@ async function assertLiveCollectiveConsent(ctx, { principal, app, operation, app
   // authorization failures into "allowed" or cached grants.
   const account = await ctx.call('auth.account.findByWebId', { webId: principal });
   if (!account || account.webId !== principal || account.disabled === true ||
+      account.deletedAt != null || account.suspendedAt != null ||
       account.deleted === true || account.status === 'suspended' ||
       account.status === 'deleted') deny('COLLECTIVE_USER_NOT_FOUND');
   const registered = await ctx.call('app-registrations.isRegistered', {

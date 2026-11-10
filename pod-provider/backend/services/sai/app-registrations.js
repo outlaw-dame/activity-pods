@@ -120,6 +120,13 @@ module.exports = {
   },
   hooks: {
     before: {
+      async post(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = ctx.params.resource || {};
+        // Registration creation must be fenced as well as updates/deletes:
+        // a direct LDP POST may race with an already approved SAI grant.
+        await beginRegistrationMutation(ctx, resource);
+      },
       async put(ctx) {
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
         // A registration update can change the effective app authority.

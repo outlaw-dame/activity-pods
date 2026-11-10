@@ -147,10 +147,15 @@ async function call(name, params) {
   throw new Error('Unexpected SAI action ' + name);
 }
 const ctx = params => ({ params, meta: {}, call });
+// ControlledContainer mixin normally provides Moleculer action wrappers that
+// convert params into ctx.params. This isolated adapter must preserve that
+// calling contract, not invoke service handler functions with bare params.
 const authHooks = {
   actions: {
-    addPermissionsFromSpecialRights: access.actions.addPermissionsFromSpecialRights,
-    removePermissionsFromSpecialRights: access.actions.removePermissionsFromSpecialRights
+    addPermissionsFromSpecialRights: params =>
+      access.actions.addPermissionsFromSpecialRights({ params, call }),
+    removePermissionsFromSpecialRights: params =>
+      access.actions.removePermissionsFromSpecialRights({ params, call })
   }
 };
 async function createRegistration() {

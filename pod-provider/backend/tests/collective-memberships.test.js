@@ -107,9 +107,9 @@ describe('G2 owner-scoped membership authority release boundary', () => {
   test('bounded keyset read returns revision-bound owner scoped page', async () => {
     const params = authorized('list', { cursor: undefined, limit: 2 });
     const t = fakeCtx(params, [
+      { actor: binding(member), role: binding('member'), epoch: binding(4) },
       { actor: binding('https://paper.example/users/alice#me'),
         role: binding('owner'), epoch: binding(4) },
-      { actor: binding(member), role: binding('member'), epoch: binding(4) },
       { actor: binding('https://remote.example/users/carol'),
         role: binding('member'), epoch: binding(4) }
     ]);

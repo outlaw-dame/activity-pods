@@ -17,6 +17,7 @@ const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
 const { MoleculerError } = require('moleculer').Errors;
 const { approvedBrowserOrigins, canonicalOrigin } = require('./utils/collective-endpoint-policy');
 const { reserveFingerprint } = require('./utils/collective-grant-claims');
+const membershipGrant = require('./utils/collective-membership-grant');
 
 const PURPOSE = 'provider.collective.reservation.v1';
 
@@ -70,7 +71,7 @@ function expectedIssuer(origin) {
 
 module.exports = {
   name: 'collective-reservations-api',
-  dependencies: ['api', 'jwk', 'collective-reservations'],
+  dependencies: ['api', 'jwk', 'collective-reservations', 'collective-memberships'],
   settings: {
     enabled: CONSENT_BRIDGE_RELEASED &&
       process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED === 'true' &&
@@ -78,6 +79,10 @@ module.exports = {
       process.env.PROVIDER_COLLECTIVES_API_ENABLED === 'true',
     providerOrigin: process.env.SEMAPPS_HOME_URL || '',
     grantSecret: process.env.PROVIDER_COLLECTIVES_GRANT_SECRET || '',
+    membershipApiEnabled: CONSENT_BRIDGE_RELEASED &&
+      process.env.PROVIDER_COLLECTIVES_MEMBERSHIPS_ENABLED === 'true' &&
+      process.env.PROVIDER_COLLECTIVES_MEMBERS_API_ENABLED === 'true',
+    membershipGrantSecret: process.env.PROVIDER_COLLECTIVES_MEMBERSHIP_SECRET || '',
     allowedOriginsConfig: process.env.PROVIDER_COLLECTIVES_ALLOWED_ORIGINS || ''
   },
 
@@ -104,7 +109,11 @@ module.exports = {
         },
         aliases: {
           'POST /reserve': 'collective-reservations-api.reserve',
-          'GET /:canonicalGroupId': 'collective-reservations-api.get'
+          'GET /:canonicalGroupId': 'collective-reservations-api.get',
+          ...(this.settings.membershipApiEnabled ? {
+            'GET /:canonicalGroupId/members': 'collective-reservations-api.listMembers',
+            'POST /:canonicalGroupId/members/change': 'collective-reservations-api.changeMember'
+          } : {})
         }
       },
       toBottom: false
@@ -112,6 +121,199 @@ module.exports = {
   },
 
   actions: {
+    listMembers: {
+      params: {
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32} { displayName: { type: 'string', min: 1 } },
+      async handler(ctx) {
+        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.grantSecret) < 32) {
+          fail('COLLECTIVE_API_DISABLED', 503);
+        }
+        const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
+        if (typeof idempotencyKey !== 'string' ||
+            !/^[A-Za-z0-9_-]{24,128}$/u.test(idempotencyKey)) {
+          // Invalid parameters require no cryptographic work or downstream
+          // calls, and the raw bearer must not linger in request metadata.
+          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
+          fail('COLLECTIVE_INVALID_IDEMPOTENCY', 400);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const requestHash = reserveFingerprint(
+          principal, app, idempotencyKey, ctx.params.displayName
+        );
+        const grant = makeProviderGrant(
+          this.settings.grantSecret, principal, app, 'reserve', requestHash
+        );
+
+        const outcome = await ctx.call('collective-reservations.reserve', {
+          principal, app, idempotencyKey, displayName: ctx.params.displayName, grant
+        });
+        ctx.meta.$statusCode = 202;
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff'
+        };
+        return outcome;
+      }
+    },
+    get: {
+      params: {
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' }
+      },
+      async handler(ctx) {
+        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.grantSecret) < 32) {
+          fail('COLLECTIVE_API_DISABLED', 503);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const canonicalGroupId = ctx.params.canonicalGroupId;
+        // Validate at the service boundary too: internal Moleculer calls can
+        // bypass route-level FastestValidator declarations.
+        if (typeof canonicalGroupId !== 'string' ||
+            !/^cg_[a-f0-9]{32}$/u.test(canonicalGroupId)) {
+          fail('COLLECTIVE_INVALID_ID', 400);
+        }
+        const grant = makeProviderGrant(
+          this.settings.grantSecret, principal, app, 'read', canonicalGroupId
+        );
+        const outcome = await ctx.call('collective-reservations.get', {
+          principal, app, canonicalGroupId, grant
+        });
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff'
+        };
+        return outcome;
+      }
+    }
+  }
+};
+ },
+        cursor: { type: 'string', optional: true },
+        limit: { type: 'number', integer: true, min: 1, max: 1000 }
+      },
+      async handler(ctx) {
+        if (!this.settings.enabled || !this.settings.membershipApiEnabled ||
+            typeof this.settings.membershipGrantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.membershipGrantSecret) < 32) {
+          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
+          fail('GROUP_MEMBERSHIP_ISSUER_DISABLED', 503);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const params = {
+          groupId: ctx.params.canonicalGroupId, owner: principal, app,
+          limit: ctx.params.limit, cursor: ctx.params.cursor
+        };
+        let grant;
+        try { grant = membershipGrant.issueGrant(this.settings.membershipGrantSecret, 'list', params); }
+        catch { fail('GROUP_MEMBERSHIP_INVALID_INPUT', 400); }
+        const result = await ctx.call('collective-memberships.list', { ...params, grant });
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'
+        };
+        return result;
+      }
+    },
+    changeMember: {
+      params: {
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32} { displayName: { type: 'string', min: 1 } },
+      async handler(ctx) {
+        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.grantSecret) < 32) {
+          fail('COLLECTIVE_API_DISABLED', 503);
+        }
+        const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
+        if (typeof idempotencyKey !== 'string' ||
+            !/^[A-Za-z0-9_-]{24,128}$/u.test(idempotencyKey)) {
+          // Invalid parameters require no cryptographic work or downstream
+          // calls, and the raw bearer must not linger in request metadata.
+          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
+          fail('COLLECTIVE_INVALID_IDEMPOTENCY', 400);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const requestHash = reserveFingerprint(
+          principal, app, idempotencyKey, ctx.params.displayName
+        );
+        const grant = makeProviderGrant(
+          this.settings.grantSecret, principal, app, 'reserve', requestHash
+        );
+
+        const outcome = await ctx.call('collective-reservations.reserve', {
+          principal, app, idempotencyKey, displayName: ctx.params.displayName, grant
+        });
+        ctx.meta.$statusCode = 202;
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff'
+        };
+        return outcome;
+      }
+    },
+    get: {
+      params: {
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' }
+      },
+      async handler(ctx) {
+        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.grantSecret) < 32) {
+          fail('COLLECTIVE_API_DISABLED', 503);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const canonicalGroupId = ctx.params.canonicalGroupId;
+        // Validate at the service boundary too: internal Moleculer calls can
+        // bypass route-level FastestValidator declarations.
+        if (typeof canonicalGroupId !== 'string' ||
+            !/^cg_[a-f0-9]{32}$/u.test(canonicalGroupId)) {
+          fail('COLLECTIVE_INVALID_ID', 400);
+        }
+        const grant = makeProviderGrant(
+          this.settings.grantSecret, principal, app, 'read', canonicalGroupId
+        );
+        const outcome = await ctx.call('collective-reservations.get', {
+          principal, app, canonicalGroupId, grant
+        });
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff'
+        };
+        return outcome;
+      }
+    }
+  }
+};
+ },
+        member: 'string', role: 'string', status: 'string',
+        expectedEpoch: 'number|integer|min:1'
+      },
+      async handler(ctx) {
+        if (!this.settings.enabled || !this.settings.membershipApiEnabled ||
+            typeof this.settings.membershipGrantSecret !== 'string' ||
+            Buffer.byteLength(this.settings.membershipGrantSecret) < 32) {
+          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
+          fail('GROUP_MEMBERSHIP_ISSUER_DISABLED', 503);
+        }
+        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
+        const params = {
+          groupId: ctx.params.canonicalGroupId, owner: principal, app,
+          member: ctx.params.member, role: ctx.params.role,
+          status: ctx.params.status, expectedEpoch: ctx.params.expectedEpoch
+        };
+        let grant;
+        try { grant = membershipGrant.issueGrant(this.settings.membershipGrantSecret, 'change', params); }
+        catch { fail('GROUP_MEMBERSHIP_INVALID_INPUT', 400); }
+        const result = await ctx.call('collective-memberships.change', { ...params, grant });
+        ctx.meta.$responseHeaders = {
+          ...(ctx.meta.$responseHeaders || {}),
+          'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'
+        };
+        return result;
+      }
+    },
     reserve: {
       params: { displayName: { type: 'string', min: 1 } },
       async handler(ctx) {

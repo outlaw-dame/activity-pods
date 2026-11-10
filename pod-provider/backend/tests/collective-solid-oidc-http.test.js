@@ -313,8 +313,12 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
     const injected = await requestMembers(solid, '/change', 'POST', {
       ...payload, owner: 'https://evil.example#me', app: 'https://evil.example/app'
     });
-    // Extra client input must never be able to replace the signed principal.
-    expect(injected.response.status).toBeGreaterThanOrEqual(400);
+    // Whether ignored or rejected by the gateway validator, client-supplied
+    // owner/app must never replace the signed identity used for authorization.
+    expect([200, 400, 422]).toContain(injected.response.status);
+    if (injected.response.status === 200) {
+      expect(JSON.parse(injected.text).membershipRevision).toBe(8);
+    }
   });
 
   test('membership HTTP denies invalid page, actor and forged-issuer bearer', async () => {

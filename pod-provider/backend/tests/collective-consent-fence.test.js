@@ -182,10 +182,16 @@ const testBegin = () => ({ token: '11111111-1111-4111-8111-111111111111',
 
 describe('SAI authorization and app-registration pre-mutation barriers', () => {
   const original = process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED;
-  beforeEach(() => { process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED = 'true'; });
+  const previousApps = process.env.PROVIDER_COLLECTIVES_APPROVED_APPS;
+  beforeEach(() => {
+    process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED = 'true';
+    process.env.PROVIDER_COLLECTIVES_APPROVED_APPS = app;
+  });
   afterAll(() => {
     if (original === undefined) delete process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED;
     else process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED = original;
+    if (previousApps === undefined) delete process.env.PROVIDER_COLLECTIVES_APPROVED_APPS;
+    else process.env.PROVIDER_COLLECTIVES_APPROVED_APPS = previousApps;
   });
 
   test('Group right creation is fenced before LDP write; not personal WebACL', async () => {
@@ -247,6 +253,40 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
       }
     });
     expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.begin']);
+  });
+
+  test('unrelated SAI apps never add Group broker calls or Fuseki mutations', async () => {
+    const calls = [];
+    const other = 'https://unrelated.example/app';
+    const ctx = {
+      params: { resource: {
+        'interop:registeredBy': principal, 'interop:registeredAgent': other
+      } },
+      async call(name) {
+        calls.push(name);
+        return true;
+      }
+    };
+    await registrations.hooks.before.post(ctx);
+    await registrations.hooks.after.post(ctx, 'https://provider.example/reg/unrelated');
+    expect(calls).toEqual([
+      'ldp.remote.store', 'applications.attach', 'agent-registry.add'
+    ]);
+    const puts = [];
+    const putCtx = {
+      params: {
+        resourceUri: 'https://provider.example/reg/unrelated',
+        resource: { 'interop:registeredBy': principal, 'interop:registeredAgent': other }
+      },
+      async call(name) {
+        puts.push(name);
+        if (name === 'app-registrations.get') return putCtx.params.resource;
+        return true;
+      }
+    };
+    await registrations.hooks.before.put(putCtx);
+    await registrations.hooks.after.put(putCtx, true);
+    expect(puts).toEqual(['app-registrations.get', 'ldp.remote.store']);
   });
 
   test('new app registration is fenced before LDP POST and only finished after registry update', async () => {

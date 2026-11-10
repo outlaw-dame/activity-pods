@@ -236,9 +236,14 @@ class CandidateIntegration(unittest.TestCase):
             "Large Group keyset lookup must use a real index")
         self.assertNotIn("Seq Scan",plan,
             "Large Group keyset lookup must not use full table scan")
+        sizes=self.admin.execute(
+            "SELECT pg_total_relation_size('paper_groups_candidate.members'::regclass),"
+            "pg_indexes_size('paper_groups_candidate.members'::regclass)"
+        ).fetchone()
         print(json.dumps({"proof":"g2-postgres-100k-roster","ok":True,
-            "rows":count,"pageLatencyMs":timings,
-            "indexUsed":True}),flush=True)
+            "rows":count,"pageLatencyMs":timings,"indexUsed":True,
+            "totalMemberTableAndIndexBytes":sizes[0],
+            "totalMemberIndexBytes":sizes[1]}),flush=True)
 
     def test_03d_16_concurrent_full_authorization_group_writers(self):
         # Three independent trials avoid presenting one noisy shared GitHub

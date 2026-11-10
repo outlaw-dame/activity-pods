@@ -36,6 +36,8 @@ jobs:
       - name: Prove membership initialization, optimistic CAS and keyset paging
         env:
           FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
         run: node backend/scripts/proof-collective-membership-fuseki.js prepare
       - name: Restart real Fuseki with persistent dataset
         run: |
@@ -44,6 +46,8 @@ jobs:
       - name: Prove membership revision and bans persisted across restart
         env:
           FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
         run: node backend/scripts/proof-collective-membership-fuseki.js verify
       - name: Diagnostics on failure
         if: failure()

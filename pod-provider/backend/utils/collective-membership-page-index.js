@@ -80,7 +80,7 @@ function readPageQuery({ groupId, owner, app, revision, cursor = null }) {
   const select = base.replace('SELECT ?epoch WHERE {',
     'SELECT ?epoch ?pageJson ?pageDigest WHERE {');
   if (select === base || !select.endsWith('} LIMIT 2')) reject('UNEXPECTED_AUTHORITY_TEMPLATE');
-  return select.replace(/} LIMIT 2$/u,
+  return select.replace('} LIMIT 2',
     g + ' apods:collectiveIndexedMembershipEpoch ?epoch . ' +
     page + ' apods:collectiveIndexPageJson ?pageJson ; ' +
     'apods:collectiveIndexPageDigest ?pageDigest . } LIMIT 2');

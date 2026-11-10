@@ -201,13 +201,18 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
     ]);
   });
 
-  test('registration update finishes only after native storage/cache hook completes', async () => {
+  test('registration update finishes only after authoritative identity check and cache update', async () => {
     const seen = [];
     const ctx = {
-      params: { resource: { 'interop:registeredBy': principal,
-        'interop:registeredAgent': app } },
+      params: {
+        resourceUri: 'https://provider.example/registrations/1',
+        resource: { 'interop:registeredBy': principal, 'interop:registeredAgent': app }
+      },
       async call(name) {
         seen.push(name);
+        if (name === 'app-registrations.get') return {
+          'interop:registeredBy': principal, 'interop:registeredAgent': app
+        };
         if (name === 'collective-consent-fence.begin') return testBegin();
         return true;
       }
@@ -215,10 +220,24 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
     await registrations.hooks.before.put(ctx);
     await registrations.hooks.after.put(ctx, {});
     expect(seen).toEqual([
-      'collective-consent-fence.begin',
-      'ldp.remote.store',
-      'collective-consent-fence.finish'
+      'app-registrations.get', 'collective-consent-fence.begin',
+      'ldp.remote.store', 'collective-consent-fence.finish'
     ]);
+  });
+  test('registration PUT cannot retarget another application or owner', async () => {
+    const calls = [];
+    await expect(registrations.hooks.before.put({
+      params: {
+        resourceUri: 'https://provider.example/registrations/1',
+        resource: { 'interop:registeredBy': principal,
+          'interop:registeredAgent': 'https://attacker.example/app' }
+      },
+      async call(name) {
+        calls.push(name);
+        return { 'interop:registeredBy': principal, 'interop:registeredAgent': app };
+      }
+    })).rejects.toThrow('SAI_REGISTRATION_IDENTITY_IMMUTABLE');
+    expect(calls).toEqual(['app-registrations.get']);
   });
   test('registration cleanup keeps provider blocked until related grants are removed', async () => {
     const seen = [];
@@ -245,10 +264,13 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
   test('mutation cleanup failure leaves fence blocked (no finish callback)', async () => {
     const seen = [];
     const ctx = {
-      params: { resource: { 'interop:registeredBy': principal,
-        'interop:registeredAgent': app } },
+      params: { resourceUri: 'https://provider.example/registrations/1',
+        resource: { 'interop:registeredBy': principal, 'interop:registeredAgent': app } },
       async call(name) {
         seen.push(name);
+        if (name === 'app-registrations.get') return {
+          'interop:registeredBy': principal, 'interop:registeredAgent': app
+        };
         if (name === 'collective-consent-fence.begin') return testBegin();
         if (name === 'ldp.remote.store') throw new Error('cache write failed');
         return true;
@@ -259,14 +281,21 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
     expect(seen).not.toContain('collective-consent-fence.finish');
   });
 
-  test('app registration update invalidates before updating grant links', async () => {
+  test('app registration update acquires a barrier before writing', async () => {
     const seen = [];
     await registrations.hooks.before.put({
-      params: { resource: {
-        'interop:registeredBy': principal, 'interop:registeredAgent': app
-      } },
-      call: async name => { seen.push(name); return testBegin(); }
+      params: {
+        resourceUri: 'https://provider.example/registrations/1',
+        resource: { 'interop:registeredBy': principal, 'interop:registeredAgent': app }
+      },
+      call: async name => {
+        seen.push(name);
+        if (name === 'app-registrations.get') return {
+          'interop:registeredBy': principal, 'interop:registeredAgent': app
+        };
+        return testBegin();
+      }
     });
-    expect(seen).toEqual(['collective-consent-fence.begin']);
+    expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.begin']);
   });
 });

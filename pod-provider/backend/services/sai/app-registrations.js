@@ -1,11 +1,30 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
+const { parseApprovedApps } = require('../utils/collective-access-policy');
+
+// Do not add a Group consent barrier to every unrelated local SAI app install,
+// upgrade or removal. Only apps explicitly eligible to create Groups require
+// this extra settings-dataset transaction. Runtime policy changes require the
+// documented quiescent allowlist rollout; never infer eligibility from a
+// client-provided rights document.
+let cachedPolicy = null;
+let cachedApprovedApps = new Set();
+function isCollectiveApproved(app) {
+  const policy = process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || '';
+  if (cachedPolicy !== policy) {
+    cachedApprovedApps = new Set(parseApprovedApps(policy));
+    cachedPolicy = policy;
+  }
+  return typeof app === 'string' && cachedApprovedApps.has(app);
+}
+
 
 // Per-action, non-propagating context. Crashed/failed writes stay blocked.
 const inFlightRegistrations = new WeakMap();
 async function beginRegistrationMutation(ctx, resource) {
   const principal = resource['interop:registeredBy'];
-  const app = resource['interop:registeredAgent'];
+  const app = resource?.['interop:registeredAgent'];
+  if (!isCollectiveApproved(app)) return;
   const result = await ctx.call('collective-consent-fence.begin', { principal, app });
   if (!result || result.status !== 'blocked' || typeof result.token !== 'string' ||
       !/^[0-9a-f-]{36}$/u.test(result.token)) {

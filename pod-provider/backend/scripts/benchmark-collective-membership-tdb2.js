@@ -47,6 +47,20 @@ async function request(kind, statement) {
 function actor(i) {
   return 'https://remote-benchmark.example/users/u' + String(i).padStart(7, '0');
 }
+function directTermQuery(params) {
+  const original = rdf.listQuery(params);
+  assert(original.includes('ORDER BY STR(?actor)'), 'Unexpected canonical query shape');
+  const alternative = original
+    .replace('ORDER BY STR(?actor)', 'ORDER BY ?actor')
+    .replace('FILTER(STR(?actor) > ', 'FILTER(?actor > ');
+  assert(alternative !== original, 'Alternative must differ from canonical query');
+  return alternative;
+}
+function semanticRows(rows) {
+  return rows.map(row => [
+    row.actor?.value, row.role?.value, row.epoch?.value
+  ]);
+}
 function percentile(values, percentileValue) {
   const ordered = [...values].sort((a, b) => a - b);
   return Number(ordered[Math.ceil(percentileValue * ordered.length) - 1].toFixed(2));
@@ -90,33 +104,52 @@ async function main() {
     ['deep-page', actor(count - 201)]
   ];
   const output = [];
+  const alternatives = [];
   for (const [name, cursor] of phases) {
-    const durations = [];
+    const params = { groupId, owner, app, cursor, limit: 100 };
+    const plans = [
+      ['canonical', rdf.listQuery(params)],
+      ['direct-term', directTermQuery(params)]
+    ];
+    const durations = { canonical: [], 'direct-term': [] };
+    let referenceRows = null;
+    // Alternate execution order to reduce systematic warm-cache bias.
     for (let rep = 0; rep < 5; rep++) {
-      const begin = performance.now();
-      const rows = await request('query', rdf.listQuery({
-        groupId, owner, app, cursor, limit: 100
-      }));
-      durations.push(performance.now() - begin);
-      assert.equal(rows.length, 101, 'Expected keyset page + lookahead for ' + name);
-      for (let i = 1; i < rows.length; i++) {
-        assert(rows[i - 1].actor.value < rows[i].actor.value,
-          'Nonmonotonic actor key at ' + name);
+      const ordered = rep % 2 === 0 ? plans : [...plans].reverse();
+      for (const [variant, sparql] of ordered) {
+        const begin = performance.now();
+        const rows = await request('query', sparql);
+        durations[variant].push(performance.now() - begin);
+        assert.equal(rows.length, 101, 'Expected 100 + lookahead: ' + name + '/' + variant);
+        for (let i = 1; i < rows.length; i++) {
+          assert(rows[i - 1].actor.value < rows[i].actor.value,
+            'Nonmonotonic actor key at ' + name + '/' + variant);
+        }
+        if (cursor) assert(rows[0].actor.value > cursor);
+        const currentRows = semanticRows(rows);
+        if (referenceRows === null) referenceRows = currentRows;
+        else assert.deepEqual(currentRows, referenceRows,
+          'Alternative changed actors, roles, order or epoch at ' + name);
       }
-      if (cursor) assert(rows[0].actor.value > cursor);
     }
-    output.push({
-      phase: name, queryCount: durations.length,
-      p50Ms: percentile(durations, 0.5), p95Ms: percentile(durations, 0.95),
-      maxMs: Number(Math.max(...durations).toFixed(2))
-    });
+    function record(variant) {
+      const samples = durations[variant];
+      return {
+        phase: name, queryCount: samples.length,
+        p50Ms: percentile(samples, 0.5), p95Ms: percentile(samples, 0.95),
+        maxMs: Number(Math.max(...samples).toFixed(2))
+      };
+    }
+    output.push(record('canonical'));
+    alternatives.push(record('direct-term'));
   }
   const result = {
     proof: 'g2-membership-tdb2-page-cost', members: count,
     pageSize: 100, backend: 'disposable-Fuseki-TDB2',
     seedMs: Number(seedMs.toFixed(2)),
     queryMetrics: output,
-    totalReadRequests: output.reduce((sum, x) => sum + x.queryCount, 0),
+    alternativeQueryMetrics: alternatives,
+    totalReadRequests: [...output, ...alternatives].reduce((sum, x) => sum + x.queryCount, 0),
     measuredNodeRssBytes: process.memoryUsage().rss,
     warning: 'Observed isolated query latency, NOT throughput, provider CPU or production capacity'
   };

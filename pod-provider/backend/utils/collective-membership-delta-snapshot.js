@@ -77,8 +77,7 @@ function decodeDeltaSnapshot(rows, { groupId, owner, maxDelta = MAX_DELTA }) {
     const status = value(row, 'status');
     if (typeof subject !== 'string' ||
         !subject.startsWith('urn:apods:collective-member:') ||
-        subject.length !== 96 ||
-        uri === ownerUri || (role !== 'owner' && !rdf.ROLES.has(role)) ||
+        uri === ownerUri || !rdf.ROLES.has(role) ||
         !rdf.STATUSES.has(status) ||
         seenActors.has(uri) || seenSubjects.has(subject) ||
         subject !== rdf.memberSubject(groupId, uri).slice(1, -1)) {

@@ -7,10 +7,11 @@ A cursor alone is not evidence of an indexed query.
 
 ## Execution and isolation
 
-`paper-groups-g2-membership-cost.yml` creates a disposable localhost Fuseki
-TDB2 settings dataset and destroys it after each run. PR runs collect the
-1,000-member smoke probe. The workflow_dispatch input supports exactly
-1,000, 10,000 or 100,000 synthetic member rows, never production identities.
+`paper-groups-g2-membership-cost.yml` creates disposable localhost Fuseki
+TDB2 settings datasets, deleting the bind-mounted data before each cardinality.
+PR runs measure **1,000, 10,000 and 100,000 sequentially on the same runner**
+to reduce unmatched-host noise. The workflow_dispatch input supports one
+selected cardinality, never production identities.
 The script refuses non-localhost endpoints, any preexisting benchmark Group
 record, and the absence of an explicit disposable execution marker.
 Do not run against a mounted production data volume or reuse the test fixture.
@@ -37,7 +38,7 @@ Do not equate a 1k smoke test with scalability acceptance.
 
 ## Decision gate
 
-Compare the three cardinalities and deep-page latency before authorizing
+Compare the matched-host cardinalities and deep-page latency before authorizing
 membership pagination as a component of local or remote Group fan-out.
 If deep-page scans grow materially with cardinality, optimize the existing
 provider authority with a verified indexed Group+actor projection or an
@@ -47,3 +48,23 @@ Fedify, add a second identity issuer or bypass account/consent checks.
 The immutable Group release fuse must remain closed regardless of benchmark
 outcome. G2-P3 local Pod delivery and G2-P4 Fedify remote dispatch require
 their own real 1/10/100/1,000 recipient cost/fault acceptance.
+
+
+## Initial exploratory evidence (not promotion evidence)
+
+Run [42858449542](https://github.com/outlaw-dame/activity-pods/actions/runs/42858449542)
+measured isolated TDB2 membership pages, five samples per cardinality/position,
+but each size used a **different hosted runner**. Values below demonstrate
+a potentially expensive query and must not be interpreted as matched-host
+scaling ratios. These are **p50 milliseconds**, not capacity or throughput.
+
+| Members | First page | Middle page | Deep page |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 83.71 | 40.57 | 27.95 |
+| 10,000 | 400.48 | 128.36 | 37.32 |
+| 100,000 | 2119.95 | 1152.18 | 358.22 |
+
+This evidence triggered the matched-host and paired-query tests. Do not
+claim an indexed seek or production-read SLA until the new results and query
+plans establish it. The CI artifact is retained for 14 days; this table
+preserves the initial readings after artifact expiry.

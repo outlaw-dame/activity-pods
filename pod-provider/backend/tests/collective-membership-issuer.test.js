@@ -58,7 +58,7 @@ describe('G2 provider native membership issuer (release fenced)', () => {
       broker: { call: async (...args) => captured.push(args) }
     });
     expect(Object.keys(captured[0][1].route.aliases)).not.toContain(
-      'POST /:canonicalGroupId/members/change'
+      'GET /:canonicalGroupId/members'
     );
     const enabled = [];
     await api.started.call({
@@ -67,9 +67,11 @@ describe('G2 provider native membership issuer (release fenced)', () => {
       broker: { call: async (...args) => enabled.push(args) }
     });
     expect(enabled[0][1].route.aliases).toMatchObject({
-      'GET /:canonicalGroupId/members': 'collective-reservations-api.listMembers',
-      'POST /:canonicalGroupId/members/change': 'collective-reservations-api.changeMember'
+      'GET /:canonicalGroupId/members': 'collective-reservations-api.listMembers'
     });
+    expect(enabled[0][1].route.aliases).not.toHaveProperty(
+      'POST /:canonicalGroupId/members/change'
+    );
     expect(enabled[0][1].route.authentication).toBe(true);
     expect(enabled[0][1].route.authorization).toBe(true);
   });
@@ -86,17 +88,6 @@ describe('G2 provider native membership issuer (release fenced)', () => {
       }
     });
     expect(f.ctx.meta).not.toHaveProperty('$collectivesAuthHeader');
-    expect(f.ctx.meta.$responseHeaders['Cache-Control']).toBe('no-store');
-  });
-  test('change binds input, revision and exact signed capability', async () => {
-    const f = fixture({ input: { member: 'https://remote.example/actor/bob',
-      role: 'member', status: 'banned', expectedEpoch: 2 } });
-    expect((await f.change()).membershipRevision).toBe(3);
-    const params = f.calls[1].params;
-    expect(params).toMatchObject({
-      owner, app, status: 'banned', expectedEpoch: 2,
-      grant: { operation: 'change', owner, app }
-    });
     expect(f.ctx.meta.$responseHeaders['Cache-Control']).toBe('no-store');
   });
   test.each([
@@ -123,10 +114,7 @@ describe('G2 provider native membership issuer (release fenced)', () => {
   test.each([
     [{ canonicalGroupId: '../escape' }, 'list'],
     [{ limit: 1001 }, 'list'],
-    [{ cursor: 'http://not-https.example' }, 'list'],
-    [{ member: owner, role: 'superadmin', status: 'active', expectedEpoch: 1 }, 'change'],
-    [{ member: 'http://example.test', role: 'member', status: 'active', expectedEpoch: 1 }, 'change'],
-    [{ member: 'https://remote.example/b', role: 'member', status: 'banned', expectedEpoch: 0 }, 'change']
+    [{ cursor: 'http://not-https.example' }, 'list']
   ])('invalid params %j fail before membership broker dispatch', async (input, operation) => {
     const f = fixture({ input });
     await expect(f[operation]()).rejects.toMatchObject({ type: 'GROUP_MEMBERSHIP_INVALID_INPUT' });

@@ -1,3 +1,4 @@
+const { assertUnifiedRequest, assertUnifiedResult } = require('../utils/unified-identity-policy');
 const { MoleculerError } = require('moleculer').Errors;
 
 module.exports = {
@@ -54,14 +55,19 @@ module.exports = {
           props: {
             enabled: { type: 'boolean', optional: true },
             requestedHandle: { type: 'string', optional: true },
-            didMethod: { type: 'enum', values: ['plc', 'web'], optional: true },
+            didMethod: { type: 'enum', values: ['plc'], optional: true },
             force: { type: 'boolean', optional: true }
           }
         }
       },
       async handler(ctx) {
         const input = ctx.params;
-        const requestedProtocols = this.requestedProtocolsFromInput(input);
+        let requestedProtocols;
+        try {
+          requestedProtocols = assertUnifiedRequest(input);
+        } catch (error) {
+          throw new MoleculerError(error.message, 400, error.code);
+        }
 
         await ctx.call('provider-capabilities.assertAccountProvisioningGrant', {
           grant: ctx.meta?.accountProvisioning || {},
@@ -71,7 +77,7 @@ module.exports = {
         const enableSolid = requestedProtocols.solid;
         const enableActivityPub = requestedProtocols.activitypub;
         const enableAtproto = requestedProtocols.atproto;
-        const atprotoDidMethod = input.atproto?.didMethod ?? this.settings.defaults.atprotoDidMethod;
+        const atprotoDidMethod = 'plc';
 
         const warnings = [];
         const failedPhases = [];
@@ -179,8 +185,14 @@ module.exports = {
               force: input.atproto?.force ?? false
             });
 
-            if (!atproto?.did || !atproto?.repoInitialized) {
-              throw new MoleculerError('ATProto provisioning incomplete', 500, 'ATPROTO_PROVISIONING_INCOMPLETE');
+            try {
+              assertUnifiedResult({
+                webId: solid.webId, actorId: activitypub?.actorId,
+                did: atproto?.did, repoInitialized: atproto?.repoInitialized,
+                identityWebId: canonical?.canonicalAccountId
+              });
+            } catch (error) {
+              throw new MoleculerError(error.message, 503, error.code);
             }
 
             await ctx.call('account-provisioning-state.markPhase', {
@@ -261,9 +273,9 @@ module.exports = {
   methods: {
     requestedProtocolsFromInput(input) {
       return {
-        solid: input.solid?.enabled ?? this.settings.defaults.enableSolid,
-        activitypub: input.activitypub?.enabled ?? this.settings.defaults.enableActivityPub,
-        atproto: input.atproto?.enabled ?? this.settings.defaults.enableAtproto
+        solid: true,
+        activitypub: true,
+        atproto: true
       };
     }
   }

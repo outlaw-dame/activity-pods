@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fence = require('../services/collective-consent-fence.service');
 const authorizations = require('../services/sai/access-authorizations');
 const registrations = require('../services/sai/app-registrations');
@@ -22,6 +23,76 @@ function fenceCtx({ rows = [{ status: { value: 'blocked' }, revision: { value: '
   };
   return { ctx, calls };
 }
+
+describe('operator-signed initial SAI bootstrap', () => {
+  const secret = 'b'.repeat(48);
+  const authorized = (overrides = {}) => {
+    const issuedAt = Date.now() - 1000;
+    const expiresAt = issuedAt + 30000;
+    const purpose = 'provider.collective.consent.bootstrap.v1';
+    const grant = { purpose, principal, app, issuedAt, expiresAt };
+    grant.mac = crypto.createHmac('sha256', secret)
+      .update(JSON.stringify([purpose, principal, app, issuedAt, expiresAt])).digest('hex');
+    const calls = [];
+    const ctx = {
+      params: { principal, app, grant: { ...grant, ...overrides } },
+      async call(name, params) {
+        calls.push(name);
+        if (name === 'auth.account.findByWebId') return { webId: principal };
+        if (name === 'app-registrations.isRegistered') return true;
+        if (name === 'access-authorizations.getSpecialRights') return ['apods:CreateGroup'];
+        if (name === 'triplestore.query') {
+          return [{ revision: { value: '1' }, status: { value: 'stable' } }];
+        }
+        return true;
+      }
+    };
+    const settings = { enabled: true, bootstrapEnabled: true,
+      bootstrapSecret: secret, approvedApps: [app] };
+    return { ctx, settings, calls };
+  };
+  test('requires a signed, app- and WebID-bound operator grant', async () => {
+    const h = authorized();
+    await expect(fence.actions.bootstrap.handler.call({ settings: h.settings }, h.ctx))
+      .resolves.toEqual({ revision: 1, status: 'stable' });
+    expect(h.calls).toEqual([
+      'auth.account.findByWebId', 'app-registrations.isRegistered',
+      'access-authorizations.getSpecialRights', 'triplestore.update',
+      'triplestore.query', 'auth.account.findByWebId',
+      'app-registrations.isRegistered', 'access-authorizations.getSpecialRights'
+    ]);
+  });
+  test('wrong grant is rejected without any storage or SAI read', async () => {
+    const h = authorized({ mac: '0'.repeat(64) });
+    await expect(fence.actions.bootstrap.handler.call({ settings: h.settings }, h.ctx))
+      .rejects.toMatchObject({ type: 'COLLECTIVE_BOOTSTRAP_UNAUTHORIZED' });
+    expect(h.calls).toHaveLength(0);
+  });
+  test('a prior blocked or advanced ledger cannot be revived by bootstrap', async () => {
+    const h = authorized();
+    const old = h.ctx.call;
+    h.ctx.call = async (name, params) => {
+      if (name === 'triplestore.query') return [
+        { revision: { value: '2' }, status: { value: 'blocked' } }
+      ];
+      return old(name, params);
+    };
+    await expect(fence.actions.bootstrap.handler.call({ settings: h.settings }, h.ctx))
+      .rejects.toMatchObject({ type: 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED' });
+  });
+  test('bridge/bootstrap gates default to denied', async () => {
+    const h = authorized();
+    await expect(fence.actions.bootstrap.handler.call({
+      settings: { ...h.settings, bootstrapEnabled: false }
+    }, h.ctx)).rejects.toMatchObject({ type: 'COLLECTIVE_BOOTSTRAP_DISABLED' });
+  });
+  test('SPARQL initializes virgin identity only, never clears existing markers', () => {
+    const sql = fence._test.bootstrapQuery(principal, app);
+    expect(sql).toContain('FILTER NOT EXISTS');
+    expect(sql).not.toContain('DELETE');
+    expect(sql).toContain('collectiveConsentStatus "stable"');
+  });
+});
 
 describe('durable deny-first collective consent fence', () => {
   test('canonical per-person/app hashed identity; do not place URLs in SPARQL', () => {

@@ -103,7 +103,8 @@ class CandidateIntegration(unittest.TestCase):
         seen=[]
         for _ in range(12):
             page=list_members(self.admin,group=g,owner=OWNER,app=APP,
-                              after=after,limit=100)
+                              after=after,limit=100,
+                              expected_revision=2 if after else None)
             seen.extend(x["actorUri"] for x in page["members"])
             self.assertLessEqual(len(page["members"]),100)
             self.assertEqual(page["revision"],2)
@@ -116,6 +117,12 @@ class CandidateIntegration(unittest.TestCase):
         self.assertIn(OWNER,seen)
         self.assertNotIn("ORDER BY actor_uri OFFSET",
                          list_members.__code__.co_consts)
+        with self.assertRaises(ValueError):
+            list_members(self.admin,group=g,owner=OWNER,app=APP,
+                         after=actor(10),limit=100)
+        with self.assertRaises(StaleRevision):
+            list_members(self.admin,group=g,owner=OWNER,app=APP,
+                         after=actor(10),limit=100,expected_revision=1)
 
     def test_03_independent_groups_update_concurrently(self):
         groups=[gid(100+i) for i in range(8)]

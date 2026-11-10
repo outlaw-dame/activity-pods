@@ -67,6 +67,8 @@ describe('live SAI consent gate', () => {
     ['wrong local WebID', { account: { webId: 'https://provider.example/users/bob' } }, 'COLLECTIVE_USER_NOT_FOUND'],
     ['disabled local account', { account: { webId: ALICE, disabled: true } }, 'COLLECTIVE_USER_NOT_FOUND'],
     ['deleted local account', { account: { webId: ALICE, deleted: true } }, 'COLLECTIVE_USER_NOT_FOUND'],
+    ['SemApps account tombstone', { account: { webId: ALICE, deletedAt: '2026-11-09T00:00:00Z' } }, 'COLLECTIVE_USER_NOT_FOUND'],
+    ['SemApps suspension timestamp', { account: { webId: ALICE, suspendedAt: '2026-11-09T00:00:00Z' } }, 'COLLECTIVE_USER_NOT_FOUND'],
     ['suspended local account', { account: { webId: ALICE, status: 'suspended' } }, 'COLLECTIVE_USER_NOT_FOUND'],
     ['not registered', { registered: false }, 'COLLECTIVE_APP_NOT_REGISTERED'],
     ['no special rights', { rights: [] }, 'COLLECTIVE_APP_CONSENT_MISSING'],

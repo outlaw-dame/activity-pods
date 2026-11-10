@@ -223,7 +223,8 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
         calls.push({ name, args });
         if (name === 'access-authorizations.get') return {
           'interop:grantedBy': principal, 'interop:grantee': app,
-          'apods:hasSpecialRights': groupRights
+          // Native persisted SAI resources expose expanded JSON-LD IRIs.
+          'apods:hasSpecialRights': ['http://activitypods.org/ns/core#CreateGroup']
         };
         return testBegin();
       }

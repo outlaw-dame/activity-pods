@@ -111,8 +111,7 @@ module.exports = {
           'POST /reserve': 'collective-reservations-api.reserve',
           'GET /:canonicalGroupId': 'collective-reservations-api.get',
           ...(this.settings.membershipApiEnabled ? {
-            'GET /:canonicalGroupId/members': 'collective-reservations-api.listMembers',
-            'POST /:canonicalGroupId/members/change': 'collective-reservations-api.changeMember'
+            'GET /:canonicalGroupId/members': 'collective-reservations-api.listMembers'
           } : {})
         }
       },
@@ -143,36 +142,6 @@ module.exports = {
         try { grant = membershipGrant.issueGrant(this.settings.membershipGrantSecret, 'list', params); }
         catch { fail('GROUP_MEMBERSHIP_INVALID_INPUT', 400); }
         const result = await ctx.call('collective-memberships.list', { ...params, grant });
-        ctx.meta.$responseHeaders = {
-          ...(ctx.meta.$responseHeaders || {}),
-          'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'
-        };
-        return result;
-      }
-    },
-    changeMember: {
-      params: {
-        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' },
-        member: 'string', role: 'string', status: 'string',
-        expectedEpoch: 'number|integer|min:1'
-      },
-      async handler(ctx) {
-        if (!this.settings.enabled || !this.settings.membershipApiEnabled ||
-            typeof this.settings.membershipGrantSecret !== 'string' ||
-            Buffer.byteLength(this.settings.membershipGrantSecret) < 32) {
-          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
-          fail('GROUP_MEMBERSHIP_ISSUER_DISABLED', 503);
-        }
-        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
-        const params = {
-          groupId: ctx.params.canonicalGroupId, owner: principal, app,
-          member: ctx.params.member, role: ctx.params.role,
-          status: ctx.params.status, expectedEpoch: ctx.params.expectedEpoch
-        };
-        let grant;
-        try { grant = membershipGrant.issueGrant(this.settings.membershipGrantSecret, 'change', params); }
-        catch { fail('GROUP_MEMBERSHIP_INVALID_INPUT', 400); }
-        const result = await ctx.call('collective-memberships.change', { ...params, grant });
         ctx.meta.$responseHeaders = {
           ...(ctx.meta.$responseHeaders || {}),
           'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'

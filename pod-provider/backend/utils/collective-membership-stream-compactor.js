@@ -242,8 +242,85 @@ async function stageCompactedMembership({
     pageCount, digest
   });
 }
+/**
+ * Verify all persisted immutable pages before a separate trusted, epoch-CAS
+ * publisher could make a generation visible. This is a complete-chain check,
+ * not an authorization/lease check and not a publish action.
+ *
+ * The callback MUST retrieve actual persisted page literals from an
+ * authorized provider settings TDB2 transaction, not echo stage input.
+ */
+async function verifyStagedCompactionManifest({ manifest, owner, readPersistedPage,
+  maxPages = MAX_BASE_PAGES }) {
+  if (!manifest || manifest.schema !== 'paper.groups.compaction-manifest.v1' ||
+      !Number.isSafeInteger(manifest.pageCount) || manifest.pageCount < 1 ||
+      manifest.pageCount > maxPages || !Number.isSafeInteger(maxPages) ||
+      maxPages < 1 || maxPages > MAX_BASE_PAGES ||
+      !Number.isSafeInteger(manifest.memberCount) || manifest.memberCount < 1 ||
+      !Number.isSafeInteger(manifest.baseMemberCount) ||
+      manifest.baseMemberCount < 1 ||
+      !safeRevision(manifest.baseRevision) ||
+      !safeRevision(manifest.membershipRevision) ||
+      manifest.membershipRevision < manifest.baseRevision ||
+      typeof manifest.digest !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(manifest.digest) ||
+      typeof readPersistedPage !== 'function') {
+    fail('GROUP_COMPACTION_MANIFEST_INVALID');
+  }
+  const groupId = rdf.validateId(manifest.groupId);
+  const ownerUri = rdf.validateActor(owner);
+  let count = 0, ownerCount = 0, cursor = null, previous = null;
+  let digest = crypto.createHash('sha256').update(JSON.stringify([
+    groupId, manifest.baseRevision, manifest.membershipRevision,
+    manifest.baseMemberCount, 'g2-compaction-v1'
+  ])).digest('hex');
+  for (let i = 0; i < manifest.pageCount; i++) {
+    const candidate = await readPersistedPage({
+      groupId, revision: manifest.membershipRevision, cursor
+    });
+    if (!candidate || typeof candidate.json !== 'string' ||
+        typeof candidate.digest !== 'string') {
+      fail('GROUP_COMPACTION_STAGE_INCOMPLETE');
+    }
+    const decoded = index.decodeRead([{
+      epoch: { value: String(manifest.membershipRevision) },
+      pageJson: { value: candidate.json },
+      pageDigest: { value: candidate.digest }
+    }], { groupId, revision: manifest.membershipRevision, cursor });
+    const subject = index.pageSubject(groupId, manifest.membershipRevision, cursor);
+    if (decoded.hasMore !== (i < manifest.pageCount - 1)) {
+      fail('GROUP_COMPACTION_STAGE_CURSOR');
+    }
+    for (const member of decoded.members) {
+      if (previous !== null && member.actorUri <= previous) {
+        fail('GROUP_COMPACTION_STAGE_ORDER');
+      }
+      previous = member.actorUri;
+      if (member.role === 'owner' &&
+          (member.actorUri !== ownerUri || ++ownerCount > 1)) {
+        fail('GROUP_COMPACTION_OWNER_CORRUPT');
+      }
+    }
+    count += decoded.members.length;
+    if (count > manifest.memberCount) fail('GROUP_COMPACTION_MANIFEST_COUNT');
+    digest = crypto.createHash('sha256').update(JSON.stringify([
+      digest, subject, candidate.digest,
+      decoded.members.length, decoded.nextCursor
+    ])).digest('hex');
+    cursor = decoded.nextCursor;
+  }
+  if (ownerCount !== 1 || count !== manifest.memberCount ||
+      digest !== manifest.digest || cursor !== null) {
+    fail('GROUP_COMPACTION_MANIFEST_MISMATCH');
+  }
+  return Object.freeze({
+    groupId, membershipRevision: manifest.membershipRevision,
+    verifiedPages: manifest.pageCount, verifiedMembers: count, digest
+  });
+}
 module.exports = Object.freeze({
   readCompactionBaseQuery, decodeCompactionBase,
-  stageCompactedMembership, STAGE_BATCH, DEFAULT_MAX_BASE_PAGES,
+  stageCompactedMembership, verifyStagedCompactionManifest,
+  STAGE_BATCH, DEFAULT_MAX_BASE_PAGES,
   MAX_BASE_PAGES
 });

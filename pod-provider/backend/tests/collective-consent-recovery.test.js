@@ -23,8 +23,8 @@ describe('offline consent mutation recovery is deny-preserving', () => {
   test('conditional recovery requires original revision, BLOCKED status, and pending markers', () => {
     const sparql = resetQuery({ principal, app, expectedRevision: 3, nonce });
     expect(sparql).toContain('collectiveConsentStatus "blocked"');
-    expect(sparql).toContain('collectiveConsentRevision "3"');
-    expect(sparql).toContain('collectiveConsentRevision "4"');
+    expect(sparql).toContain('collectiveConsentRevision 3');
+    expect(sparql).toContain('collectiveConsentRevision 4');
     expect(sparql).toContain('collectivePendingMutation ?pending');
     expect(sparql).toContain('collectiveRecoveryNonce');
     expect(sparql).not.toContain('collectiveConsentStatus "stable"');

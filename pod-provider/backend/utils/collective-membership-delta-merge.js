@@ -26,13 +26,15 @@ function validateDelta(changes) {
       if (change.role !== undefined) fail('INVALID_MEMBERSHIP_DELTA_REMOVE');
       return { actorUri, kind: 'remove' };
     }
-    if (change.kind !== 'upsert' || (change.role !== 'owner' &&
-        !rdf.ROLES.has(change.role))) fail('INVALID_MEMBERSHIP_DELTA_ROLE');
+    if (change.kind !== 'upsert' || !rdf.ROLES.has(change.role)) {
+      fail('INVALID_MEMBERSHIP_DELTA_ROLE');
+    }
     return { actorUri, kind: 'upsert', role: change.role };
   });
 }
-function mergeWindow({ pages, delta, after = null, limit = PAGE_SIZE,
+function mergeWindow({ groupId, pages, delta, after = null, limit = PAGE_SIZE,
   baseRevision, currentRevision }) {
+  rdf.validateId(groupId);
   if (!Number.isSafeInteger(baseRevision) || baseRevision < 1 ||
       !Number.isSafeInteger(currentRevision) || currentRevision < baseRevision ||
       !Number.isSafeInteger(limit) || limit < 1 || limit > PAGE_SIZE ||
@@ -45,7 +47,8 @@ function mergeWindow({ pages, delta, after = null, limit = PAGE_SIZE,
   let prior = '';
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
-    if (page.revision !== baseRevision || !Array.isArray(page.members) ||
+    if (page.groupId !== groupId || page.revision !== baseRevision ||
+        !Array.isArray(page.members) ||
         page.members.length < 1 || page.members.length > PAGE_SIZE ||
         typeof page.hasMore !== 'boolean' ||
         (i > 0 && pages[i - 1].nextCursor !== page.cursor) ||

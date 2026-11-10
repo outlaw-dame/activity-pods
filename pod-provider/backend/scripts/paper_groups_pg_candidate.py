@@ -34,7 +34,7 @@ def require_https(value: str) -> str:
     parsed = urlsplit(value)
     if (parsed.scheme != "https" or not parsed.netloc or
             parsed.username is not None or parsed.password is not None or
-            parsed.hostname is None or parsed.fragment):
+            parsed.hostname is None):
         raise ValueError("invalid HTTPS actor URI")
     return value
 

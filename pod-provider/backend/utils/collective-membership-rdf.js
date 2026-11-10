@@ -34,6 +34,27 @@ function validateActor(value) {
 }
 function literal(value) { return JSON.stringify(value); }
 function groupSubject(id) { return '<' + PREFIX + validateId(id) + '>'; }
+// SemApps AuthAccount and Group revision live in the SAME Fuseki settings
+// dataset, so a membership update must join current account authority in the
+// same atomic conditional write rather than trust an earlier service lookup.
+function activeOwnerCondition(owner) {
+  const webId = literal(validateActor(owner));
+  const accountNs = 'http://semapps.org/ns/core#';
+  const account = '?groupMembershipOwnerAccount';
+  return account + ' a <' + accountNs + 'AuthAccount> ; ' +
+    '<' + accountNs + 'webId> ' + webId + ' . ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + accountNs + 'deletedAt> ?ownerDeletedAt . } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + accountNs + 'suspendedAt> ?ownerSuspendedAt . } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + accountNs + 'disabled> ?ownerDisabled . ' +
+      'FILTER(LCASE(STR(?ownerDisabled)) = "true") } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + accountNs + 'deleted> ?ownerDeletedFlag . ' +
+      'FILTER(LCASE(STR(?ownerDeletedFlag)) = "true") } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + accountNs + 'status> ?ownerStatus . ' +
+      'FILTER(LCASE(STR(?ownerStatus)) IN ("suspended", "deleted", "disabled")) } ' +
+    'FILTER NOT EXISTS { ?otherOwnerAccount a <' + accountNs + 'AuthAccount> ; ' +
+      '<' + accountNs + 'webId> ' + webId +
+      ' . FILTER(?otherOwnerAccount != ' + account + ') } ';
+}
 function memberSubject(id, actorUri) {
   const seed = JSON.stringify([validateId(id), validateActor(actorUri)]);
   return '<' + MEMBER_PREFIX + crypto.createHash('sha256').update(seed).digest('hex') + '>';
@@ -51,6 +72,7 @@ function initializeQuery({ groupId, owner }) {
       'apods:collectiveMemberStatus "active" . } WHERE { ' +
       g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(ownerUri) + ' . ' +
+      activeOwnerCondition(ownerUri) +
       'FILTER NOT EXISTS { ' + g + ' apods:collectiveMembershipEpoch ?existing . } ' +
       'FILTER NOT EXISTS { ' + m + ' ?existingMemberProperty ?existingMemberValue . } }';
 }
@@ -75,6 +97,7 @@ function mutateQuery({ groupId, owner, member, role, status, expectedEpoch }) {
     'WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(ownerUri) + ' ; ' +
       'apods:collectiveMembershipEpoch ?oldEpoch . ' +
+      activeOwnerCondition(ownerUri) +
       'FILTER(xsd:integer(?oldEpoch) = ' + expectedEpoch + ') ' +
       'BIND(xsd:integer(?oldEpoch) + 1 AS ?nextEpoch) ' +
       'OPTIONAL { ' + m + ' apods:collectiveMemberRole ?oldRole . } ' +
@@ -89,7 +112,8 @@ function readEpochQuery({ groupId, owner }) {
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?epoch WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
     'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
-    'apods:collectiveMembershipEpoch ?epoch . } LIMIT 2';
+    'apods:collectiveMembershipEpoch ?epoch . ' +
+    activeOwnerCondition(owner) + '} LIMIT 2';
 }
 function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
   const g = groupSubject(groupId);
@@ -102,6 +126,7 @@ function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
     'SELECT ?actor ?role ?epoch WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(owner) + ' ; ' +
       'apods:collectiveMembershipEpoch ?epoch . ' +
+      activeOwnerCondition(owner) +
       '?membership a apods:CollectiveMembershipV1 ; ' +
       'apods:collectiveMemberGroup ' + literal(groupId) + ' ; ' +
       'apods:collectiveMemberActor ?actor ; apods:collectiveMemberRole ?role ; ' +

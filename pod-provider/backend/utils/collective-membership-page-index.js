@@ -142,6 +142,7 @@ function publishQuery({ groupId, owner, app, revision }) {
   return 'PREFIX apods: <' + NS + '> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> ' +
     'DELETE { ' + g + ' apods:collectiveIndexedMembershipEpoch ?oldIndexEpoch ; ' +
     'apods:collectiveIndexDeltaCount ?oldDeltaCount . ' +
+    g + ' apods:collectiveIndexChangedMember ?changedMember . ' +
     '?changedMember apods:collectiveChangedSinceIndex true . } ' +
     'INSERT { ' + g + ' apods:collectiveIndexedMembershipEpoch ?epoch ; ' +
     'apods:collectiveIndexDeltaCount "0"^^xsd:integer . } ' +
@@ -150,7 +151,8 @@ function publishQuery({ groupId, owner, app, revision }) {
     'OPTIONAL { ' + g +
     ' apods:collectiveIndexedMembershipEpoch ?oldIndexEpoch . } ' +
     'OPTIONAL { ' + g + ' apods:collectiveIndexDeltaCount ?oldDeltaCount . } ' +
-    'OPTIONAL { ?changedMember apods:collectiveMemberGroup ' +
+    'OPTIONAL { ' + g + ' apods:collectiveIndexChangedMember ?changedMember . ' +
+      '?changedMember apods:collectiveMemberGroup ' +
       JSON.stringify(groupId) + ' ; apods:collectiveChangedSinceIndex true . } }';
 }
 function value(row, key) {

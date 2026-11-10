@@ -216,11 +216,17 @@ def mutate_member(conn, *, group: str, owner: str, app: str,
 
 
 def list_members(conn, *, group: str, owner: str, app: str,
-                 after: str | None = None, limit: int = MAX_PAGE):
+                 after: str | None = None, limit: int = MAX_PAGE,
+                 expected_revision: int | None = None):
     group=require_group(group)
     owner,app=map(require_https,(owner,app))
     if after is not None:
         after=require_https(after)
+        if expected_revision is None:
+            raise ValueError("paged roster requires expected revision")
+    if expected_revision is not None and (type(expected_revision) is not int or
+                                          expected_revision < 1):
+        raise ValueError("invalid expected roster revision")
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
         raise ValueError("invalid bounded page size")
     with conn.transaction():
@@ -235,6 +241,8 @@ def list_members(conn, *, group: str, owner: str, app: str,
         ).fetchone()
         if not row:
             raise AuthorityDenied("Group not available")
+        if expected_revision is not None and row[0] != expected_revision:
+            raise StaleRevision("roster changed between pages")
         # The membership visibility contract is not publicly wired. This
         # query is strictly for a trusted provider operation after checking
         # live consent. No OFFSET, global sort, or per-member database calls.

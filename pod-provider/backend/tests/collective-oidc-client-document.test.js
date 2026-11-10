@@ -3,7 +3,8 @@
 jest.mock('node-fetch', () => jest.fn());
 const fetch = require('node-fetch');
 const RedisAdapter = require('../config/oidc-adapter');
-const { safeUri, isAllowedAddress, clientFetchOptions } =
+const dns = require('node:dns');
+const { safeUri, isAllowedAddress, clientFetchOptions, protectedLookup } =
   require('../config/oidc-client-network-policy');
 
 const URI = 'https://paper.example/app';
@@ -79,6 +80,34 @@ describe('remote HTTPS Solid-OIDC Client ID document hardening', () => {
     }
     expect(isAllowedAddress('8.8.8.8', 4, 'example.net')).toBe(true);
     expect(isAllowedAddress('2606:4700:4700::1111', 6, 'example.net')).toBe(true);
+  });
+
+  test('Node 22 DNS all-address lookup returns records, single mode returns address/family', () => {
+    const spy = jest.spyOn(dns, 'lookup').mockImplementation((_host, _opts, cb) => {
+      cb(null, [
+        { address: '10.1.2.3', family: 4 },
+        { address: '8.8.8.8', family: 4 },
+        { address: '2606:4700:4700::1111', family: 6 }
+      ]);
+    });
+    try {
+      const all = jest.fn();
+      protectedLookup('example.net', { all: true }, all);
+      expect(all).toHaveBeenCalledWith(null, [
+        { address: '8.8.8.8', family: 4 },
+        { address: '2606:4700:4700::1111', family: 6 }
+      ]);
+      const single = jest.fn();
+      protectedLookup('example.net', { family: 4 }, single);
+      expect(single).toHaveBeenCalledWith(null, '8.8.8.8', 4);
+      const denied = jest.fn();
+      spy.mockImplementationOnce((_host, _opts, cb) =>
+        cb(null, [{ address: '169.254.169.254', family: 4 }]));
+      protectedLookup('example.net', { all: true }, denied);
+      expect(denied.mock.calls[0][0].message).toContain('prohibited network');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('rejects malformed and direct private URLs before any HTTP request', () => {

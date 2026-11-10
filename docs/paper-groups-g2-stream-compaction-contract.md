@@ -36,3 +36,13 @@ pages during a compaction. It is **not** run on every mutation, nor
 claimed to be free of O(N) periodic work. Measure compaction interval,
 amortized cost per changed actor, and worst-case hot Group fairness,
 not just one synthetic read.
+
+The stage kernel now includes `readCompactionBaseQuery` and
+`decodeCompactionBase`. These keep the original immutable index **base**
+readable internally after a membership revision advances, but only when
+one settings-dataset query checks the exact expected current membership
+epoch, exact base index epoch, live provider account and stable SAI consent.
+The read rejects changed revisions, wrong cursor/digest and unauthorized
+results. There is no public endpoint or automatic fallback to an unindexed
+Group-wide SPARQL scan. The real TDB2 write/replica fault proof is still
+required before using this in a running compactor.

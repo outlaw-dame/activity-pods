@@ -1,5 +1,6 @@
 'use strict';
-const { stageCompactedMembership, readCompactionBaseQuery, decodeCompactionBase } =
+const { stageCompactedMembership, verifyStagedCompactionManifest,
+  readCompactionBaseQuery, decodeCompactionBase } =
   require('../utils/collective-membership-stream-compactor');
 const index = require('../utils/collective-membership-page-index');
 const groupId = 'cg_' + 'f'.repeat(32);
@@ -121,6 +122,42 @@ describe('G2 streaming compaction bounded memory and verified staging', () => {
     expect(rows.find(x => x.actorUri === actor(2)).role).toBe('moderator');
     expect(rows.some(x => x.actorUri === actor(99999))).toBe(true);
     expect(rows.filter(x => x.actorUri === owner)).toEqual([{actorUri: owner, role:'owner'}]);
+  });
+  test('re-reads and validates every persisted page before any publication', async () => {
+    const f = fixture(base(500));
+    const manifest = await stageCompactedMembership(f.inputs);
+    const map = new Map(f.persisted.map(page => [page.cursor, page]));
+    const readPersistedPage = async ({cursor}) => map.get(cursor);
+    const result = await verifyStagedCompactionManifest({
+      manifest, owner, readPersistedPage
+    });
+    expect(result).toEqual({
+      groupId, membershipRevision, verifiedPages: manifest.pageCount,
+      verifiedMembers: manifest.memberCount, digest: manifest.digest
+    });
+    const missing = new Map(map);
+    missing.delete(f.persisted[1].cursor);
+    await expect(verifyStagedCompactionManifest({
+      manifest, owner, readPersistedPage: async ({cursor}) => missing.get(cursor)
+    })).rejects.toThrow('STAGE_INCOMPLETE');
+    const damaged = new Map(map);
+    damaged.set(f.persisted[1].cursor, {
+      ...f.persisted[1], digest: 'f'.repeat(64)
+    });
+    await expect(verifyStagedCompactionManifest({
+      manifest, owner, readPersistedPage: async ({cursor}) => damaged.get(cursor)
+    })).rejects.toThrow();
+    await expect(verifyStagedCompactionManifest({
+      manifest: { ...manifest, memberCount: manifest.memberCount - 1 },
+      owner, readPersistedPage
+    })).rejects.toThrow();
+    await expect(verifyStagedCompactionManifest({
+      manifest: { ...manifest, digest: '0'.repeat(64) },
+      owner, readPersistedPage
+    })).rejects.toThrow('MANIFEST_MISMATCH');
+    await expect(verifyStagedCompactionManifest({
+      manifest, owner: 'https://elsewhere.example/owner', readPersistedPage
+    })).rejects.toThrow('OWNER_CORRUPT');
   });
   test('long remote URIs produce variable 32KiB chunks without loss', async () => {
     const before = base(250, true);

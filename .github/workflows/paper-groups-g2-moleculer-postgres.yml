@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/candidates/collective-postgres-moleculer.js'
+      - 'pod-provider/backend/sql/paper-groups-postgres-candidate-v2-revocation.sql'
       - 'pod-provider/backend/scripts/proof-collective-postgres-moleculer.js'
       - '.github/workflows/paper-groups-g2-moleculer-postgres.yml'
       - 'docs/paper-groups-postgres-moleculer-integration.md'

@@ -53,8 +53,9 @@ function percentile(values, percentileValue) {
 }
 async function main() {
   // Refuse to seed into any existing Group fixture or reused settings store.
-  const prior = await request('query', 'SELECT ?p WHERE { ' + subject + ' ?p ?o } LIMIT 1');
-  assert.equal(prior.length, 0, 'Disposable benchmark Group must not already exist');
+  const prior = await request('query', 'SELECT ?s WHERE { ?s ?p ?o } LIMIT 1');
+  assert.equal(prior.length, 0,
+    'Refusing to benchmark an existing settings dataset; disposable TDB2 must be empty');
   // Required proof fixture lives only in this disposable settings dataset.
   const account = '<urn:apods:benchmark:owner>';
   const ledger = rdf.consentSubject(owner, app);

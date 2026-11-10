@@ -15,12 +15,13 @@ if (!base || !/^(?:http:\/\/127\.0\.0\.1|http:\/\/localhost):[0-9]+\/?$/u.test(b
 const dataset = 'settings';
 const groupId = 'cg_1234567890abcdef1234567890abcdef';
 const owner = 'https://paper-proof.example/users/alice#me';
+const app = 'https://paper-proof.example/app';
 const bob = 'https://remote-proof.example/users/bob';
 const carol = 'https://remote-proof.example/users/carol';
 const dan = 'https://remote-proof.example/users/dan';
 const wrongOwner = 'https://paper-proof.example/users/eve#me';
 const g = rdf.groupSubject(groupId);
-const mutation = opts => rdf.mutateQuery({ ...opts, receipt: crypto.randomUUID() });
+const mutation = opts => rdf.mutateQuery({ ...opts, app, receipt: crypto.randomUUID() });
 const uri = base.replace(/\/+$/u, '') + '/' + dataset;
 const headers = {
   ...(process.env.FUSEKI_PASSWORD ? {
@@ -45,13 +46,13 @@ function val(rows, field) {
   return rows[0] && rows[0][field] && rows[0][field].value;
 }
 async function epoch(ownerUri = owner) {
-  const rows = await request('query', rdf.readEpochQuery({ groupId, owner: ownerUri }));
+  const rows = await request('query', rdf.readEpochQuery({ groupId, owner: ownerUri, app }));
   if (rows.length === 0) return null;
   assert.equal(rows.length, 1);
   return Number(val(rows, 'epoch'));
 }
 async function members(cursor, limit = 100) {
-  return request('query', rdf.listQuery({ groupId, owner, cursor, limit }));
+  return request('query', rdf.listQuery({ groupId, owner, app, cursor, limit }));
 }
 async function prepare() {
   // Seed the real SemApps account ontology into the same settings dataset:
@@ -59,13 +60,19 @@ async function prepare() {
   await request('update', 'INSERT DATA { <urn:apods:proof:g2-owner> ' +
     'a <http://semapps.org/ns/core#AuthAccount> ; ' +
     '<http://semapps.org/ns/core#webId> ' + JSON.stringify(owner) + ' . }');
+  const ledger = rdf.consentSubject(owner, app);
+  await request('update',
+    'PREFIX apods: <http://activitypods.org/ns/core#>\n' +
+    'INSERT DATA { ' + ledger + ' apods:collectiveConsentRevision "1" ; ' +
+    'apods:collectiveConsentStatus "stable" . }');
   await request('update', 'PREFIX apods: <http://activitypods.org/ns/core#>\n' +
     'INSERT DATA { ' + g + ' a apods:CollectiveReservationV1 ; ' +
     'apods:collectiveOwner ' + JSON.stringify(owner) + ' ; ' +
+    'apods:collectiveApp ' + JSON.stringify(app) + ' ; ' +
     'apods:canonicalGroupId ' + JSON.stringify(groupId) + ' ; ' +
     'apods:collectiveStage "reserved" . }');
-  await request('update', rdf.initializeQuery({ groupId, owner }));
-  await request('update', rdf.initializeQuery({ groupId, owner }));
+  await request('update', rdf.initializeQuery({ groupId, owner, app }));
+  await request('update', rdf.initializeQuery({ groupId, owner, app }));
   assert.equal(await epoch(), 1, 'Repeated initialize must not reset epoch');
   assert.equal(await epoch(wrongOwner), null, 'Foreign owner must not read registry');
   let rows = await members(null);
@@ -134,6 +141,20 @@ async function prepare() {
     await request('update', 'DELETE DATA { ' + ownerSubject + ' ' + predicate + ' ' + value + ' . }');
     assert.equal(await epoch(), 4, 'Tombstoned mutation changed the membership epoch');
   }
+  // The same settings-dataset fence used by G1 consent mutation must
+  // atomically block membership writes and private member enumeration.
+  await request('update', 'PREFIX apods: <http://activitypods.org/ns/core#>\n' +
+    'DELETE DATA { ' + ledger + ' apods:collectiveConsentStatus "stable" . }; ' +
+    'INSERT DATA { ' + ledger + ' apods:collectiveConsentStatus "blocked" . }');
+  assert.equal(await epoch(), null, 'Blocked SAI ledger must deny membership reads');
+  assert.equal((await members(null)).length, 0, 'Blocked SAI ledger exposed members');
+  await request('update', mutation({
+    groupId, owner, member: dan, role: 'admin', status: 'active', expectedEpoch: 4
+  }));
+  await request('update', 'PREFIX apods: <http://activitypods.org/ns/core#>\n' +
+    'DELETE DATA { ' + ledger + ' apods:collectiveConsentStatus "blocked" . }; ' +
+    'INSERT DATA { ' + ledger + ' apods:collectiveConsentStatus "stable" . }');
+  assert.equal(await epoch(), 4, 'Revoked consent still changed membership epoch');
   const duplicate = '<urn:apods:proof:g2-owner-duplicate>';
   const authAccount = '<http://semapps.org/ns/core#AuthAccount>';
   const webId = '<http://semapps.org/ns/core#webId>';

@@ -20,6 +20,26 @@ Do not create another Group-specific recipient-oriented loop that performs per-u
 
 No consumer, Group service action, public endpoint or federation queue is wired to this kernel yet. That is deliberate: ActivityPods has no production-active Group actor or authoritative Group membership source in this G1 branch. Exposing caller-provided recipient lists as an authoritative Group-delivery action would be an IDOR and private-membership leak.
 
+## Critical cross-page delivery rule
+
+The 1,000-recipient ceiling is a **single planning-page guard**, not a global
+limit on Group membership. A large Group may have many pages, including
+members on the **same remote sharedInbox** on different pages. No executor
+may immediately send each page's remote destinations independently: doing
+so would generate one duplicated POST per page and reproduce exactly the
+cost/semantics failure this architecture is intended to prevent.
+
+The eventual authoritative snapshot/queue boundary must first commit the
+complete logical activity/recipient snapshot (or a durable, destination-keyed
+aggregation with all page acknowledgements). Remote work is deduplicated by
+logical activity ID + authoritative Group actor + receiving endpoint and
+sealed only when the snapshot is complete. A later membership revision or
+partial retry must never create an independent duplicate remote send.
+The current P1 kernel emits **candidate routes for one page**, not
+publishable Fedify envelopes. Do not expose its output as remote POST jobs.
+For local Pod work, page cursors and per-recipient persisted acknowledgements
+must similarly prevent omissions or duplicate writes after SIGKILL/retry.
+
 ## G2-P2 — Membership authority and admission (next prerequisite)
 
 Implement provider-owned Group membership records, policy, roles and revocation that can be queried with bounded keyset pages (not OFFSET or provider-wide scans). A snapshot is valid only with a versioned membership/ACL revision and trusted provider service credentials. Prove owner/admin/moderator authority, visibility, user consent, block/mute and banned member exclusion. The G1 reservation does **not** imply Group actor active status or permission to send.

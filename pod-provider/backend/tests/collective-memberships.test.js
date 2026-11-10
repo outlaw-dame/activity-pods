@@ -32,6 +32,11 @@ function fakeCtx(params, queryRows) {
     params,
     async call(name, args) {
       calls.push({ name, args });
+      if (name === 'auth.account.findByWebId') return { webId: owner };
+      if (name === 'app-registrations.isRegistered') return true;
+      if (name === 'access-authorizations.getSpecialRights') {
+        return ['http://activitypods.org/ns/core#ManageMembers'];
+      }
       if (name === 'triplestore.query') return typeof queryRows === 'function'
         ? queryRows(calls) : queryRows;
       return null;
@@ -63,11 +68,18 @@ describe('G2 owner-scoped membership authority release boundary', () => {
     const t = fakeCtx(authorized('initialize'), [{ epoch: binding(1) }]);
     const result = await service.actions.initialize.handler.call({ settings }, t.ctx);
     expect(result).toEqual({ groupId, membershipRevision: 1 });
-    expect(t.calls.map(c => c.name)).toEqual(['triplestore.update', 'triplestore.query']);
-    expect(t.calls.every(c => c.args.dataset === 'settings')).toBe(true);
-    expect(t.calls[0].args.query).toContain('AuthAccount');
-    expect(t.calls[0].args.query).toContain('deletedAt');
-    expect(t.calls[0].args.query).toContain('FILTER NOT EXISTS');
+    expect(t.calls.map(c => c.name)).toEqual([
+      'auth.account.findByWebId', 'app-registrations.isRegistered',
+      'access-authorizations.getSpecialRights',
+      'triplestore.update', 'triplestore.query',
+      'auth.account.findByWebId', 'app-registrations.isRegistered',
+      'access-authorizations.getSpecialRights'
+    ]);
+    const storage = t.calls.filter(c => c.name.startsWith('triplestore.'));
+    expect(storage.every(c => c.args.dataset === 'settings')).toBe(true);
+    expect(storage[0].args.query).toContain('AuthAccount');
+    expect(storage[0].args.query).toContain('deletedAt');
+    expect(storage[0].args.query).toContain('collectiveConsentStatus "stable"');
   });
   test('membership mutation checks the same committed receipt, not just matching state', async () => {
     const params = authorized('change', {
@@ -75,7 +87,7 @@ describe('G2 owner-scoped membership authority release boundary', () => {
     });
     let receipt = null;
     const t = fakeCtx(params, calls => {
-      const body = calls[0].args.query;
+      const body = calls.find(c => c.name === 'triplestore.update').args.query;
       const found = body.match(/apods:collectiveMemberMutationReceipt "([0-9a-f-]{36})"/u);
       receipt = found && found[1];
       return [{
@@ -86,8 +98,9 @@ describe('G2 owner-scoped membership authority release boundary', () => {
     expect(await service.actions.change.handler.call({ settings }, t.ctx))
       .toMatchObject({ membershipRevision: 4, member, role: 'moderator' });
     expect(receipt).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(t.calls).toHaveLength(2);
-    expect(t.calls[0].args.query).toContain('FILTER(xsd:integer(?oldEpoch) = 3)');
+    expect(t.calls.filter(c => c.name.startsWith('triplestore.'))).toHaveLength(2);
+    expect(t.calls.find(c => c.name === 'triplestore.update').args.query)
+      .toContain('FILTER(xsd:integer(?oldEpoch) = 3)');
     const losing = fakeCtx(params, [{
       epoch: binding(4), role: binding('moderator'),
       status: binding('active'), receipt: binding(crypto.randomUUID())
@@ -116,14 +129,15 @@ describe('G2 owner-scoped membership authority release boundary', () => {
     // This fixture intentionally returns unsorted actors; refuse it.
     await expect(service.actions.list.handler.call({ settings }, t.ctx))
       .rejects.toMatchObject({ type: 'GROUP_MEMBERSHIP_SNAPSHOT_UNVERIFIED' });
-    expect(t.calls).toHaveLength(1);
-    expect(t.calls[0].args.query).toContain('LIMIT 3');
-    expect(t.calls[0].args.query).not.toContain('OFFSET');
+    const queries = t.calls.filter(c => c.name === 'triplestore.query');
+    expect(queries).toHaveLength(1);
+    expect(queries[0].args.query).toContain('LIMIT 3');
+    expect(queries[0].args.query).not.toContain('OFFSET');
   });
   test('membership template rejects excessive page limits and inconsistent actor URL', () => {
-    expect(() => rdf.listQuery({ groupId, owner, limit: 1001 })).toThrow('limit');
+    expect(() => rdf.listQuery({ groupId, owner, app, limit: 1001 })).toThrow('limit');
     expect(() => rdf.mutateQuery({
-      groupId, owner, member: 'not an actor', role: 'member', status: 'active',
+      groupId, owner, app, member: 'not an actor', role: 'member', status: 'active',
       expectedEpoch: 1, receipt: crypto.randomUUID()
     })).toThrow('actor');
   });

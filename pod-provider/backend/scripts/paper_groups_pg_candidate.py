@@ -230,7 +230,7 @@ def list_members(conn, *, group: str, owner: str, app: str,
         row=conn.execute(
             "SELECT revision FROM paper_groups_candidate.groups "
             "WHERE group_id=%s AND owner_webid=%s AND app_uri=%s "
-            "AND state!='suspended'",
+            "AND state!='suspended' FOR SHARE",
             (group,owner,app)
         ).fetchone()
         if not row:

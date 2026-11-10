@@ -123,74 +123,7 @@ module.exports = {
   actions: {
     listMembers: {
       params: {
-        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32} { displayName: { type: 'string', min: 1 } },
-      async handler(ctx) {
-        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
-            Buffer.byteLength(this.settings.grantSecret) < 32) {
-          fail('COLLECTIVE_API_DISABLED', 503);
-        }
-        const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
-        if (typeof idempotencyKey !== 'string' ||
-            !/^[A-Za-z0-9_-]{24,128}$/u.test(idempotencyKey)) {
-          // Invalid parameters require no cryptographic work or downstream
-          // calls, and the raw bearer must not linger in request metadata.
-          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
-          fail('COLLECTIVE_INVALID_IDEMPOTENCY', 400);
-        }
-        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
-        const requestHash = reserveFingerprint(
-          principal, app, idempotencyKey, ctx.params.displayName
-        );
-        const grant = makeProviderGrant(
-          this.settings.grantSecret, principal, app, 'reserve', requestHash
-        );
-
-        const outcome = await ctx.call('collective-reservations.reserve', {
-          principal, app, idempotencyKey, displayName: ctx.params.displayName, grant
-        });
-        ctx.meta.$statusCode = 202;
-        ctx.meta.$responseHeaders = {
-          ...(ctx.meta.$responseHeaders || {}),
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        };
-        return outcome;
-      }
-    },
-    get: {
-      params: {
-        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' }
-      },
-      async handler(ctx) {
-        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
-            Buffer.byteLength(this.settings.grantSecret) < 32) {
-          fail('COLLECTIVE_API_DISABLED', 503);
-        }
-        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
-        const canonicalGroupId = ctx.params.canonicalGroupId;
-        // Validate at the service boundary too: internal Moleculer calls can
-        // bypass route-level FastestValidator declarations.
-        if (typeof canonicalGroupId !== 'string' ||
-            !/^cg_[a-f0-9]{32}$/u.test(canonicalGroupId)) {
-          fail('COLLECTIVE_INVALID_ID', 400);
-        }
-        const grant = makeProviderGrant(
-          this.settings.grantSecret, principal, app, 'read', canonicalGroupId
-        );
-        const outcome = await ctx.call('collective-reservations.get', {
-          principal, app, canonicalGroupId, grant
-        });
-        ctx.meta.$responseHeaders = {
-          ...(ctx.meta.$responseHeaders || {}),
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        };
-        return outcome;
-      }
-    }
-  }
-};
- },
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' },
         cursor: { type: 'string', optional: true },
         limit: { type: 'number', integer: true, min: 1, max: 1000, convert: true }
       },
@@ -219,74 +152,7 @@ module.exports = {
     },
     changeMember: {
       params: {
-        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32} { displayName: { type: 'string', min: 1 } },
-      async handler(ctx) {
-        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
-            Buffer.byteLength(this.settings.grantSecret) < 32) {
-          fail('COLLECTIVE_API_DISABLED', 503);
-        }
-        const idempotencyKey = ctx.meta?.$collectivesIdempotencyKey;
-        if (typeof idempotencyKey !== 'string' ||
-            !/^[A-Za-z0-9_-]{24,128}$/u.test(idempotencyKey)) {
-          // Invalid parameters require no cryptographic work or downstream
-          // calls, and the raw bearer must not linger in request metadata.
-          if (ctx.meta) delete ctx.meta.$collectivesAuthHeader;
-          fail('COLLECTIVE_INVALID_IDEMPOTENCY', 400);
-        }
-        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
-        const requestHash = reserveFingerprint(
-          principal, app, idempotencyKey, ctx.params.displayName
-        );
-        const grant = makeProviderGrant(
-          this.settings.grantSecret, principal, app, 'reserve', requestHash
-        );
-
-        const outcome = await ctx.call('collective-reservations.reserve', {
-          principal, app, idempotencyKey, displayName: ctx.params.displayName, grant
-        });
-        ctx.meta.$statusCode = 202;
-        ctx.meta.$responseHeaders = {
-          ...(ctx.meta.$responseHeaders || {}),
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        };
-        return outcome;
-      }
-    },
-    get: {
-      params: {
-        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' }
-      },
-      async handler(ctx) {
-        if (!this.settings.enabled || typeof this.settings.grantSecret !== 'string' ||
-            Buffer.byteLength(this.settings.grantSecret) < 32) {
-          fail('COLLECTIVE_API_DISABLED', 503);
-        }
-        const { principal, app } = await authenticatedPrincipal(ctx, this.settings.providerOrigin);
-        const canonicalGroupId = ctx.params.canonicalGroupId;
-        // Validate at the service boundary too: internal Moleculer calls can
-        // bypass route-level FastestValidator declarations.
-        if (typeof canonicalGroupId !== 'string' ||
-            !/^cg_[a-f0-9]{32}$/u.test(canonicalGroupId)) {
-          fail('COLLECTIVE_INVALID_ID', 400);
-        }
-        const grant = makeProviderGrant(
-          this.settings.grantSecret, principal, app, 'read', canonicalGroupId
-        );
-        const outcome = await ctx.call('collective-reservations.get', {
-          principal, app, canonicalGroupId, grant
-        });
-        ctx.meta.$responseHeaders = {
-          ...(ctx.meta.$responseHeaders || {}),
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff'
-        };
-        return outcome;
-      }
-    }
-  }
-};
- },
+        canonicalGroupId: { type: 'string', pattern: '^cg_[a-f0-9]{32}$' },
         member: 'string', role: 'string', status: 'string',
         expectedEpoch: 'number|integer|min:1'
       },

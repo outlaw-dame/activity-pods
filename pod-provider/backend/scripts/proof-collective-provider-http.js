@@ -188,6 +188,9 @@ async function main() {
   await doSai('upgrade-app', token, ['apods:CreateGroup', 'apods:ReadGroups', 'apods:ManageMembers']);
   assert((await authorizationRows(username, webId)).some(x => x.right.value === 'http://activitypods.org/ns/core#CreateGroup'),
     'Regrant did not persist SAI CreateGroup right');
+  assert((await authorizationRows(username, webId)).some(x =>
+    x.right.value === 'http://activitypods.org/ns/core#ManageMembers'),
+    'Regrant did not persist SAI ManageMembers right');
   const revision3 = await ledger(webId);
   assert(revision3 > revision2, 'Regrant must advance ledger revision');
 

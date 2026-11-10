@@ -238,7 +238,7 @@ module.exports = {
           if (!stored.consentRevision) throw problem('COLLECTIVE_CONSENT_FENCE_REQUIRED', 503);
           const consentRows = await ctx.call('triplestore.query', {
             dataset: 'settings', webId: 'system',
-            query: 'PREFIX apods: <' + NS + '>\\n' +
+            query: 'PREFIX apods: <' + NS + '>\n' +
               'SELECT ?revision WHERE { ' + ledger +
               ' apods:collectiveConsentStatus "stable" ; ' +
               'apods:collectiveConsentRevision ?revision . ' +

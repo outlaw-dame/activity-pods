@@ -88,12 +88,13 @@ class CandidateIntegration(unittest.TestCase):
         # This deliberately bypasses admission because we're benchmarking a
         # B-tree read, not claiming production invitation/consent semantics.
         with self.admin.transaction():
-            self.admin.executemany(
-                "INSERT INTO paper_groups_candidate.members "
-                "(group_id,actor_uri,role,status,change_revision) "
-                "VALUES (%s,%s,'member','active',2)",
-                [(g,actor(i)) for i in range(1000)]
-            )
+            with self.admin.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO paper_groups_candidate.members "
+                    "(group_id,actor_uri,role,status,change_revision) "
+                    "VALUES (%s,%s,'member','active',2)",
+                    [(g,actor(i)) for i in range(1000)]
+                )
             self.admin.execute(
                 "UPDATE paper_groups_candidate.groups SET revision=2 WHERE group_id=%s",
                 (g,)

@@ -33,8 +33,10 @@ function queryState(principal, app) {
 }
 function resetQuery(input) {
   const { subject: s, current, nonce } = validateRequest(input);
-  const from = JSON.stringify(String(current));
-  const to = JSON.stringify(String(current + 1));
+  // beginQuery writes xsd:integer revision literals, not RDF strings.
+  // SPARQL numeric syntax is required for a real CAS match on Fuseki.
+  const from = String(current);
+  const to = String(current + 1);
   const marker = JSON.stringify(nonce);
   return 'PREFIX apods: <' + NS + '>\n' +
     'DELETE { ' + s + ' apods:collectivePendingMutation ?pending ; ' +

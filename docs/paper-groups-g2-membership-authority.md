@@ -12,7 +12,9 @@ All G2-P2 writes operate on the same Fuseki `settings` dataset as G1 Group reser
 
 The `collective-memberships` Moleculer service defines **no HTTP route** and is disabled by both `CONSENT_BRIDGE_RELEASED=false` and the default-off `PROVIDER_COLLECTIVES_MEMBERSHIPS_ENABLED` flag. Every action would require a short-lived HMAC capability bound to owner WebID, canonical Group ID, approved application URI, operation and normalized inputs.
 
-**No credential issuer exists yet.** A future provider issuer must validate the user's real Solid-OIDC identity and newly defined SAI manage-members authority; `CreateGroup` or `ReadGroups` alone is not sufficient authorization to manage members. This code must not be enabled by changing the release fuse without that integration and real HTTP negative tests.
+The SAI capability `apods:ManageMembers` is now defined distinctly from `CreateGroup` and `ReadGroups`, including their canonical expanded RDF forms. Group-only SAI grants do **not** become personal Pod WebACL permissions. Every membership operation performs native live account, app-registration and `ManageMembers` rights checks before and after the authoritative settings query/update, and the SAME settings-dataset SPARQL operation requires the exact reserved app, stable provider SAI consent ledger, no pending SAI mutation and active unique SemApps account. This adds a bounded number of authority checks per membership **operation/page**, not per local or remote recipient.
+
+**No credential issuer exists yet.** A future provider issuer must validate the user's real Solid-OIDC identity and SAI `ManageMembers` consent before signing the short-lived operation capability. `CreateGroup` and `ReadGroups` alone are never sufficient; a valid HMAC alone is insufficient without live SAI consent. The disabled release fuse stays closed, and this change does not expose an authentication endpoint. This code must not be enabled by changing the release fuse without that integration and real HTTP negative tests.
 
 Every Fuseki conditional write and owner-scoped read simultaneously checks the persisted Group owner and unique, active SemApps account. Deletion, suspension, disabled and duplicate accounts fail closed without a stale cached grant. Authorization is not inferred from client-supplied identity or Pod group membership.
 
@@ -27,7 +29,7 @@ Every Fuseki conditional write and owner-scoped read simultaneously checks the p
 
 ## Evidence and performance limitations
 
-The dedicated G2 workflow starts disposable TDB2, verifies owner initialization, unique membership revision, concurrent expected-epoch conflict, outsider rejection, banned-member exclusion, keyset cursor and restart durability on real Fuseki.
+The dedicated G2 workflow starts disposable TDB2, verifies owner initialization, unique membership revision, concurrent expected-epoch conflict, outsider rejection, banned-member exclusion, keyset cursor and restart durability on real Fuseki. It also exercises owner deletion, suspension, disabled/duplicate account records and a deliberately blocked SAI consent ledger: each must deny reads and writes while leaving the revision unchanged. A separate backend test validates the real SAI right distinction and non-escalation to personal Pod ACLs.
 
 **Keyset paging prevents OFFSET but is not, by itself, proof of an indexed low-cost sort.** Fuseki `FILTER(STR(?actor) > cursor) ORDER BY STR(?actor)` may still evaluate many Group membership records, especially for deep pages. Before enabling large Groups, benchmark 1k/10k/100k member datasets and Fuseki query plans; if sorting or repeated scans dominate, add a verified secondary index/materialized per-Group cursor projection or move membership pagination to an appropriately indexed authority store with transactional replay/reconciliation semantics. Never claim that this query scales sublinearly simply because it uses a cursor.
 

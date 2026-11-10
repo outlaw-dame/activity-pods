@@ -188,8 +188,7 @@ module.exports = {
             try {
               assertUnifiedResult({
                 webId: solid.webId, actorId: activitypub?.actorId,
-                did: atproto?.did, repoInitialized: atproto?.repoInitialized,
-                identityWebId: canonical?.canonicalAccountId
+                did: atproto?.did, repoInitialized: atproto?.repoInitialized
               });
             } catch (error) {
               throw new MoleculerError(error.message, 503, error.code);

@@ -332,7 +332,7 @@ async function prepare() {
   );
   assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
     { status: 'blocked', revision: 4 });
-  const readyLeftovers = await sparql('query', 'PREFIX apods: <' + groupNs +
+  const readyLeftovers = await sparql('query', 'PREFIX apods: <http://activitypods.org/ns/core#>' +
     '> SELECT ?token WHERE { ' + liveFence.consentSubject(bootstrapPrincipal, bootstrapApp) +
     ' apods:collectiveCompletionReady ?token . }');
   assert.equal(readyLeftovers.length, 0, 'stale completion marker survived recovery');

@@ -53,7 +53,7 @@ def configure_transaction(conn):
     conn.execute("SET LOCAL idle_in_transaction_session_timeout = '5000ms'")
 
 
-def _identity(conn, owner: str, lock: str = "SHARE"):
+def _identity(conn, owner: str, lock: str = "SHARE",\n              require_active: bool = True):
     result = conn.execute(
         "SELECT enabled,lifecycle_revision FROM paper_groups_candidate.identities "
         "WHERE webid=%s FOR " + lock, (owner,)
@@ -98,7 +98,9 @@ def revoke_consent(conn, owner: str, app: str, expected_revision: int):
     owner, app = require_https(owner), require_https(app)
     with conn.transaction():
         configure_transaction(conn)
-        _identity(conn, owner)
+        # Revocation must be allowed even if the account was suspended first;
+        # otherwise a later re-enable could resurrect an old grant.
+        _identity(conn, owner, require_active=False)
         revision = _consent(conn, owner, app, "UPDATE")
         if revision != expected_revision:
             raise StaleRevision("consent revision changed")

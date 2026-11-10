@@ -4,9 +4,7 @@ const { MIME_TYPES } = require('@semapps/mime-types');
 // Provider-owned social Group capability grants are NOT WebACL permissions
 // on a person's Pod collections/files. These rights are enforced by the
 // provider's collective identity service only.
-const GROUP_ONLY_RIGHTS = new Set(['apods:CreateGroup', 'apods:ReadGroups']);
-const onlyGroupRights = rights =>
-  Array.isArray(rights) && rights.length > 0 && rights.every(right => GROUP_ONLY_RIGHTS.has(right));
+const { isGroupRight, onlyGroupRights } = require('../utils/collective-special-rights');
 
 // Never store internal mutation tokens in propagating ctx.meta or client data.
 const inFlightGroupMutations = new WeakMap();
@@ -355,7 +353,7 @@ module.exports = {
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
         const resource = ctx.params.resource || {};
         const rights = arrayOf(resource['apods:hasSpecialRights']);
-        if (!rights.some(right => GROUP_ONLY_RIGHTS.has(right))) return;
+        if (!rights.some(isGroupRight)) return;
         await beginGroupMutation(ctx, resource);
       },
       async delete(ctx) {
@@ -366,7 +364,7 @@ module.exports = {
           resourceUri: ctx.params.resourceUri, webId: 'system'
         });
         if (!arrayOf(resource?.['apods:hasSpecialRights'])
-          .some(right => GROUP_ONLY_RIGHTS.has(right))) return;
+          .some(isGroupRight)) return;
         await beginGroupMutation(ctx, resource);
       }
     },

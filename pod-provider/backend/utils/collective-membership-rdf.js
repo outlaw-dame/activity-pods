@@ -87,8 +87,7 @@ function initializeQuery({ groupId, owner, app }) {
       'apods:collectiveMemberStatus "active" . } WHERE { ' +
       g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(ownerUri) + ' ; ' +
-      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
-      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + ' . ' +
       activeOwnerCondition(ownerUri) +
       consentCondition(ownerUri, app) +
       'FILTER NOT EXISTS { ' + g + ' apods:collectiveMembershipEpoch ?existing . } ' +
@@ -120,7 +119,7 @@ function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch,
       'apods:collectiveMemberMutationReceipt ' + literal(receipt) + ' . }\n' +
     'WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(ownerUri) + ' ; ' +
-      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + ' ; ' +
       'apods:collectiveMembershipEpoch ?oldEpoch . ' +
       activeOwnerCondition(ownerUri) +
       consentCondition(ownerUri, app) +
@@ -139,7 +138,7 @@ function readEpochQuery({ groupId, owner, app }) {
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?epoch WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
     'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
-      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + ' ; ' +
     'apods:collectiveMembershipEpoch ?epoch . ' +
     activeOwnerCondition(owner) +
       consentCondition(owner, app) + '} LIMIT 2';
@@ -151,7 +150,7 @@ function readMutationQuery({ groupId, owner, app, member }) {
     'SELECT ?epoch ?role ?status ?receipt WHERE { ' +
       g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
-      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + ' ; ' +
       'apods:collectiveMembershipEpoch ?epoch . ' +
       activeOwnerCondition(owner) +
       consentCondition(owner, app) +
@@ -171,7 +170,7 @@ function listQuery({ groupId, owner, app, cursor = null, limit = 100 }) {
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?actor ?role ?epoch WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(owner) + ' ; ' +
-      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + ' ; ' +
       'apods:collectiveMembershipEpoch ?epoch . ' +
       activeOwnerCondition(owner) +
       consentCondition(owner, app) +

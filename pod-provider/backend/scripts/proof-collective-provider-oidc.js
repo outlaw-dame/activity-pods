@@ -258,7 +258,7 @@ async function main() {
     body: JSON.stringify({
       appUri: canonicalClientId,
       acceptedAccessNeeds: [],
-      acceptedSpecialRights: ['apods:CreateGroup', 'apods:ReadGroups']
+      acceptedSpecialRights: ['apods:CreateGroup', 'apods:ReadGroups', 'apods:ManageMembers']
     })
   });
   ensure(consent, await json(consent), [200, 201], 'Same-user SAI consent');
@@ -274,6 +274,9 @@ async function main() {
   assert(authRows.some(row =>
     row.right.value === 'http://activitypods.org/ns/core#CreateGroup'),
   'Native same-user SAI Group capability not persisted on the user Pod');
+  assert(authRows.some(row =>
+    row.right.value === 'http://activitypods.org/ns/core#ManageMembers'),
+  'Native same-user SAI ManageMembers right not persisted on the user Pod');
   const subjectHash = crypto.createHash('sha256').update(
     JSON.stringify([person.webId, canonicalClientId, 'apods:CreateGroup'])
   ).digest('hex');

@@ -109,6 +109,38 @@ const fencePrincipal = 'https://provider-proof.example/users/alice#me';
 const fenceApp = 'https://paper-proof.example/app';
 const pendingPrincipal = 'https://provider-proof.example/users/bob#me';
 const pendingApp = 'https://paper-proof.example/app';
+const bootstrapPrincipal = 'https://provider-proof.example/users/bootstrap#me';
+const bootstrapApp = 'https://paper-proof.example/bootstrap';
+const bootstrapSecret = 'b'.repeat(48);
+async function bootstrapLive() {
+  const issuedAt = Date.now() - 1000, expiresAt = issuedAt + 30000;
+  const purpose = 'provider.collective.consent.bootstrap.v1';
+  const fields = [purpose, bootstrapPrincipal, bootstrapApp, issuedAt, expiresAt];
+  const grant = {
+    purpose, principal: bootstrapPrincipal, app: bootstrapApp, issuedAt, expiresAt,
+    mac: crypto.createHmac('sha256', bootstrapSecret).update(JSON.stringify(fields)).digest('hex')
+  };
+  const ctx = {
+    params: { principal: bootstrapPrincipal, app: bootstrapApp, grant },
+    async call(action, args) {
+      if (action === 'auth.account.findByWebId') return { webId: args.webId };
+      if (action === 'app-registrations.isRegistered') return true;
+      if (action === 'access-authorizations.getSpecialRights') return ['apods:CreateGroup'];
+      assert.equal(args.dataset, 'settings');
+      assert.equal(args.webId, 'system');
+      if (action === 'triplestore.update') return sparql('update', args.query);
+      if (action === 'triplestore.query') return sparql('query', args.query);
+      throw new Error('unexpected bootstrap action ' + action);
+    }
+  };
+  return liveFence.actions.bootstrap.handler.call({
+    settings: {
+      enabled: true, bootstrapEnabled: true,
+      bootstrapSecret, approvedApps: [bootstrapApp]
+    }
+  }, ctx);
+}
+
 async function callLiveFence(action, principal, app, token) {
   const ctx = {
     params: { principal, app, ...(token ? { token } : {}) },
@@ -266,6 +298,18 @@ async function prepare() {
   await assert.rejects(callLiveFence('finish', fencePrincipal, fenceApp, abandonedA.token),
     e => e.type === 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
 
+  // Provider-signed bootstrap may initialize ONLY a virgin consent ledger.
+  assert.deepEqual(await bootstrapLive(), { status: 'stable', revision: 1 });
+  assert.deepEqual(await bootstrapLive(), { status: 'stable', revision: 1 });
+  const bootstrapMutation = await callLiveFence('begin', bootstrapPrincipal, bootstrapApp);
+  await assert.rejects(bootstrapLive(),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
+  await callLiveFence('finish', bootstrapPrincipal, bootstrapApp, bootstrapMutation.token);
+  assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
+    { status: 'stable', revision: 2 });
+  await assert.rejects(bootstrapLive(),
+    e => e.type === 'COLLECTIVE_BOOTSTRAP_CONFLICT');
+
   // Two concurrent SAI mutations must BOTH finish before the provider
   // status may return to stable. A crash with an outstanding token remains
   // blocked, rather than assuming the user still authorized creation.
@@ -336,6 +380,8 @@ async function verify() {
 
   assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
     { status: 'stable', revision: 4 });
+  assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
+    { status: 'stable', revision: 2 });
   assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
   assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
   assert.equal(await loadFencedReservation(fencedKeyC), null);

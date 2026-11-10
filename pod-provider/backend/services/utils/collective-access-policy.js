@@ -7,6 +7,7 @@
  * issuer, and no app name or ctx.meta value is trusted here.
  */
 const { MoleculerError } = require('moleculer').Errors;
+const { hasGroupRight } = require('./collective-special-rights');
 
 const RIGHTS = Object.freeze({
   reserve: 'apods:CreateGroup',
@@ -64,7 +65,7 @@ async function assertLiveCollectiveConsent(ctx, { principal, app, operation, app
   const rights = acceptedRights(await ctx.call('access-authorizations.getSpecialRights', {
     appUri: app, podOwner: principal
   }));
-  if (!rights.includes(RIGHTS[operation])) {
+  if (!hasGroupRight(rights, operation === 'reserve' ? 'CreateGroup' : 'ReadGroups')) {
     deny('COLLECTIVE_APP_CONSENT_MISSING');
   }
   return true;

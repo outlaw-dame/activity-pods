@@ -128,6 +128,22 @@ async function main() {
       () => execute('list',{...common,limit:100}),
       e => e.type === 'GROUP_POSTGRES_AUTHORITY_DENIED'
     );
+    // Simulate a later, separately authorized grant event (not implemented
+    // by this candidate). An old revoke receipt must never report the
+    // current authorization state as false after a newer grant.
+    await pool.query(
+      'UPDATE paper_groups_candidate.consent SET granted=true,revision=revision+1 ' +
+      'WHERE owner_webid=$1 AND app_uri=$2',[owner,app]
+    );
+    await assert.rejects(
+      ()=>execute('revokeConsent',{
+        owner,app,expectedConsentRevision:1,operationId:revocationOp
+      }),e=>e.type==='GROUP_POSTGRES_STALE_CONSENT_REVISION'
+    );
+    await pool.query(
+      'UPDATE paper_groups_candidate.consent SET granted=false,revision=revision+1 ' +
+      'WHERE owner_webid=$1 AND app_uri=$2',[owner,app]
+    );
     const proof = (await pool.query(
       'SELECT revision FROM paper_groups_candidate.groups WHERE group_id=$1',
       [groupId]

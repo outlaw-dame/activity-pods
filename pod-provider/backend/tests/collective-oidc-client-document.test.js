@@ -47,6 +47,25 @@ describe('remote HTTPS Solid-OIDC Client ID document hardening', () => {
     expect(fetch.mock.calls[0][1].headers.Accept).toBe('application/ld+json');
   });
 
+  test('malformed JSON-LD and missing official context are denied without partial client fallback', async () => {
+    fetch.mockResolvedValueOnce({
+      status: 200,
+      headers: { get: () => 'application/ld+json' },
+      text: async () => '{"@context":'
+    });
+    await expect(adapter().find(URI)).rejects.toThrow(
+      'Invalid Solid-OIDC Client ID Document JSON-LD'
+    );
+    fetch.mockResolvedValueOnce(makeResponse({
+      '@context': { client_id: 'https://incorrect.example/context#client_id' },
+      client_id: URI,
+      redirect_uris: ['https://paper.example/callback']
+    }));
+    await expect(adapter().find(URI)).rejects.toThrow(
+      'Invalid Solid-OIDC Client ID Document JSON-LD'
+    );
+  });
+
   test('does not accept metadata from a different application identity', async () => {
     fetch.mockResolvedValue(makeResponse(document('https://attacker.example/app')));
     await expect(adapter().find(URI)).rejects.toThrow('must match the client ID');

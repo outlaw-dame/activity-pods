@@ -27,12 +27,6 @@ function fixture({ claims = signed, enabled = true, membershipApiEnabled = true,
         }, params, 'list');
         return { groupId, members: [], membershipRevision: 2 };
       }
-      if (name === 'collective-memberships.change') {
-        membership._test.authenticate({
-          enabled: true, secret, approvedApps: [app]
-        }, params, 'change');
-        return { groupId, membershipRevision: 3 };
-      }
       throw new Error('unexpected call ' + name);
     }
   };
@@ -41,11 +35,10 @@ function fixture({ claims = signed, enabled = true, membershipApiEnabled = true,
     membershipGrantSecret: secret, allowedOriginsConfig: ''
   } };
   return { calls, ctx, instance,
-    list: () => api.actions.listMembers.handler.call(instance, ctx),
-    change: () => api.actions.changeMember.handler.call(instance, ctx)
+    list: () => api.actions.listMembers.handler.call(instance, ctx)
   };
 }
-describe('G2 provider native membership issuer (release fenced)', () => {
+describe('G2 read-only provider native membership issuer (release fenced)', () => {
   test('immutable release fuse remains closed', () => {
     expect(CONSENT_BRIDGE_RELEASED).toBe(false);
     expect(api.settings.membershipApiEnabled).toBe(false);

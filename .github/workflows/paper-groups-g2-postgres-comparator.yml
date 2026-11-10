@@ -1,0 +1,84 @@
+name: Paper Groups G2 — TDB2 vs PostgreSQL Candidate
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/scripts/proof-collective-postgres-writer-contention.py'
+      - '.github/workflows/paper-groups-g2-postgres-comparator.yml'
+      - 'docs/paper-groups-tdb2-postgres-comparison.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  same-runner-candidate-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate scripts and install benchmark-only PostgreSQL driver
+        run: |
+          set -euo pipefail
+          node --check backend/scripts/proof-collective-tdb2-writer-contention.js
+          python -m py_compile backend/scripts/proof-collective-postgres-writer-contention.py
+          python -m pip install --disable-pip-version-check 'psycopg[binary]==3.2.10'
+      - name: Boot disposable Fuseki and PostgreSQL on the same runner
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+          docker run -d --rm --name paper-g2-postgres-bench \
+            -e POSTGRES_PASSWORD=bench \
+            -e POSTGRES_DB=paper_g2_bench \
+            -p 127.0.0.1:5544:5432 postgres:18
+          for n in $(seq 1 90); do
+            if docker exec paper-g2-postgres-bench pg_isready -U postgres -d paper_g2_bench >/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec paper-g2-postgres-bench pg_isready -U postgres -d paper_g2_bench
+      - name: Compare each CAS mode at 1,4,16 concurrent Group writers
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
+          G2_BENCH_DISPOSABLE: confirmed
+          G2_WRITE_OPS_PER_WRITER: '24'
+          G2_POSTGRES_DSN: postgresql://postgres:bench@127.0.0.1:5544/paper_g2_bench
+        run: |
+          set -euo pipefail
+          node backend/scripts/proof-collective-tdb2-writer-contention.js | tee /tmp/g2-tdb2-writers.jsonl
+          python backend/scripts/proof-collective-postgres-writer-contention.py | tee /tmp/g2-postgres-writers.jsonl
+      - name: Upload verified non-sensitive evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-g2-tdb2-postgres-comparative-write-evidence
+          path: |
+            /tmp/g2-tdb2-writers.jsonl
+            /tmp/g2-postgres-writers.jsonl
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Container diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose-test.yml logs --no-color --tail=80 fuseki_test || true
+          docker logs --tail=80 paper-g2-postgres-bench || true
+      - name: Remove all disposable stores
+        if: always()
+        run: |
+          docker compose -f docker-compose-test.yml down -v || true
+          docker rm -f paper-g2-postgres-bench || true
+          sudo rm -rf data/fuseki_test

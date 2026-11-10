@@ -24,6 +24,10 @@ jobs:
   membership-cost:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        members: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('[{0}]', inputs.members) || '[1000,10000,100000]') }}
     defaults:
       run:
         working-directory: pod-provider
@@ -46,7 +50,7 @@ jobs:
           FUSEKI_USER: admin
           FUSEKI_PASSWORD: admin
           G2_BENCH_DISPOSABLE: confirmed
-          G2_BENCH_MEMBERS: ${{ github.event_name == 'workflow_dispatch' && inputs.members || '1000' }}
+          G2_BENCH_MEMBERS: ${{ matrix.members }}
         run: |
           set -euo pipefail
           node backend/scripts/benchmark-collective-membership-tdb2.js |
@@ -54,7 +58,7 @@ jobs:
       - name: Upload measured cost evidence
         uses: actions/upload-artifact@v4
         with:
-          name: g2-membership-tdb2-query-cost
+          name: g2-membership-tdb2-query-cost-${{ matrix.members }}
           path: /tmp/g2-membership-cost.jsonl
           retention-days: 14
       - name: Diagnostics if real query probe fails

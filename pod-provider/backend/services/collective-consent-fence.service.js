@@ -71,9 +71,9 @@ function bootstrapQuery(principal, app) {
   const s = subject(principal, app);
   // Only a virgin ledger can be bootstrapped. Any prior revoke, crashed
   // mutation or completed token makes it permanently ineligible.
-  return 'PREFIX apods: <' + NS + '>\\n' +
+  return 'PREFIX apods: <' + NS + '>\n' +
     'INSERT { ' + s + ' apods:collectiveConsentRevision "1" ; ' +
-    'apods:collectiveConsentStatus "stable" . }\\n' +
+    'apods:collectiveConsentStatus "stable" . }\n' +
     'WHERE { FILTER NOT EXISTS { ' + s + ' ?existing ?value . } }';
 }
 

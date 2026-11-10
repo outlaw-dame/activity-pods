@@ -76,7 +76,7 @@ function initializeQuery({ groupId, owner }) {
       'FILTER NOT EXISTS { ' + g + ' apods:collectiveMembershipEpoch ?existing . } ' +
       'FILTER NOT EXISTS { ' + m + ' ?existingMemberProperty ?existingMemberValue . } }';
 }
-function mutateQuery({ groupId, owner, member, role, status, expectedEpoch }) {
+function mutateQuery({ groupId, owner, member, role, status, expectedEpoch, receipt }) {
   const g = groupSubject(groupId);
   const memberUri = validateActor(member);
   const ownerUri = validateActor(owner);
@@ -84,16 +84,22 @@ function mutateQuery({ groupId, owner, member, role, status, expectedEpoch }) {
   if (!ROLES.has(role) || !STATUSES.has(status)) fail('invalid role/status');
   if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 1) fail('invalid expected epoch');
   const m = memberSubject(groupId, memberUri);
+  if (typeof receipt !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(receipt)) {
+    fail('invalid mutation receipt');
+  }
   return 'PREFIX apods: <' + NS + '>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n' +
     'DELETE { ' + g + ' apods:collectiveMembershipEpoch ?oldEpoch . ' +
       m + ' apods:collectiveMemberRole ?oldRole ; ' +
-      'apods:collectiveMemberStatus ?oldStatus . }\n' +
+      'apods:collectiveMemberStatus ?oldStatus ; ' +
+      'apods:collectiveMemberMutationReceipt ?oldReceipt . }\n' +
     'INSERT { ' + g + ' apods:collectiveMembershipEpoch ?nextEpoch . ' +
       m + ' a apods:CollectiveMembershipV1 ; ' +
       'apods:collectiveMemberGroup ' + literal(groupId) + ' ; ' +
       'apods:collectiveMemberActor ' + literal(memberUri) + ' ; ' +
       'apods:collectiveMemberRole ' + literal(role) + ' ; ' +
-      'apods:collectiveMemberStatus ' + literal(status) + ' . }\n' +
+      'apods:collectiveMemberStatus ' + literal(status) + ' ; ' +
+      'apods:collectiveMemberMutationReceipt ' + literal(receipt) + ' . }\n' +
     'WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(ownerUri) + ' ; ' +
       'apods:collectiveMembershipEpoch ?oldEpoch . ' +
@@ -102,6 +108,7 @@ function mutateQuery({ groupId, owner, member, role, status, expectedEpoch }) {
       'BIND(xsd:integer(?oldEpoch) + 1 AS ?nextEpoch) ' +
       'OPTIONAL { ' + m + ' apods:collectiveMemberRole ?oldRole . } ' +
       'OPTIONAL { ' + m + ' apods:collectiveMemberStatus ?oldStatus . } ' +
+      'OPTIONAL { ' + m + ' apods:collectiveMemberMutationReceipt ?oldReceipt . } ' +
       'FILTER NOT EXISTS { ' + m + ' apods:collectiveMemberActor ?otherActor . ' +
       'FILTER(?otherActor != ' + literal(memberUri) + ') } ' +
       'FILTER NOT EXISTS { ' + m + ' apods:collectiveMemberGroup ?otherGroup . ' +
@@ -114,6 +121,21 @@ function readEpochQuery({ groupId, owner }) {
     'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
     'apods:collectiveMembershipEpoch ?epoch . ' +
     activeOwnerCondition(owner) + '} LIMIT 2';
+}
+function readMutationQuery({ groupId, owner, member }) {
+  const g = groupSubject(groupId);
+  const m = memberSubject(groupId, member);
+  return 'PREFIX apods: <' + NS + '>\n' +
+    'SELECT ?epoch ?role ?status ?receipt WHERE { ' +
+      g + ' a apods:CollectiveReservationV1 ; ' +
+      'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
+      'apods:collectiveMembershipEpoch ?epoch . ' +
+      activeOwnerCondition(owner) +
+      m + ' a apods:CollectiveMembershipV1 ; ' +
+      'apods:collectiveMemberGroup ' + literal(groupId) + ' ; ' +
+      'apods:collectiveMemberActor ' + literal(validateActor(member)) + ' ; ' +
+      'apods:collectiveMemberRole ?role ; apods:collectiveMemberStatus ?status ; ' +
+      'apods:collectiveMemberMutationReceipt ?receipt . } LIMIT 2';
 }
 function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
   const g = groupSubject(groupId);
@@ -137,5 +159,5 @@ function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
 module.exports = Object.freeze({
   MAX_LIMIT, ROLES, STATUSES,
   validateId, validateActor, groupSubject, memberSubject,
-  initializeQuery, mutateQuery, readEpochQuery, listQuery
+  initializeQuery, mutateQuery, readEpochQuery, readMutationQuery, listQuery
 });

@@ -241,43 +241,48 @@ class CandidateIntegration(unittest.TestCase):
             "indexUsed":True}),flush=True)
 
     def test_03d_16_concurrent_full_authorization_group_writers(self):
-        groups=[gid(300+i) for i in range(16)]
-        for group in groups:
-            reserve_group(self.admin,group,OWNER,APP)
-        samples=[]
-        errors=[]
-        def task(arg):
-            n,group=arg
-            with connection() as conn:
-                for i in range(24):
-                    started=time.perf_counter()
-                    try:
+        # Three independent trials avoid presenting one noisy shared GitHub
+        # runner observation as a stable production performance threshold.
+        trials=[]
+        for round_number in range(3):
+            groups=[gid(300+round_number*16+i) for i in range(16)]
+            for group in groups:
+                reserve_group(self.admin,group,OWNER,APP)
+            samples=[]
+            def task(arg):
+                n,group=arg
+                with connection() as conn:
+                    for i in range(24):
+                        started=time.perf_counter()
                         result=mutate_member(conn,group=group,owner=OWNER,app=APP,
-                            member=actor(n*1000+i),role="member",status="requested",
+                            member=actor(round_number*100000+n*1000+i),
+                            role="member",status="requested",
                             expected_revision=i+1,operation_id=str(uuid.uuid4()))
-                        if result["revision"]!=i+2: raise AssertionError("wrong epoch")
-                    except BaseException as ex:
-                        errors.append(str(ex))
-                        raise
-                    samples.append((time.perf_counter()-started)*1000)
-        started=time.perf_counter()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-            list(executor.map(task,enumerate(groups)))
-        wall_ms=(time.perf_counter()-started)*1000
-        self.assertEqual(errors,[])
-        self.assertEqual(len(samples),384)
-        for group in groups:
-            self.assertEqual(self.admin.execute(
-                "SELECT revision FROM paper_groups_candidate.groups WHERE group_id=%s",
-                (group,)
-            ).fetchone()[0],25)
-        sorted_ms=sorted(samples)
-        p95=sorted_ms[int(len(sorted_ms)*0.95)-1]
+                        if result["revision"]!=i+2:
+                            raise AssertionError("wrong Group epoch")
+                        samples.append((time.perf_counter()-started)*1000)
+            started=time.perf_counter()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+                list(executor.map(task,enumerate(groups)))
+            wall_ms=(time.perf_counter()-started)*1000
+            self.assertEqual(len(samples),384)
+            for group in groups:
+                self.assertEqual(self.admin.execute(
+                    "SELECT revision FROM paper_groups_candidate.groups WHERE group_id=%s",
+                    (group,)
+                ).fetchone()[0],25)
+            sorted_ms=sorted(samples)
+            trials.append({
+                "trial":round_number+1,
+                "throughputPerSecond":round(384*1000/wall_ms,2),
+                "p95Ms":round(sorted_ms[int(len(sorted_ms)*0.95)-1],2),
+                "maxMs":round(max(samples),2)
+            })
         print(json.dumps({
             "proof":"g2-postgres-authorized-16-writers",
-            "ok":True,"writers":16,"mutations":384,
-            "throughputPerSecond":round(384*1000/wall_ms,2),
-            "p95Ms":round(p95,2),"maxMs":round(max(samples),2)
+            "ok":True,"writers":16,"mutationsPerTrial":384,
+            "trials":trials,
+            "limitations":"Disposable CI shared runner, no Solid/SAI or full remote fanout"
         }),flush=True)
 
     def test_04_revoke_fences_new_mutations_and_private_reads(self):

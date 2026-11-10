@@ -112,6 +112,42 @@ async function prepare() {
   assert.equal(next.length, 1);
   assert.equal(next[0].actor.value, rows[1].actor.value);
   assert(!rows.some(x => x.actor.value === bob), 'Banned member leaked into active snapshot');
+  // Account lifecycle invariants: deleting, suspending, disabling or
+  // duplicating the owner record must DENY both reads and membership writes
+  // within the same settings-dataset snapshot. Removing the test tombstone
+  // simulates an authorized restoration, never a public account recovery API.
+  const ownerSubject = '<urn:apods:proof:g2-owner>';
+  const statusPredicate = '<http://semapps.org/ns/core#status>';
+  const suspensionPredicate = '<http://semapps.org/ns/core#suspendedAt>';
+  const deletionPredicate = '<http://semapps.org/ns/core#deletedAt>';
+  for (const [predicate, value] of [
+    [statusPredicate, '"disabled"'],
+    [suspensionPredicate, '"2026-11-10T05:00:00Z"'],
+    [deletionPredicate, '"2026-11-10T05:00:00Z"']
+  ]) {
+    await request('update', 'INSERT DATA { ' + ownerSubject + ' ' + predicate + ' ' + value + ' . }');
+    assert.equal(await epoch(), null, 'Tombstoned owner must not read membership epoch');
+    assert.equal((await members(null)).length, 0, 'Tombstoned owner must not enumerate members');
+    await request('update', mutation({
+      groupId, owner, member: dan, role: 'admin', status: 'active', expectedEpoch: 4
+    }));
+    await request('update', 'DELETE DATA { ' + ownerSubject + ' ' + predicate + ' ' + value + ' . }');
+    assert.equal(await epoch(), 4, 'Tombstoned mutation changed the membership epoch');
+  }
+  const duplicate = '<urn:apods:proof:g2-owner-duplicate>';
+  const authAccount = '<http://semapps.org/ns/core#AuthAccount>';
+  const webId = '<http://semapps.org/ns/core#webId>';
+  await request('update', 'INSERT DATA { ' + duplicate + ' a ' + authAccount +
+    ' ; ' + webId + ' ' + JSON.stringify(owner) + ' . }');
+  assert.equal(await epoch(), null, 'Duplicated AuthAccount must block reads');
+  await request('update', mutation({
+    groupId, owner, member: dan, role: 'admin', status: 'active', expectedEpoch: 4
+  }));
+  await request('update', 'DELETE DATA { ' + duplicate + ' a ' + authAccount +
+    ' ; ' + webId + ' ' + JSON.stringify(owner) + ' . }');
+  assert.equal(await epoch(), 4, 'Duplicate account changed membership revision');
+  assert.equal((await members(null)).length, 2);
+
   console.log(JSON.stringify({ ok: true, proof: 'g2-membership-tdb2-cas', phase: 'prepare',
     epoch: 4, activeMemberCount: 2, writeConflictsRejected: true }));
 }

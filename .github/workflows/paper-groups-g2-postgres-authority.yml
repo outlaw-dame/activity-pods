@@ -1,0 +1,75 @@
+name: Paper Groups — PostgreSQL Candidate Authority
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/sql/paper-groups-postgres-candidate-v1.sql'
+      - 'pod-provider/backend/scripts/paper_groups_pg_candidate.py'
+      - 'pod-provider/backend/scripts/test_paper_groups_pg_candidate.py'
+      - '.github/workflows/paper-groups-g2-postgres-authority.yml'
+      - 'docs/paper-groups-postgres-control-plane-candidate.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-candidate-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify source compiles, install pinned isolated driver
+        run: |
+          set -euo pipefail
+          python -m py_compile pod-provider/backend/scripts/paper_groups_pg_candidate.py
+          python -m py_compile pod-provider/backend/scripts/test_paper_groups_pg_candidate.py
+          python -m pip install --disable-pip-version-check 'psycopg[binary]==3.2.10'
+      - name: Boot disposable PostgreSQL 18
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name paper-g2-pg-control-plane \
+            -e POSTGRES_PASSWORD=bench \
+            -e POSTGRES_DB=paper_g2_candidate \
+            -p 127.0.0.1:5545:5432 postgres:18
+          for n in $(seq 1 90); do
+            if docker exec paper-g2-pg-control-plane pg_isready -U postgres -d paper_g2_candidate >/dev/null; then break; fi
+            sleep 1
+          done
+          # pg_isready inside the container may observe the temporary
+          # initialization server. Confirm that the actual host-facing
+          # TCP endpoint executes a query before starting any integration work.
+          python - <<'PY'
+          import time
+          import psycopg
+          url="postgresql://postgres:bench@127.0.0.1:5545/paper_g2_candidate"
+          deadline=time.monotonic()+60
+          delay=0.2
+          while True:
+              try:
+                  with psycopg.connect(url,connect_timeout=2) as conn:
+                      assert conn.execute("SELECT 1").fetchone()==(1,)
+                  print("PostgreSQL external TCP query ready")
+                  break
+              except (psycopg.OperationalError,OSError):
+                  if time.monotonic()>=deadline:
+                      raise RuntimeError("PostgreSQL external endpoint not ready within 60s")
+                  time.sleep(delay)
+                  delay=min(delay*1.7,2)
+          PY
+      - name: Real concurrent revocation, idempotency, indexing and cross-Group authority tests
+        env:
+          G2_BENCH_DISPOSABLE: confirmed
+          G2_POSTGRES_DSN: postgresql://postgres:bench@127.0.0.1:5545/paper_g2_candidate
+        run: |
+          set -euo pipefail
+          python pod-provider/backend/scripts/test_paper_groups_pg_candidate.py
+      - name: Print bounded PostgreSQL diagnostics on failure
+        if: failure()
+        run: docker logs --tail=100 paper-g2-pg-control-plane || true
+      - name: Destroy disposable PostgreSQL
+        if: always()
+        run: docker rm -f paper-g2-pg-control-plane || true

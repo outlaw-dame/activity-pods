@@ -11,7 +11,8 @@ const { hasGroupRight } = require('./collective-special-rights');
 
 const RIGHTS = Object.freeze({
   reserve: 'apods:CreateGroup',
-  read: 'apods:ReadGroups'
+  read: 'apods:ReadGroups',
+  members: 'apods:ManageMembers'
 });
 
 function deny(code) {
@@ -65,7 +66,7 @@ async function assertLiveCollectiveConsent(ctx, { principal, app, operation, app
   const rights = acceptedRights(await ctx.call('access-authorizations.getSpecialRights', {
     appUri: app, podOwner: principal
   }));
-  if (!hasGroupRight(rights, operation === 'reserve' ? 'CreateGroup' : 'ReadGroups')) {
+  if (!hasGroupRight(rights, RIGHTS[operation].slice('apods:'.length))) {
     deny('COLLECTIVE_APP_CONSENT_MISSING');
   }
   return true;

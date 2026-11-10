@@ -24,8 +24,11 @@ class AdmissionPolicyError extends Error {
 }
 function fail(code) { throw new AdmissionPolicyError(code); }
 function validActorUri(value) {
-  if (typeof value !== 'string' || value.length > 2048 ||
-      /[\\u0000-\\u0020\\u007f\\\\]/u.test(value)) return false;
+  if (typeof value !== 'string' || value.length < 9 || value.length > 2048) return false;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 32 || code === 127 || code === 92) return false;
+  }
   try {
     const u = new URL(value);
     return u.protocol === 'https:' && u.href === value &&

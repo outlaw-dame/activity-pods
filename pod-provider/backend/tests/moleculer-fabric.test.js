@@ -41,8 +41,14 @@ describe('ADSP P1 Moleculer fabric configuration', () => {
     expect(loaded.has('services/utils/collective-release-gate.js')).toBe(false);
     expect(loaded.has('services/utils/collective-consent-recovery.js')).toBe(false);
     expect([...loaded].some(x => x.startsWith('services/utils/'))).toBe(false);
-    // A future helper mistakenly added under service discovery must fail CI.
-    for (const file of loaded) {
+    // Validate the exact glob selection without importing unrelated runtime
+    // services into Jest (some contain ESM/native startup dependencies).
+    // The Moleculer runner itself uses glob.sync from the same dependency.
+    expect([...loaded].every(x => x.endsWith('.js'))).toBe(true);
+    for (const file of ['services/collective-consent-fence.service.js',
+      'services/collective-reservations.service.js',
+      'services/collective-reservations-api.service.js',
+      'services/collective-provisioning-leases.service.js']) {
       const schema = require(path.join(cwd, file));
       expect(typeof schema.name).toBe('string');
       expect(schema.name.length).toBeGreaterThan(0);

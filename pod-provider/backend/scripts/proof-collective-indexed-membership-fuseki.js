@@ -291,6 +291,45 @@ async function main() {
     groupId, owner, app, revision, cursor: null
   }));
   assert.equal(stale.length, 0, 'Stale index leaked after membership epoch advance');
+  // Exercise sustained churn and explicit capacity backpressure, only on
+  // the small disposable fixture to avoid making large-cardinality CI spend
+  // time doing unrelated per-user signing/remote lookups.
+  let churnCount = 0;
+  let churnP50Ms = null;
+  if (count === 1000) {
+    const durations = [];
+    // First two keys are actor(0) and fresh. Fill exactly to 512 distinct
+    // changed members without reconstructing any indexed base pages.
+    for (let i = 1; i <= 510; i++) {
+      const start = performance.now();
+      await request('update', mutation(actor(i), 'banned', 3 + i));
+      durations.push(performance.now() - start);
+    }
+    churnCount = durations.length;
+    churnP50Ms = percentile(durations, 0.5);
+    assert.deepEqual(await readDelta(), { epoch: 514, count: 512 },
+      'Exactly 512 unique changed actors must be durable');
+    const atCapacity = delta.decodeDeltaSnapshot(
+      await request('query', deltaQuery), { groupId, owner }
+    );
+    assert.equal(atCapacity.changes.length, 512);
+    // A new actor must be denied (no epoch change) when 512 slots are full.
+    await request('update', mutation(actor(900), 'banned', 514));
+    assert.deepEqual(await readDelta(), { epoch: 514, count: 512 },
+      'Overflow must fail closed and keep canonical membership revision');
+    // Same actor already in the delta is still permitted at the limit,
+    // avoiding spurious write outages for repeated state transitions.
+    await request('update', mutation(actor(0), 'left', 514));
+    assert.deepEqual(await readDelta(), { epoch: 515, count: 512 },
+      'Existing changed actor must not increase bounded delta count');
+    const finalized = delta.decodeDeltaSnapshot(
+      await request('query', deltaQuery), { groupId, owner }
+    );
+    assert.equal(finalized.membershipRevision, 515);
+    assert.equal(finalized.changes.length, 512);
+    assert(finalized.changes.some(row =>
+      row.actorUri === actor(0) && row.kind === 'remove'));
+  }
   const result = {
     proof: 'g2-membership-indexed-page-cost', members: count,
     pageSize: 100, backend: 'disposable-Fuseki-TDB2',
@@ -303,6 +342,8 @@ async function main() {
     indexedPages: pages.length,
     deltaRead5QueriesMs: deltaReadPentaMs,
     deltaPointerCount: linkRows.length,
+    churnMutations: churnCount,
+    churnMutationP50Ms: churnP50Ms,
     totalReadRequests: [...output, ...alternatives, ...indexMetrics].reduce((sum, x) => sum + x.queryCount, 0),
     measuredNodeRssBytes: process.memoryUsage().rss,
     warning: 'Synthetic snapshot materialization; indexed reads are real TDB2, but production mutation/build/recovery costs remain UNPROVEN'

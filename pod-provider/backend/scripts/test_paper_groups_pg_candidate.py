@@ -7,6 +7,8 @@ credentials, no real federation, and absolutely no runtime feature flag.
 import concurrent.futures
 import os
 import threading
+import time
+import json
 import unittest
 import uuid
 from pathlib import Path
@@ -187,6 +189,96 @@ class CandidateIntegration(unittest.TestCase):
         page=list_members(self.admin,group=g,owner=OWNER,app=APP)
         self.assertEqual(page["revision"],2)
         self.assertIn(actor(30),[x["actorUri"] for x in page["members"]])
+
+    def test_03c_real_100k_roster_indexed_keyset(self):
+        group=gid(204)
+        reserve_group(self.admin,group,OWNER,APP)
+        with self.admin.transaction():
+            self.admin.execute("""
+                INSERT INTO paper_groups_candidate.members
+                    (group_id,actor_uri,role,status,change_revision)
+                SELECT %s, 'https://remote-federated.example/users/' ||
+                       lpad(n::text,6,'0'), 'member','active',2
+                FROM generate_series(0,99999) AS n
+            """,(group,))
+            self.admin.execute(
+                "UPDATE paper_groups_candidate.groups SET revision=2 "
+                "WHERE group_id=%s",(group,)
+            )
+        timings={}
+        for label,cursor in [
+            ("first",None),
+            ("middle",actor(49999)),
+            ("deep",actor(99900))
+        ]:
+            started=time.perf_counter()
+            page=list_members(self.admin,group=group,owner=OWNER,app=APP,
+                after=cursor,expected_revision=2 if cursor else None)
+            timings[label]=round((time.perf_counter()-started)*1000,2)
+            self.assertEqual(page["revision"],2)
+            self.assertLessEqual(len(page["members"]),100)
+            self.assertEqual(page["members"],
+                sorted(page["members"],key=lambda v:v["actorUri"]))
+        count=self.admin.execute(
+            "SELECT count(*) FROM paper_groups_candidate.members WHERE group_id=%s",
+            (group,)
+        ).fetchone()[0]
+        self.assertEqual(count,100001)
+        explain=self.admin.execute("""
+            EXPLAIN (FORMAT TEXT)
+            SELECT actor_uri,role FROM paper_groups_candidate.members
+            WHERE group_id=%s AND status='active'
+              AND actor_uri COLLATE "C" > %s COLLATE "C"
+            ORDER BY actor_uri COLLATE "C" LIMIT 101
+        """,(group,actor(50000))).fetchall()
+        plan=" ".join(x[0] for x in explain)
+        self.assertIn("Index",plan,
+            "Large Group keyset lookup must use a real index")
+        self.assertNotIn("Seq Scan",plan,
+            "Large Group keyset lookup must not use full table scan")
+        print(json.dumps({"proof":"g2-postgres-100k-roster","ok":True,
+            "rows":count,"pageLatencyMs":timings,
+            "indexUsed":True}),flush=True)
+
+    def test_03d_16_concurrent_full_authorization_group_writers(self):
+        groups=[gid(300+i) for i in range(16)]
+        for group in groups:
+            reserve_group(self.admin,group,OWNER,APP)
+        samples=[]
+        errors=[]
+        def task(arg):
+            n,group=arg
+            with connection() as conn:
+                for i in range(24):
+                    started=time.perf_counter()
+                    try:
+                        result=mutate_member(conn,group=group,owner=OWNER,app=APP,
+                            member=actor(n*1000+i),role="member",status="requested",
+                            expected_revision=i+1,operation_id=str(uuid.uuid4()))
+                        if result["revision"]!=i+2: raise AssertionError("wrong epoch")
+                    except BaseException as ex:
+                        errors.append(str(ex))
+                        raise
+                    samples.append((time.perf_counter()-started)*1000)
+        started=time.perf_counter()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            list(executor.map(task,enumerate(groups)))
+        wall_ms=(time.perf_counter()-started)*1000
+        self.assertEqual(errors,[])
+        self.assertEqual(len(samples),384)
+        for group in groups:
+            self.assertEqual(self.admin.execute(
+                "SELECT revision FROM paper_groups_candidate.groups WHERE group_id=%s",
+                (group,)
+            ).fetchone()[0],25)
+        sorted_ms=sorted(samples)
+        p95=sorted_ms[int(len(sorted_ms)*0.95)-1]
+        print(json.dumps({
+            "proof":"g2-postgres-authorized-16-writers",
+            "ok":True,"writers":16,"mutations":384,
+            "throughputPerSecond":round(384*1000/wall_ms,2),
+            "p95Ms":round(p95,2),"maxMs":round(max(samples),2)
+        }),flush=True)
 
     def test_04_revoke_fences_new_mutations_and_private_reads(self):
         g=gid(201)

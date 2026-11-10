@@ -48,8 +48,28 @@ module.exports = {
   },
   methods: {
     async authenticate(ctx, route, req, res) {
-      if (req.headers.signature) {
-        return ctx.call('signature.authenticate', { route, req, res });
+      // Keep the HTTP-signature principal separate from Moleculer's shared
+      // webId metadata. Downstream action middleware may make system-authority
+      // child calls before the inbox actor check runs.
+      delete ctx.meta.httpSignatureActorUri;
+      if (req.headers.signature || (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Signature '))) {
+        if (!req.headers.signature && typeof req.headers.authorization === 'string') {
+          req.headers.signature = req.headers.authorization.startsWith('Signature ')
+            ? req.headers.authorization.slice(10)
+            : req.headers.authorization;
+        }
+        const { isValid, actorUri } = await ctx.call('signature.verifyHttpSignature', {
+          path: req.originalUrl,
+          method: req.method,
+          headers: req.headers
+        });
+        if (isValid) {
+          ctx.meta.webId = actorUri;
+          ctx.meta.httpSignatureActorUri = actorUri;
+          return null;
+        }
+        ctx.meta.webId = 'anon';
+        throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
       }
       const token = req.headers.authorization?.split(' ')[1];
       if (token) {
@@ -66,8 +86,25 @@ module.exports = {
       return null;
     },
     async authorize(ctx, route, req, res) {
-      if (req.headers.signature) {
-        return ctx.call('signature.authorize', { route, req, res });
+      delete ctx.meta.httpSignatureActorUri;
+      if (req.headers.signature || (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Signature '))) {
+        if (!req.headers.signature && typeof req.headers.authorization === 'string') {
+          req.headers.signature = req.headers.authorization.startsWith('Signature ')
+            ? req.headers.authorization.slice(10)
+            : req.headers.authorization;
+        }
+        const { isValid, actorUri } = await ctx.call('signature.verifyHttpSignature', {
+          path: req.originalUrl,
+          method: req.method,
+          headers: req.headers
+        });
+        if (isValid) {
+          ctx.meta.webId = actorUri;
+          ctx.meta.httpSignatureActorUri = actorUri;
+          return null;
+        }
+        ctx.meta.webId = 'anon';
+        throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
       }
       const token = req.headers.authorization?.split(' ')[1];
       if (token) {

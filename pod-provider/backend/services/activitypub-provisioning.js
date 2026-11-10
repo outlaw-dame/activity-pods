@@ -1,8 +1,21 @@
 const { MoleculerError } = require('moleculer').Errors;
 
+function boundedPositiveInteger(name, fallback, maximum) {
+  const raw = process.env[name];
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${name} must be an integer between 1 and ${maximum}`);
+  }
+  return value;
+}
+
 module.exports = {
   name: 'activitypub-provisioning',
   dependencies: ['activitypub', 'auth.account'],
+  settings: {
+    actorReadinessDelayMs: boundedPositiveInteger('APODS_ACTIVITYPUB_PROVISIONING_DELAY_MS', 1000, 10_000),
+    actorReadinessMaxTries: boundedPositiveInteger('APODS_ACTIVITYPUB_PROVISIONING_MAX_TRIES', 60, 300)
+  },
   actions: {
     provisionForAccount: {
       params: {
@@ -49,7 +62,12 @@ module.exports = {
           'activitypub.actor.awaitCreateComplete',
           {
             actorUri: webId,
-            additionalKeys: ['preferredUsername', 'inbox', 'outbox', 'followers', 'following']
+            // SemApps already requires publicKey, inbox, outbox, followers and
+            // following. Keep the extra list non-duplicative and extend the
+            // bounded convergence window for horizontally loaded Pod cells.
+            additionalKeys: ['preferredUsername'],
+            delayMs: this.settings.actorReadinessDelayMs,
+            maxTries: this.settings.actorReadinessMaxTries
           },
           { meta: { dataset } }
         );

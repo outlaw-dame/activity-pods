@@ -335,10 +335,16 @@ jobs:
           docker compose $files up -d --no-deps backend_p2_4
           wait_port 3104
 
-          wait "$driver_pid"
+          if ! wait "$driver_pid"; then
+            cat "$log_host"
+            exit 1
+          fi
           cat "$log_host"
           test -s "$result_host"
-          wait "$removal_clock_pid"
+          if ! wait "$removal_clock_pid"; then
+            cat "$removal_clock_log"
+            exit 1
+          fi
           cat "$removal_clock_log"
           test -s "$removal_clock_result"
 

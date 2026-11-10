@@ -289,6 +289,7 @@ module.exports = {
           retryIf: err => err?.code === 429 || err?.code >= 500
         }
       );
+      await this.waitForCollectionReady(ctx, contextCollectionUri, actorUri, dataset);
 
       const historyCollectionUri = await retryWithBackoff(
         async () =>
@@ -307,8 +308,33 @@ module.exports = {
           retryIf: err => err?.code === 429 || err?.code >= 500
         }
       );
+      await this.waitForCollectionReady(ctx, historyCollectionUri, actorUri, dataset);
 
       return { contextCollectionUri, historyCollectionUri };
+    },
+
+    async waitForCollectionReady(ctx, collectionUri, actorUri, dataset) {
+      return retryWithBackoff(
+        async () => {
+          const exists = await ctx.call(
+            'activitypub.collection.exist',
+            { resourceUri: collectionUri },
+            { meta: { webId: actorUri, dataset } }
+          );
+          if (!exists) {
+            const error = new Error(`Conversation collection is not ready: ${collectionUri}`);
+            error.code = 503;
+            throw error;
+          }
+          return collectionUri;
+        },
+        {
+          maxRetries: 5,
+          baseDelayMs: 50,
+          maxDelayMs: 500,
+          retryIf: error => error?.code === 429 || error?.code >= 500
+        }
+      );
     },
 
     async attachHistoryPointer(ctx, { contextCollectionUri, historyCollectionUri, dataset }) {

@@ -35,7 +35,9 @@ services:
     expose:
       - '3030'
     environment:
-      ADMIN_PASSWORD: 'admin'
+      # Keep the backend client and Fuseki server on the same operator-supplied
+      # credential. docker-compose fails closed if the local secret is unset.
+      ADMIN_PASSWORD: '${SEMAPPS_JENA_PASSWORD:?Set SEMAPPS_JENA_PASSWORD in your local environment}'
       # Preserve the image's documented 1200 MiB default while allowing
       # operators to tune from observed JVM + host page-cache pressure.
       JVM_ARGS: '${FUSEKI_JVM_ARGS:--Xmx1200M}'

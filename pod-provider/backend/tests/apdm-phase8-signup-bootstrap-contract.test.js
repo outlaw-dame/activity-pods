@@ -59,6 +59,7 @@ describe('APDM Phase 8 signup bootstrap contract', () => {
     expect(AUTH_SOURCE).toContain('isRetryableBootstrapTimeout');
     expect(AUTH_SOURCE).toContain('!isRetryableBootstrapTimeout(error)');
     expect(AUTH_SOURCE).toContain('attempt >= forcedBootstrapReadinessAttempts');
+    expect(AUTH_SOURCE).toContain('waiting for resource failed\\. no results after\\s+\\d+\\s+tries');
   });
 
   test('gateway keeps the production timeout default while allowing a benchmark override', () => {

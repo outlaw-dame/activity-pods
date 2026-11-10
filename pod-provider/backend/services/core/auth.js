@@ -163,7 +163,9 @@ module.exports = {
 
         const isRetryableBootstrapTimeout = error => {
           const message = String(error?.message || '');
-          return /after\s+30s|still has not been created after\s+30s|timed out waiting/i.test(message);
+          return /after\s+30s|still has not been created after\s+30s|timed out waiting|waiting for resource failed\. no results after\s+\d+\s+tries/i.test(
+            message
+          );
         };
 
         const callBootstrapReadiness = async (actionName, params) => {

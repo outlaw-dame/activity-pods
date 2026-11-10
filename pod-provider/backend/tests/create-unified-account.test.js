@@ -149,6 +149,7 @@ describe('unified-account service', () => {
             atprotoHandle: ctx.params.atprotoHandle,
             atSigningKeyRef: ctx.params.atSigningKeyRef,
             atRotationKeyRef: ctx.params.atRotationKeyRef,
+            atprotoPdsUrl: ctx.params.atprotoPdsUrl,
             status: ctx.params.status,
             createdAt: bindingStore[ctx.params.canonicalAccountId]?.createdAt || now,
             updatedAt: now
@@ -181,6 +182,10 @@ describe('unified-account service', () => {
         })
       }
     });
+
+    // atproto-provisioning always declares this dependency, even when real PLC
+    // submission is disabled for this in-memory unit fixture.
+    broker.createService({ name: 'atproto-plc-submitter' });
 
     broker.createService(require('../services/core/atproto-provisioning'));
     broker.createService(require('../services/unified-account.service'));

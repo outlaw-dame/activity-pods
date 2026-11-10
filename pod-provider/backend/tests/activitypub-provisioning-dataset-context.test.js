@@ -37,7 +37,7 @@ describe('ActivityPub provisioning dataset authority', () => {
   test('resolves the owner dataset and scopes actor completeness polling to it', async () => {
     const { ctx, calls } = makeContext();
 
-    const result = await activityPubProvisioning.actions.provisionForAccount.handler(ctx);
+    const result = await activityPubProvisioning.actions.provisionForAccount.handler.call(activityPubProvisioning, ctx);
 
     expect(calls[0]).toEqual({
       action: 'auth.account.findByWebId',
@@ -48,7 +48,9 @@ describe('ActivityPub provisioning dataset authority', () => {
       action: 'activitypub.actor.awaitCreateComplete',
       params: {
         actorUri: WEB_ID,
-        additionalKeys: ['preferredUsername', 'inbox', 'outbox', 'followers', 'following']
+        additionalKeys: ['preferredUsername'],
+        delayMs: 1000,
+        maxTries: 60
       },
       options: { meta: { dataset: DATASET } }
     });
@@ -65,7 +67,7 @@ describe('ActivityPub provisioning dataset authority', () => {
   test('fails closed when the local account cannot establish dataset authority', async () => {
     const { ctx, calls } = makeContext({ account: null });
 
-    await expect(activityPubProvisioning.actions.provisionForAccount.handler(ctx)).rejects.toMatchObject({
+    await expect(activityPubProvisioning.actions.provisionForAccount.handler.call(activityPubProvisioning, ctx)).rejects.toMatchObject({
       type: 'ACTIVITYPUB_PROVISIONING_DATASET_UNAVAILABLE'
     });
     expect(calls.map(call => call.action)).toEqual(['auth.account.findByWebId']);
@@ -74,7 +76,7 @@ describe('ActivityPub provisioning dataset authority', () => {
   test('fails closed when caller username conflicts with the authoritative account dataset', async () => {
     const { ctx, calls } = makeContext({ account: { username: 'mallory' } });
 
-    await expect(activityPubProvisioning.actions.provisionForAccount.handler(ctx)).rejects.toMatchObject({
+    await expect(activityPubProvisioning.actions.provisionForAccount.handler.call(activityPubProvisioning, ctx)).rejects.toMatchObject({
       type: 'ACTIVITYPUB_PROVISIONING_DATASET_MISMATCH'
     });
     expect(calls.map(call => call.action)).toEqual(['auth.account.findByWebId']);

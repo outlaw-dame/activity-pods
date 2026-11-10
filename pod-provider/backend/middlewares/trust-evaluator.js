@@ -15,7 +15,6 @@
  */
 
 const { Errors } = require('moleculer');
-const { getDatasetFromUri } = require('@semapps/ldp');
 const { sanitizeSparqlQuery } = require('@semapps/triplestore');
 
 const TRUST_SOURCE_CLASS = 'https://activitypods.org/ns/core#TrustSource';
@@ -121,6 +120,41 @@ const activityRelevantScopes = activity => {
   return scopes;
 };
 
+async function resolveTrustDataset(ctx, webId) {
+  const account = await ctx.broker.call('auth.account.findByWebId', { webId });
+  if (
+    !account ||
+    account.webId !== webId ||
+    typeof account.username !== 'string' ||
+    account.username.trim().length === 0
+  ) {
+    throw new Error('Authoritative local account binding unavailable');
+  }
+  return account.username;
+}
+
+async function resolveTrustRecipient(ctx, collectionUri) {
+  if (typeof collectionUri !== 'string' || !collectionUri.startsWith('http')) {
+    throw new Error('Authoritative local inbox binding unavailable');
+  }
+
+  const recipientWebId = await ctx.broker.call('activitypub.collection.getOwner', {
+    collectionUri,
+    collectionKey: 'inbox'
+  });
+
+  try {
+    const recipientUrl = new URL(recipientWebId);
+    if (!['http:', 'https:'].includes(recipientUrl.protocol)) {
+      throw new Error('unsupported protocol');
+    }
+  } catch {
+    throw new Error('Authoritative local inbox binding unavailable');
+  }
+
+  return recipientWebId;
+}
+
 // --- Core evaluation --------------------------------------------------
 
 /**
@@ -134,10 +168,8 @@ const activityRelevantScopes = activity => {
  * }|null>}
  */
 async function evaluateActivity(ctx, blockThreshold) {
-  const webId = ctx.meta.webId;
-  if (!webId || webId === 'anon') return null;
-
   const { collectionUri, ...activity } = ctx.params;
+  const webId = await resolveTrustRecipient(ctx, collectionUri);
   const activityId = activity.id || activity['@id'];
   const actorUri = typeof activity.actor === 'string' ? activity.actor : activity.actor?.id || activity.actor?.['@id'];
   const activityType = normalizeType(activity.type || activity['@type']);
@@ -146,7 +178,9 @@ async function evaluateActivity(ctx, blockThreshold) {
   u.hash = '';
   const base = u.toString().replace(/\/?$/, '/');
   const dataBase = `${base}data/`;
-  const dataset = getDatasetFromUri(webId);
+  // Pod-provider actor URLs are not dataset identifiers. Bind trust reads to
+  // the authoritative local account exactly as the signing boundary does.
+  const dataset = await resolveTrustDataset(ctx, webId);
 
   const rows = await ctx.broker.call('triplestore.query', {
     query: sanitizeSparqlQuery`
@@ -201,7 +235,6 @@ async function evaluateActivity(ctx, blockThreshold) {
     ];
   });
 
-  // shouldBlock: any matched source has a filter scope AND weight >= threshold
   const shouldBlock = matches.some(
     m => normalizeNumber(m.weight) >= blockThreshold && m.matchedScopes.some(s => FILTER_SCOPES.has(s))
   );
@@ -236,10 +269,18 @@ const TrustEvaluatorMiddleware = ({
       try {
         evalResult = await evaluateActivity(ctx, blockThreshold);
       } catch (err) {
-        ctx.broker.logger.warn('[TrustEval] evaluation error (non-fatal)', { error: err.message });
+        ctx.broker.logger.warn('[TrustEval] evaluation unavailable', { error: err.message, mode });
+        if (isEnforce) {
+          // An unavailable policy/data authority must never degrade enforcement
+          // into an allow. Keep the public error stable and non-diagnostic.
+          throw new Errors.MoleculerError(
+            'Trust evaluation unavailable',
+            503,
+            'TRUST_EVAL_UNAVAILABLE'
+          );
+        }
       }
 
-      // In enforce mode: block BEFORE storing the activity
       if (isEnforce && evalResult?.shouldBlock) {
         const blockPayload = {
           activityId: evalResult.activityId,
@@ -260,7 +301,6 @@ const TrustEvaluatorMiddleware = ({
 
       const result = await next(ctx);
 
-      // Log verdict after successful inbox storage
       if (evalResult && evalResult.matches.length > 0) {
         ctx.broker.logger.info(`[TrustEval] ${isEnforce ? 'ENFORCE' : 'LOG-ONLY'} — trust source match`, {
           activityId: evalResult.activityId,
@@ -287,3 +327,6 @@ const TrustEvaluatorMiddleware = ({
 });
 
 module.exports = TrustEvaluatorMiddleware;
+module.exports.evaluateActivity = evaluateActivity;
+module.exports.resolveTrustDataset = resolveTrustDataset;
+module.exports.resolveTrustRecipient = resolveTrustRecipient;

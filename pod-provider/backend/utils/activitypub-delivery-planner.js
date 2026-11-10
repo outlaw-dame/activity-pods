@@ -18,6 +18,7 @@ const {
 const DEFAULT_TARGET_RESOLUTION_CONCURRENCY = 10;
 const DEFAULT_LOCAL_TARGET_CACHE_MAX_ENTRIES = 4096;
 const DEFAULT_REMOTE_TARGET_CACHE_MAX_ENTRIES = 4096;
+const remoteTargetCacheAuthorities = new WeakMap();
 const LOCAL_COLLECTION_QUERIES = Object.freeze({
   followers: Object.freeze({
     prefix: 'PREFIX as: <https://www.w3.org/ns/activitystreams#>',
@@ -252,8 +253,11 @@ function normalizeRemoteDeliveryTarget(actorUri, target) {
   };
 }
 
-async function resolveRemoteDeliveryTarget(ctx, actorUri) {
-  const actor = await ctx.call('activitypub.actor.get', { actorUri, webId: 'system' });
+async function resolveRemoteDeliveryTarget(ctx, actorUri, signingActorUri) {
+  if (typeof signingActorUri !== 'string' || signingActorUri.length === 0 || signingActorUri === 'system') {
+    throw new Error(`Remote delivery target resolution requires a concrete sender authority for ${actorUri}`);
+  }
+  const actor = await ctx.call('activitypub.actor.get', { actorUri, webId: signingActorUri });
   return normalizeRemoteDeliveryTarget(actorUri, {
     actorUri,
     inboxUrl: actor && actor.inbox,
@@ -264,10 +268,17 @@ async function resolveRemoteDeliveryTarget(ctx, actorUri) {
 async function resolveRemoteDeliveryTargetWithCache(
   ctx,
   actorUri,
+  signingActorUri,
   remoteDeliveryTargets,
   maxEntries = DEFAULT_REMOTE_TARGET_CACHE_MAX_ENTRIES
 ) {
-  if (!(remoteDeliveryTargets instanceof Map)) return resolveRemoteDeliveryTarget(ctx, actorUri);
+  if (!(remoteDeliveryTargets instanceof Map)) return resolveRemoteDeliveryTarget(ctx, actorUri, signingActorUri);
+
+  const cachedAuthority = remoteTargetCacheAuthorities.get(remoteDeliveryTargets);
+  if (cachedAuthority && cachedAuthority !== signingActorUri) {
+    throw new Error('Remote delivery target cache cannot be reused across sender authorities');
+  }
+  if (!cachedAuthority) remoteTargetCacheAuthorities.set(remoteDeliveryTargets, signingActorUri);
 
   if (remoteDeliveryTargets.has(actorUri)) {
     try {
@@ -277,7 +288,7 @@ async function resolveRemoteDeliveryTargetWithCache(
     }
   }
 
-  const target = await resolveRemoteDeliveryTarget(ctx, actorUri);
+  const target = await resolveRemoteDeliveryTarget(ctx, actorUri, signingActorUri);
   const boundedMaxEntries = Math.max(0, Math.floor(Number(maxEntries) || 0));
   if (remoteDeliveryTargets.size < boundedMaxEntries) {
     remoteDeliveryTargets.set(actorUri, Object.freeze({ ...target }));
@@ -356,7 +367,7 @@ async function buildDeliveryPlanV1(
               : undefined,
             localDeliveryTargets
           )
-        : await resolveRemoteDeliveryTargetWithCache(ctx, target.actor, remoteDeliveryTargets)
+        : await resolveRemoteDeliveryTargetWithCache(ctx, target.actor, actorUri, remoteDeliveryTargets)
   }));
   const localRecipients = resolvedTargets
     .filter(target => target.classification === 'local')

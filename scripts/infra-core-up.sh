@@ -9,6 +9,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 AP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 WORK_ROOT=$(CDPATH= cd -- "$AP_ROOT/.." && pwd)
 FEDIFY_ROOT="$WORK_ROOT/mastopod-federation-architecture/fedify-sidecar"
+BACKEND_ENV_FILE="$AP_ROOT/pod-provider/backend/.env"
 
 ensure_colima() {
   if ! command -v colima >/dev/null 2>&1; then
@@ -28,6 +29,24 @@ ensure_colima() {
   retry_with_backoff 3 2 8 "starting colima" colima start --cpu "$want_cpu" --memory "$want_mem" --disk 100
 }
 
+start_activitypods_compose() {
+  if [ -f "$BACKEND_ENV_FILE" ]; then
+    log "using backend environment file for ActivityPods compose interpolation"
+    retry_with_backoff 4 1 8 "starting activitypods compose" \
+      docker compose --env-file "$BACKEND_ENV_FILE" -f "$AP_ROOT/pod-provider/docker-compose.yml" up -d
+    return
+  fi
+
+  if [ -n "${SEMAPPS_JENA_PASSWORD:-}" ]; then
+    log "backend .env not found; using exported SEMAPPS_JENA_PASSWORD for ActivityPods compose"
+    retry_with_backoff 4 1 8 "starting activitypods compose" \
+      docker compose -f "$AP_ROOT/pod-provider/docker-compose.yml" up -d
+    return
+  fi
+
+  fail "missing $BACKEND_ENV_FILE and SEMAPPS_JENA_PASSWORD; copy pod-provider/backend/.env.example to .env and set the local Jena secret"
+}
+
 main() {
   require_cmd docker
   require_cmd npm
@@ -38,7 +57,7 @@ main() {
   ensure_colima
 
   log "starting ActivityPods core compose services"
-  retry_with_backoff 4 1 8 "starting activitypods compose" docker compose -f "$AP_ROOT/pod-provider/docker-compose.yml" up -d
+  start_activitypods_compose
 
   log "starting federation core compose services"
   # pdq-hash resolves 'redis' via activitypods-network; that network doesn't

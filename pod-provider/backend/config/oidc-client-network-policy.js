@@ -22,8 +22,9 @@ for (const [prefix, bits] of [
 ]) blocked.addSubnet(prefix, bits, 'ipv4');
 for (const [prefix, bits] of [
   ['::', 128], ['::1', 128], ['::ffff:0:0', 96],
-  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
-  ['2001:db8::', 32]
+  ['fc00::', 7], ['fec0::', 10], ['fe80::', 10], ['ff00::', 8],
+  ['64:ff9b::', 96], ['2001::', 32], ['2001:10::', 28],
+  ['2001:db8::', 32], ['2002::', 16]
 ]) blocked.addSubnet(prefix, bits, 'ipv6');
 
 function allowedTestHost(hostname) {
@@ -41,7 +42,7 @@ function safeUri(raw) {
   }
   let url;
   try { url = new URL(raw); } catch { throw new Error('Invalid Solid-OIDC Client ID URL'); }
-  const localDev = process.env.NODE_ENV !== 'production' &&
+  const localDev = ['development', 'test'].includes(process.env.NODE_ENV) &&
     url.protocol === 'http:' && url.hostname === 'localhost';
   if ((!localDev && url.protocol !== 'https:') ||
       url.href !== raw || url.username || url.password ||

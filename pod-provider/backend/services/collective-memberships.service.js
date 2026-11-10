@@ -156,7 +156,9 @@ module.exports = {
         }
         const limited = rows.slice(0, ctx.params.limit);
         const actorUris = limited.map(row => rdf.validateActor(getValue(row, 'actor')));
-        if (new Set(actorUris).size !== actorUris.length ||
+        const roles = limited.map(row => getValue(row, 'role'));
+        if (roles.some(role => role !== 'owner' && !rdf.ROLES.has(role)) ||
+            new Set(actorUris).size !== actorUris.length ||
             actorUris.some((uri, i) => i > 0 && uri <= actorUris[i - 1])) {
           deny('GROUP_MEMBERSHIP_SNAPSHOT_UNVERIFIED', 503);
         }
@@ -165,7 +167,7 @@ module.exports = {
           groupId: ctx.params.groupId,
           membershipRevision: revision,
           members: limited.map((row, index) => ({
-            actorUri: actorUris[index], role: getValue(row, 'role')
+            actorUri: actorUris[index], role: roles[index]
           })),
           hasMore: rows.length > ctx.params.limit,
           nextCursor: rows.length > ctx.params.limit ? actorUris[actorUris.length - 1] : null

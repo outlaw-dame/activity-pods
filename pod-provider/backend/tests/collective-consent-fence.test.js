@@ -177,6 +177,30 @@ describe('SAI authorization and app-registration pre-mutation barriers', () => {
     expect(seen).toEqual(['app-registrations.get', 'collective-consent-fence.begin']);
   });
 
+  test('new app registration is fenced before LDP POST and only finished after registry update', async () => {
+    const seen = [];
+    const ctx = {
+      params: { resource: {
+        'interop:registeredBy': principal, 'interop:registeredAgent': app
+      } },
+      async call(name) {
+        seen.push(name);
+        if (name === 'collective-consent-fence.begin') return testBegin();
+        return true;
+      }
+    };
+    await registrations.hooks.before.post(ctx);
+    expect(seen).toEqual(['collective-consent-fence.begin']);
+    await registrations.hooks.after.post(ctx, 'https://provider.example/registrations/new');
+    expect(seen).toEqual([
+      'collective-consent-fence.begin',
+      'ldp.remote.store',
+      'applications.attach',
+      'agent-registry.add',
+      'collective-consent-fence.finish'
+    ]);
+  });
+
   test('registration update finishes only after native storage/cache hook completes', async () => {
     const seen = [];
     const ctx = {

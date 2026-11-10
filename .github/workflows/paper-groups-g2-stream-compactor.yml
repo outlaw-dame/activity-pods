@@ -1,0 +1,32 @@
+name: Paper Groups G2 — Bounded Streaming Compaction
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/utils/collective-membership-stream-compactor.js'
+      - 'pod-provider/backend/tests/collective-membership-stream-compactor.test.js'
+      - '.github/workflows/paper-groups-g2-stream-compactor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stream-compaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Check streaming source/test syntax
+        run: |
+          node --check pod-provider/backend/utils/collective-membership-stream-compactor.js
+          node --check pod-provider/backend/tests/collective-membership-stream-compactor.test.js
+      - name: Execute bounded staged snapshot correctness tests
+        run: |
+          set -euo pipefail
+          NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
+            --runInBand --testEnvironment=node --runTestsByPath \
+            pod-provider/backend/tests/collective-membership-stream-compactor.test.js

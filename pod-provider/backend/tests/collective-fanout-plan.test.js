@@ -34,6 +34,7 @@ describe('Paper G2 local and remote bounded fan-out planning', () => {
     expect(new Set(result.localBatches.flatMap(b => b.recipients.map(r => r.actorUri))).size).toBe(n);
     expect(result.localBatches.every(b => b.recipients.every(r => r.dataset === b.dataset))).toBe(true);
     expect(result.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.dispatchable).toBe(false);
   });
   test.each([1, 10, 100, 1000])('plans %i public remote members with sharedInbox grouping', n => {
     const recipients = Array.from({ length: n }, (_, i) => remote(i));
@@ -70,6 +71,15 @@ describe('Paper G2 local and remote bounded fan-out planning', () => {
       expect(result.remoteBatches.every(b => b.recipientActors.length === 1)).toBe(true);
     }
   });
+  test('candidate routes are never executable delivery-plan.v1 payloads', () => {
+    const result = plan([local(1)], [remote(1)]);
+    expect(result.version).toBe('paper.groups.fanout-plan.v1');
+    expect(result.dispatchable).toBe(false);
+    expect(result.schema).toBeUndefined();
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.remoteBatches[0].recipientActors)).toBe(true);
+  });
+
   test('source order does not change fingerprint or groupings', () => {
     const localRecipients = Array.from({ length: 100 }, (_, i) => local(i));
     const remoteRecipients = Array.from({ length: 120 }, (_, i) => remote(i));

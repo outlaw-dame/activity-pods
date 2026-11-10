@@ -1,0 +1,57 @@
+name: Paper Groups G2 — Solid-OIDC Membership Issuer
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/services/collective-reservations-api.service.js'
+      - 'pod-provider/backend/services/collective-memberships.service.js'
+      - 'pod-provider/backend/services/utils/collective-membership-grant.js'
+      - 'pod-provider/backend/tests/collective-membership-issuer.test.js'
+      - 'pod-provider/backend/tests/collective-memberships.test.js'
+      - 'pod-provider/backend/tests/collective-reservations-api.test.js'
+      - '.github/workflows/paper-groups-g2-membership-issuer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  membership-issuer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: yarn
+          cache-dependency-path: pod-provider/backend/yarn.lock
+
+      - name: Check changed source and test syntax
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/services/collective-reservations-api.service.js
+          node --check pod-provider/backend/services/collective-memberships.service.js
+          node --check pod-provider/backend/services/utils/collective-membership-grant.js
+          node --check pod-provider/backend/tests/collective-membership-issuer.test.js
+
+      - name: Install backend dependency graph without unrelated native postinstalls
+        working-directory: pod-provider/backend
+        run: |
+          set -euo pipefail
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
+          yarn install --ignore-scripts --frozen-lockfile
+
+      # Native Sharp/Libvips is intentionally excluded from this light unit lane.
+      # The existing full Backend checks workflow runs the real HTTP gateway suite.
+      - name: Execute issuer, authority, and existing G1 provider gateway unit regression
+        run: |
+          set -euo pipefail
+          NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
+            --runInBand --testEnvironment=node \
+            --runTestsByPath \
+            pod-provider/backend/tests/collective-membership-issuer.test.js \
+            pod-provider/backend/tests/collective-memberships.test.js \
+            pod-provider/backend/tests/collective-reservations-api.test.js

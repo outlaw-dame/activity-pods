@@ -22,12 +22,15 @@ jest.mock('../config/config', () => ({
 }));
 const solidOidc = require('../services/solid/solid-oidc');
 const groupApi = require('../services/collective-reservations-api.service');
+const membershipAuthority = require('../services/collective-memberships.service');
 const { assertLiveCollectiveConsent } = require('../services/utils/collective-access-policy');
 
 const ORIGIN = 'https://provider.example';
 const APP = 'https://paper.example/app';
 const PERSON = ORIGIN + '/profile/card#me';
 const GROUP_SECRET = 'trusted-provider-operation-key-'.repeat(3);
+const MEMBER_SECRET = 'membership-operation-secret-'.repeat(3);
+const GROUP_ID = 'cg_' + 'c'.repeat(32);
 
 describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', () => {
   let broker, port, issuerKey, rights, registered;
@@ -55,6 +58,18 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
         'Authorization': 'Bearer ' + token,
         'Origin': 'https://paper.example'
       },
+      signal: AbortSignal.timeout(15000)
+    });
+    return { response, text: await response.text() };
+  }
+  async function requestMembers(solid, suffix = '', method = 'GET', payload = null) {
+    const response = await fetch('http://127.0.0.1:' + port +
+      '/api/collectives/' + GROUP_ID + '/members' + suffix, {
+      method, headers: {
+        'Authorization': 'Bearer ' + solid, 'Content-Type': 'application/json',
+        'Origin': 'https://paper.example'
+      },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
       signal: AbortSignal.timeout(15000)
     });
     return { response, text: await response.text() };
@@ -145,10 +160,45 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
         }
       }
     });
+    broker.createService({
+      name: 'collective-memberships',
+      actions: {
+        async list(ctx) {
+          membershipAuthority._test.authenticate({
+            enabled: true, secret: MEMBER_SECRET, approvedApps: [APP]
+          }, ctx.params, 'list');
+          await assertLiveCollectiveConsent(ctx, {
+            principal: ctx.params.owner, app: ctx.params.app,
+            operation: 'members', approvedApps: [APP]
+          });
+          if (ctx.params.groupId !== GROUP_ID) {
+            const { MoleculerError } = require('moleculer').Errors;
+            throw new MoleculerError('GROUP_MEMBERSHIP_NOT_FOUND', 404, 'GROUP_MEMBERSHIP_NOT_FOUND');
+          }
+          return { groupId: GROUP_ID, membershipRevision: 7, members: [] };
+        },
+        async change(ctx) {
+          membershipAuthority._test.authenticate({
+            enabled: true, secret: MEMBER_SECRET, approvedApps: [APP]
+          }, ctx.params, 'change');
+          await assertLiveCollectiveConsent(ctx, {
+            principal: ctx.params.owner, app: ctx.params.app,
+            operation: 'members', approvedApps: [APP]
+          });
+          if (ctx.params.groupId !== GROUP_ID) {
+            const { MoleculerError } = require('moleculer').Errors;
+            throw new MoleculerError('GROUP_MEMBERSHIP_NOT_FOUND', 404, 'GROUP_MEMBERSHIP_NOT_FOUND');
+          }
+          return { groupId: GROUP_ID, membershipRevision: ctx.params.expectedEpoch + 1 };
+        }
+      }
+    });
     broker.createService(groupApi, {
       settings: {
         enabled: true, providerOrigin: ORIGIN,
-        grantSecret: GROUP_SECRET, allowedOriginsConfig: 'https://paper.example'
+        grantSecret: GROUP_SECRET, membershipApiEnabled: true,
+        membershipGrantSecret: MEMBER_SECRET,
+        allowedOriginsConfig: 'https://paper.example'
       }
     });
     await broker.start();
@@ -225,6 +275,45 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
     const denied = await request(await token({}, another), 't'.repeat(32));
     expect(denied.response.status).toBeGreaterThanOrEqual(400);
     expect(denied.response.status).toBeLessThan(500);
+  });
+
+  test('membership HTTP access requires distinct live ManageMembers consent', async () => {
+    const solid = await token();
+    rights = ['apods:CreateGroup', 'apods:ReadGroups'];
+    const noRight = await requestMembers(solid, '?limit=2');
+    expect(noRight.response.status).toBeGreaterThanOrEqual(400);
+    expect(noRight.response.status).toBeLessThan(500);
+    rights = ['apods:ManageMembers'];
+    const allowed = await requestMembers(solid, '?limit=2');
+    expect(allowed.response.status).toBe(200);
+    expect(JSON.parse(allowed.text)).toEqual({
+      groupId: GROUP_ID, membershipRevision: 7, members: []
+    });
+    expect(allowed.response.headers.get('cache-control')).toBe('no-store');
+    rights = [];
+    const revoked = await requestMembers(solid, '?limit=2');
+    expect(revoked.response.status).toBeGreaterThanOrEqual(400);
+    expect(revoked.response.status).toBeLessThan(500);
+  });
+
+  test('public member activation is not routed before consented admission exists', async () => {
+    rights = ['apods:ManageMembers'];
+    const solid = await token();
+    const denied = await requestMembers(solid, '/change', 'POST', {
+      member: 'https://remote.example/actors/bob',
+      role: 'member', status: 'active', expectedEpoch: 7
+    });
+    expect(denied.response.status).toBe(404);
+  });
+
+  test('membership HTTP denies invalid page, actor and forged-issuer bearer', async () => {
+    rights = ['apods:ManageMembers'];
+    const solid = await token();
+    const unbounded = await requestMembers(solid, '?limit=1001');
+    expect(unbounded.response.status).toBeGreaterThanOrEqual(400);
+    const otherKey = await generateKeyPair('ES256');
+    const forged = await requestMembers(await token({}, otherKey), '?limit=2');
+    expect(forged.response.status).toBeGreaterThanOrEqual(400);
   });
 
   test('does not allow a different browser origin through CORS', async () => {

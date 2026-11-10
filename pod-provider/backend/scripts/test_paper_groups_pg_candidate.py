@@ -350,5 +350,29 @@ class CandidateIntegration(unittest.TestCase):
                 member=actor(41),role="member",status="active",
                 expected_revision=1,operation_id=str(uuid.uuid4()))
 
+    def test_07_revocation_allowed_after_owner_disabled(self):
+        owner4="https://paper-test.example/users/disabled-and-revoked#me"
+        app4="https://paper-test.example/fourth-app"
+        g=gid(206)
+        provision_owner(self.admin,owner4,app4)
+        reserve_group(self.admin,g,owner4,app4)
+        disable_owner(self.admin,owner4,1)
+        self.assertEqual(revoke_consent(self.admin,owner4,app4,1),2)
+        self.assertEqual(self.admin.execute(
+            "SELECT granted,revision FROM paper_groups_candidate.consent "
+            "WHERE owner_webid=%s AND app_uri=%s",(owner4,app4)
+        ).fetchone(),(False,2))
+        # Even if some future lifecycle handler re-enables the identity,
+        # the consent row must remain deny-first until a fresh grant.
+        self.admin.execute(
+            "UPDATE paper_groups_candidate.identities "
+            "SET enabled=true,lifecycle_revision=lifecycle_revision+1 "
+            "WHERE webid=%s",(owner4,)
+        )
+        with self.assertRaises(AuthorityDenied):
+            mutate_member(self.admin,group=g,owner=owner4,app=app4,
+                member=actor(99),role="member",status="active",
+                expected_revision=1,operation_id=str(uuid.uuid4()))
+
 if __name__=="__main__":
     unittest.main(verbosity=2)

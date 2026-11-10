@@ -120,6 +120,60 @@ Evidence: [Group candidate authority CI](https://github.com/outlaw-dame/activity
 6. Measure dollar costs (PG instance/connection pool, Jena, disk WAL,
    Redis, egress), not merely isolated SQL throughput.
 
+## Operating cost and scale engineering
+
+**Connection budgeting:** PostgreSQL uses a backend process per connection,
+so avoid a separate unconstrained pool per ActivityPods cell or per Group.
+If the eventual provider has N pods/cells and K configured connections,
+total possible connections are N*K plus maintenance connections. Start
+with a small configurable per-cell limit, measure queueing versus DB
+CPU and memory, and use PgBouncer transaction pooling only after verifying
+prepared-statement/session-state compatibility. The candidate currently
+opens connections only in disposable integration tests, not live runtimes.
+
+**Index selection:** The schema uses one composite (group_id,
+actor_uri C-collation) partial index for active roster pages, with
+small included fields to permit index-only reads when PostgreSQL's
+visibility map allows it. A second partial index addresses pending
+admissions; it is not a universal index per role/status. Do not create
+another B-tree for every frontend filter without usage and write-amplification
+measurements. The 100k test checks EXPLAIN for indexed access.
+
+**MVCC maintenance:** Updates to Group revisions and membership rows
+create dead tuples; standard autovacuum/ANALYZE protects statistics and
+reduces bloat. Monitor n_dead_tup, last_autovacuum, table/index sizes,
+sequential/index scans and visibility maps. Avoid routine VACUUM FULL
+because it takes disruptive exclusive locks. Tune per-table autovacuum
+only after observing actual churn, not by speculative global settings.
+
+**WAL and compression:** PostgreSQL 18 supports pglz, LZ4 and Zstandard
+for full-page WAL compression *when the server build supports them*.
+WAL compression can reduce disk/WAL bandwidth but costs CPU, so compare
+WAL bytes and CPU under churn before enabling; do not silently force
+zstd globally or disable full_page_writes or fsync to win benchmarks.
+Plan real backup, point-in-time recovery and WAL retention according
+to observed cost/recovery objectives.
+
+**Observability:** Record request operation ID, Group revision,
+transaction waits, p50/p95/p99, lock timeouts and deadlocks without
+logging member content or secrets. PostgreSQL pg_stat_statements and
+pg_stat_io help attribute SQL/planning, WAL and buffer costs; they have
+their own setup and overhead and must be separately approved.
+
+**Ledger retention:** Transitions are unique, durable and *private*;
+do not drop records that an as-yet-unimplemented outbox/consumer needs.
+Eventually use a bounded acknowledged handoff and retention/archival
+policy. Avoid premature partitioning or a second Fedify delivery queue:
+the provider's transition ledger is not an HTTP retry scheduler.
+A 100k-member Group should not create 100k duplicate outbound jobs.
+
+Primary operations references:
+- https://www.postgresql.org/docs/current/indexes-types.html
+- https://www.postgresql.org/docs/current/routine-vacuuming.html
+- https://www.postgresql.org/docs/current/runtime-config-wal.html
+- https://www.postgresql.org/docs/current/monitoring-stats.html
+- https://www.postgresql.org/docs/current/pgstatstatements.html
+
 ## Caching / ETag
 
 No cache is in the candidate's authorization path. Stable public

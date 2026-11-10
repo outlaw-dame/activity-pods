@@ -310,6 +310,33 @@ async function prepare() {
   await assert.rejects(bootstrapLive(),
     e => e.type === 'COLLECTIVE_BOOTSTRAP_CONFLICT');
 
+  // Regression: a previously COMPLETED token is still retained as audit RDF.
+  // After offline recovery clears an unrelated abandoned pending mutation,
+  // replaying that completed token must NOT restore a blocked ledger to stable.
+  const bootstrapAbandoned = await callLiveFence('begin', bootstrapPrincipal, bootstrapApp);
+  assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
+    { status: 'blocked', revision: 3 });
+  await sparql('update', recovery.resetQuery({
+    principal: bootstrapPrincipal, app: bootstrapApp,
+    expectedRevision: 3, nonce: recovery.freshNonce()
+  }));
+  assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
+    { status: 'blocked', revision: 4 });
+  await assert.rejects(
+    callLiveFence('finish', bootstrapPrincipal, bootstrapApp, bootstrapMutation.token),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED'
+  );
+  await assert.rejects(
+    callLiveFence('finish', bootstrapPrincipal, bootstrapApp, bootstrapAbandoned.token),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_UNVERIFIED'
+  );
+  assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
+    { status: 'blocked', revision: 4 });
+  const readyLeftovers = await sparql('query', 'PREFIX apods: <' + groupNs +
+    '> SELECT ?token WHERE { ' + liveFence.consentSubject(bootstrapPrincipal, bootstrapApp) +
+    ' apods:collectiveCompletionReady ?token . }');
+  assert.equal(readyLeftovers.length, 0, 'stale completion marker survived recovery');
+
   // Two concurrent SAI mutations must BOTH finish before the provider
   // status may return to stable. A crash with an outstanding token remains
   // blocked, rather than assuming the user still authorized creation.
@@ -386,7 +413,7 @@ async function verify() {
   assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
     { status: 'stable', revision: 4 });
   assert.deepEqual(await liveState(bootstrapPrincipal, bootstrapApp),
-    { status: 'stable', revision: 2 });
+    { status: 'blocked', revision: 4 });
   assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
   assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
   await assert.rejects(createFencedReservation(fencedKeyA),

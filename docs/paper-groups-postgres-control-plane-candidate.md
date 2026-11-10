@@ -88,6 +88,15 @@ Real disposable PostgreSQL integration tests check:
 - Cross-connection held consent lock forces revocation to wait
 - Disabled owner denies subsequent writes
 
+## First disposable PostgreSQL 18 results
+
+Evidence: [Group candidate authority CI](https://github.com/outlaw-dame/activity-pods/actions/runs/42898121395), verified against the actual SQL schema and candidate adapter, not an in-memory mock.
+
+- **Nine PostgreSQL integration tests passed**, including revoke concurrency, owner disable, idempotent operation UUID, cross-Group rejection and exact revision-bound cursor pagination.
+- At **100,001 rows**, first/middle/deep 100-member pages took 1.84 / 1.64 / 1.67ms respectively in this particular runner sample. EXPLAIN confirmed indexed access rather than a sequential scan.
+- With **16 Group writers and 384 total updates**, throughput was approximately 493 mutations/second; p95 44.96ms and maximum 57.7ms in the disposable run.
+- These values are samples from one warmed test host, not statistically characterized production p95/p99 or durable SAI-connected operation cost. Concurrent reads/writes on the shared identity+consent rows and WAL/storage behavior need longer tests.
+
 ## Production migration acceptance (NOT IMPLEMENTED)
 
 1. A single, authoritative live consent/revocation writer must replace

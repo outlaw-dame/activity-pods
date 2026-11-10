@@ -26,7 +26,7 @@ function authorized(operation, extras = {}) {
     requestHash, issuedAt, expiresAt, mac
   } };
 }
-function fakeCtx(params, queryRows) {
+function fakeCtx(params, queryRows, rightsProvider = () => ['http://activitypods.org/ns/core#ManageMembers']) {
   const calls = [];
   const ctx = {
     params,
@@ -35,7 +35,7 @@ function fakeCtx(params, queryRows) {
       if (name === 'auth.account.findByWebId') return { webId: owner };
       if (name === 'app-registrations.isRegistered') return true;
       if (name === 'access-authorizations.getSpecialRights') {
-        return ['http://activitypods.org/ns/core#ManageMembers'];
+        return rightsProvider(calls);
       }
       if (name === 'triplestore.query') return typeof queryRows === 'function'
         ? queryRows(calls) : queryRows;
@@ -63,6 +63,30 @@ describe('G2 owner-scoped membership authority release boundary', () => {
     await expect(service.actions.initialize.handler.call({ settings }, invalid.ctx))
       .rejects.toMatchObject({ type: 'GROUP_MEMBERSHIP_UNAUTHORIZED' });
     expect(invalid.calls).toHaveLength(0);
+  });
+  test('a valid signed grant cannot replace live SAI ManageMembers authorization', async () => {
+    const params = authorized('initialize');
+    const t = fakeCtx(params, [{ epoch: binding(1) }],
+      () => ['apods:CreateGroup', 'apods:ReadGroups']);
+    await expect(service.actions.initialize.handler.call({ settings }, t.ctx))
+      .rejects.toMatchObject({ type: 'COLLECTIVE_APP_CONSENT_MISSING' });
+    expect(t.calls.some(c => c.name.startsWith('triplestore.'))).toBe(false);
+  });
+  test('revoked consent between membership write and final check fails closed', async () => {
+    const params = authorized('change', {
+      member, role: 'member', status: 'active', expectedEpoch: 2
+    });
+    let checks = 0;
+    const t = fakeCtx(params, [], () => {
+      checks += 1;
+      return checks === 1
+        ? ['apods:ManageMembers']
+        : [];
+    });
+    await expect(service.actions.change.handler.call({ settings }, t.ctx))
+      .rejects.toMatchObject({ type: 'COLLECTIVE_APP_CONSENT_MISSING' });
+    expect(checks).toBe(2);
+    expect(t.calls.filter(c => c.name.startsWith('triplestore.'))).toHaveLength(2);
   });
   test('initialization verifies real owner/account in one settings transaction', async () => {
     const t = fakeCtx(authorized('initialize'), [{ epoch: binding(1) }]);

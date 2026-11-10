@@ -231,6 +231,25 @@ module.exports = {
         });
         const stored = await this._load(ctx, p.groupId);
         if (ledger && !stored) throw problem('COLLECTIVE_CONSENT_FENCE_REQUIRED', 503);
+        // An existing idempotent reservation is NOT automatically valid after
+        // revoke/regrant. The original revision was captured at INSERT time;
+        // replay must not resurrect an old request under a newer consent epoch.
+        if (ledger) {
+          if (!stored.consentRevision) throw problem('COLLECTIVE_CONSENT_FENCE_REQUIRED', 503);
+          const consentRows = await ctx.call('triplestore.query', {
+            dataset: 'settings', webId: 'system',
+            query: 'PREFIX apods: <' + NS + '>\\n' +
+              'SELECT ?revision WHERE { ' + ledger +
+              ' apods:collectiveConsentStatus "stable" ; ' +
+              'apods:collectiveConsentRevision ?revision . ' +
+              'FILTER NOT EXISTS { ' + ledger +
+              ' apods:collectivePendingMutation ?pending . } } LIMIT 2'
+          });
+          if (!Array.isArray(consentRows) || consentRows.length !== 1 ||
+              unpack(consentRows[0], 'revision') !== stored.consentRevision) {
+            throw problem('COLLECTIVE_STALE_CONSENT_REVISION', 409);
+          }
+        }
         if (!stored || stored.requestHash !== p.requestHash ||
             stored.owner !== p.principal || stored.app !== p.app ||
             stored.actorUri !== p.actorUri) throw problem('COLLECTIVE_RESERVATION_CONFLICT', 409);

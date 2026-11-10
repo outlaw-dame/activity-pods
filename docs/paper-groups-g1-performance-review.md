@@ -42,6 +42,57 @@ after an actual workload benchmark proves equivalent authority and
 revocation behavior. Do not introduce Redis caching of positive consent:
 read-your-revocation correctness takes precedence over cache hit rate.
 
+## Local **and** remote scaling acceptance contract
+
+The senior engineering finding did not apply only to remote federation.
+Previously, **local** follower inbox placement and recipient resolution also
+amplified nested Moleculer service calls and Fuseki lookups. In a historical
+analysis, ~40 internal calls per recipient across ~200 recipients meant ~8,000
+internal round-trips for one post before considering federation. A delivery
+throughput measurement of 1,000 local recipients observed 57,911 broker
+actions and 29,303 Fuseki HTTP requests. These are separate historical
+workloads; do not combine their figures as if measured simultaneously.
+
+**G1 intentionally has no Group membership fan-out, inbox delivery,
+federation, AP Group actor key issuer, ATProto publish queue or subscription
+enumeration.** Group authorization and reservation paths are per-app,
+per-principal and per-canonical-Group-key only, and must not grow with
+the number of local or remote Group members.
+
+Before a later G2 member/discussion/event delivery system can be enabled:
+
+- **Local delivery:** build one immutable recipient plan per source activity;
+  determine Pod locality and authorization in bounded batches, then write
+  to recipient Pods with bounded concurrency while preserving per-Pod dataset
+  and WebACL authority. Avoid per-member repeated actor, Pod, permission,
+  attachment or metadata reads, and never replay local delivery as remote.
+- **Remote delivery:** use the single chosen Fedify delivery authority with
+  ActivityPub sharedInbox grouping by receiving instance where supported.
+  Do not run native ActivityPub and Fedify outbound delivery simultaneously.
+  Keep at-least-once retries idempotent with backoff and deduplicated
+  provider/instance batches, not one queue job per user by default.
+- **Microservice boundaries:** separate independently scalable ingress,
+  federation, search projections and background work from the hot Pod-cell
+  paths. Co-locate LDP/WebACL/Fuseki-facing authority operations for the
+  owning Pod. More broker boundaries do **not** automatically improve
+  throughput; profile service discovery, RDF serialization and local-versus-
+  transported call counts before extraction.
+- **Load evidence:** compare 1/10/100/1,000 local members and matched remote
+  cohorts on the same image/hardware. Record local vs transported
+  Moleculer calls, Fuseki/Redis request counts and bytes, delivery outcomes,
+  duplicate work, latency p50/p95/p99, throughput, CPU, RSS, backpressure and
+  restart/SIGKILL recovery. Require roughly bounded per-activity planning
+  overhead, not ~40 broker calls multiplied by each member.
+- **Consent revocation and privacy:** a cached recipient plan is immutable
+  for an already authorized operation; new authorization decisions must
+  check current membership/consent. No privately scoped Group content may
+  leak through queues, projections, federation batches or retries.
+
+No performance claim for those future delivery workflows is implied by
+PR #117's passing Pod-cell/Redis/node-loss CI or the Group 3,000-record
+work-count test. Those are **necessary platform invariants**, not G2
+acceptance results.
+
 ## Residual performance and security gates
 
 1. **No measured Group capacity ceiling yet.** The 3,000-record regression

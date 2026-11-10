@@ -21,7 +21,10 @@ for (const [prefix, bits] of [
   ['224.0.0.0', 4], ['240.0.0.0', 4]
 ]) blocked.addSubnet(prefix, bits, 'ipv4');
 for (const [prefix, bits] of [
-  ['::', 128], ['::1', 128], ['::ffff:0:0', 96],
+  // Do not block ::ffff:0:0/96 wholesale: Node's BlockList maps ALL IPv4
+  // addresses into that range, including legitimate public endpoints.
+  // IPv4 private subnet rules also cover their IPv4-mapped IPv6 form.
+  ['::', 128], ['::1', 128],
   ['fc00::', 7], ['fec0::', 10], ['fe80::', 10], ['ff00::', 8],
   ['64:ff9b::', 96], ['2001::', 32], ['2001:10::', 28],
   ['2001:db8::', 32], ['2002::', 16]

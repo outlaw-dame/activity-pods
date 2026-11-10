@@ -12,6 +12,7 @@
  */
 const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
+const { assertLiveCollectiveConsent, parseApprovedApps } = require('./utils/collective-access-policy');
 
 const NS = 'http://activitypods.org/ns/core#';
 const PREFIX = 'urn:apods:collective-consent:';
@@ -47,6 +48,35 @@ function stateQuery(principal, app) {
 
 
 const TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+const BOOTSTRAP_PURPOSE = 'provider.collective.consent.bootstrap.v1';
+function assertBootstrapGrant(grant, secret, principal, app, now = Date.now()) {
+  if (!secret || Buffer.byteLength(secret) < 32) {
+    throw new MoleculerError('COLLECTIVE_BOOTSTRAP_DISABLED', 503, 'COLLECTIVE_BOOTSTRAP_DISABLED');
+  }
+  const valid = grant && grant.purpose === BOOTSTRAP_PURPOSE &&
+    grant.principal === principal && grant.app === app &&
+    Number.isSafeInteger(grant.issuedAt) && Number.isSafeInteger(grant.expiresAt) &&
+    grant.issuedAt <= now + 10000 && grant.expiresAt >= now &&
+    grant.expiresAt > grant.issuedAt && grant.expiresAt - grant.issuedAt <= 60000 &&
+    typeof grant.mac === 'string' && /^[0-9a-f]{64}$/u.test(grant.mac);
+  if (!valid) throw new MoleculerError('COLLECTIVE_BOOTSTRAP_UNAUTHORIZED', 403, 'COLLECTIVE_BOOTSTRAP_UNAUTHORIZED');
+  const fields = [BOOTSTRAP_PURPOSE, principal, app, grant.issuedAt, grant.expiresAt];
+  const mac = crypto.createHmac('sha256', secret).update(JSON.stringify(fields)).digest('hex');
+  if (!crypto.timingSafeEqual(Buffer.from(grant.mac, 'ascii'), Buffer.from(mac, 'ascii'))) {
+    throw new MoleculerError('COLLECTIVE_BOOTSTRAP_UNAUTHORIZED', 403, 'COLLECTIVE_BOOTSTRAP_UNAUTHORIZED');
+  }
+}
+function bootstrapQuery(principal, app) {
+  const s = subject(principal, app);
+  // Only a virgin ledger can be bootstrapped. Any prior revoke, crashed
+  // mutation or completed token makes it permanently ineligible.
+  return 'PREFIX apods: <' + NS + '>\\n' +
+    'INSERT { ' + s + ' apods:collectiveConsentRevision "1" ; ' +
+    'apods:collectiveConsentStatus "stable" . }\\n' +
+    'WHERE { FILTER NOT EXISTS { ' + s + ' ?existing ?value . } }';
+}
+
 
 function beginQuery(principal, app, token) {
   const s = subject(principal, app);
@@ -120,9 +150,45 @@ function readBinding(row, key) {
 module.exports = {
   name: 'collective-consent-fence',
   settings: {
-    enabled: process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED === 'true'
+    enabled: process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED === 'true',
+    bootstrapEnabled: process.env.PROVIDER_COLLECTIVES_CONSENT_BOOTSTRAP_ENABLED === 'true',
+    bootstrapSecret: process.env.PROVIDER_COLLECTIVES_BOOTSTRAP_SECRET || '',
+    approvedApps: parseApprovedApps(process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || '')
   },
   actions: {
+    bootstrap: {
+      params: {
+        principal: 'string|min:1', app: 'string|min:1',
+        grant: { type: 'object', strict: false }
+      },
+      async handler(ctx) {
+        if (!this.settings.enabled || !this.settings.bootstrapEnabled) {
+          throw new MoleculerError('COLLECTIVE_BOOTSTRAP_DISABLED', 503, 'COLLECTIVE_BOOTSTRAP_DISABLED');
+        }
+        const { principal, app } = ctx.params;
+        subject(principal, app); // Strictly validate before crypto or storage.
+        assertBootstrapGrant(ctx.params.grant, this.settings.bootstrapSecret, principal, app);
+        await assertLiveCollectiveConsent(ctx, {
+          principal, app, operation: 'reserve', approvedApps: this.settings.approvedApps
+        });
+        // No SELECT-then-INSERT race: this conditional update and all mutation
+        // markers are in the same TDB2 settings dataset.
+        await ctx.call('triplestore.update', {
+          dataset: 'settings', webId: 'system', query: bootstrapQuery(principal, app)
+        });
+        const rows = await ctx.call('triplestore.query', {
+          dataset: 'settings', webId: 'system', query: stateQuery(principal, app)
+        });
+        const state = ensureRevision(rows, 'stable');
+        if (state.revision !== 1) {
+          throw new MoleculerError('COLLECTIVE_BOOTSTRAP_CONFLICT', 409, 'COLLECTIVE_BOOTSTRAP_CONFLICT');
+        }
+        await assertLiveCollectiveConsent(ctx, {
+          principal, app, operation: 'reserve', approvedApps: this.settings.approvedApps
+        });
+        return state;
+      }
+    },
     begin: {
       params: { principal: 'string|min:1', app: 'string|min:1' },
       async handler(ctx) {
@@ -169,4 +235,4 @@ module.exports = {
 };
 
 module.exports.consentSubject = subject;
-module.exports._test = { subject, stateQuery, beginQuery, completeQuery, pendingQuery, completedQuery };
+module.exports._test = { subject, stateQuery, beginQuery, completeQuery, pendingQuery, completedQuery, bootstrapQuery, assertBootstrapGrant };

@@ -296,29 +296,14 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
     expect(revoked.response.status).toBeLessThan(500);
   });
 
-  test('membership HTTP change is bound to Solid owner, app, and epoch', async () => {
+  test('public member activation is not routed before consented admission exists', async () => {
     rights = ['apods:ManageMembers'];
     const solid = await token();
-    const member = 'https://remote.example/actors/bob';
-    const payload = { member, role: 'member', status: 'active', expectedEpoch: 7 };
-    const accepted = await requestMembers(solid, '/change', 'POST', payload);
-    expect(accepted.response.status).toBe(200);
-    expect(JSON.parse(accepted.text).membershipRevision).toBe(8);
-
-    registered = false;
-    const unregistered = await requestMembers(solid, '/change', 'POST', payload);
-    expect(unregistered.response.status).toBeGreaterThanOrEqual(400);
-    registered = true;
-
-    const injected = await requestMembers(solid, '/change', 'POST', {
-      ...payload, owner: 'https://evil.example#me', app: 'https://evil.example/app'
+    const denied = await requestMembers(solid, '/change', 'POST', {
+      member: 'https://remote.example/actors/bob',
+      role: 'member', status: 'active', expectedEpoch: 7
     });
-    // Whether ignored or rejected by the gateway validator, client-supplied
-    // owner/app must never replace the signed identity used for authorization.
-    expect([200, 400, 422]).toContain(injected.response.status);
-    if (injected.response.status === 200) {
-      expect(JSON.parse(injected.text).membershipRevision).toBe(8);
-    }
+    expect(denied.response.status).toBe(404);
   });
 
   test('membership HTTP denies invalid page, actor and forged-issuer bearer', async () => {
@@ -326,11 +311,6 @@ describe('native Solid-OIDC → SAI consent → Group reservation over HTTP', ()
     const solid = await token();
     const unbounded = await requestMembers(solid, '?limit=1001');
     expect(unbounded.response.status).toBeGreaterThanOrEqual(400);
-    const badActor = await requestMembers(solid, '/change', 'POST', {
-      member: 'http://insecure.example/bob', role: 'member',
-      status: 'active', expectedEpoch: 7
-    });
-    expect(badActor.response.status).toBeGreaterThanOrEqual(400);
     const otherKey = await generateKeyPair('ES256');
     const forged = await requestMembers(await token({}, otherKey), '?limit=2');
     expect(forged.response.status).toBeGreaterThanOrEqual(400);

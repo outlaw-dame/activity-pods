@@ -84,7 +84,8 @@ describe('remote HTTPS Solid-OIDC Client ID document hardening', () => {
   test('rejects malformed and direct private URLs before any HTTP request', () => {
     for (const uri of [
       'http://127.0.0.1/admin', 'https://127.0.0.1/admin',
-      'https://10.0.0.2/', 'https://169.254.169.254/latest/meta-data',
+      'https://10.0.0.2/', 'https://[::1]/admin',
+      'https://[fc00::1]/', 'https://169.254.169.254/latest/meta-data',
       'https://user:secret@example.net/app', 'https://example.net/app query'
     ]) {
       expect(() => safeUri(uri)).toThrow();

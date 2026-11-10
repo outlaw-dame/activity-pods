@@ -76,14 +76,25 @@ class RedisAdapter {
         if (!/^https:|^http:\/\/localhost(?::\d+)?(?:\/|$)/u.test(id)) {
           throw new Error(`SSL is required for client_id authentication unless working locally.`);
         }
+        // Remote Client ID Documents are untrusted network input on the
+        // authentication path. Bound their latency, response size and redirect
+        // behavior so an external app cannot monopolize a Pod cell or redirect
+        // the provider's request toward private services.
         const response = await fetch(id, {
           headers: {
             Accept: 'application/ld+json',
             JsonLdContext: 'https://www.w3.org/ns/solid/oidc-context.jsonld'
-          }
+          },
+          timeout: 6000,
+          size: 65536,
+          redirect: 'error'
         });
         if (response.status !== 200) {
-          throw new Error(`Unable to access data at ${id}. Error ${response.status} ${await response.text()}`);
+          throw new Error(`Unable to access Client ID Document at ${id}. HTTP ${response.status}`);
+        }
+        const contentType = response.headers.get('content-type') || '';
+        if (!/^application\/(?:ld\+json|json)(?:\s*;|\s*$)/iu.test(contentType)) {
+          throw new Error('Client ID Document must have a JSON-LD/JSON content type');
         }
         const data = await response.text();
         let json;
@@ -105,7 +116,13 @@ class RedisAdapter {
             throw new Error('The client registration `client_id` field must match the client ID');
           }
           // Reformat if necessary as the @container directive doesn't work
-          if (json.redirect_uris['@none']) json.redirect_uris = json.redirect_uris['@none'];
+          if (json.redirect_uris && !Array.isArray(json.redirect_uris) &&
+              json.redirect_uris['@none']) json.redirect_uris = json.redirect_uris['@none'];
+          if (!Array.isArray(json.redirect_uris) || json.redirect_uris.length === 0 ||
+              json.redirect_uris.length > 32 ||
+              json.redirect_uris.some(uri => typeof uri !== 'string' || uri.length > 2048)) {
+            throw new Error('Client ID Document redirect_uris must be a bounded nonempty list');
+          }
           json = {
             client_id: json.client_id,
             redirect_uris: json.redirect_uris

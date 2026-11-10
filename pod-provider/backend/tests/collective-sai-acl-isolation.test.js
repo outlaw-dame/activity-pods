@@ -28,7 +28,11 @@ describe('SAI social Group rights are not personal Pod ACL rights', () => {
       for (const rights of [
         ['apods:CreateGroup'],
         ['apods:ReadGroups'],
-        ['apods:ReadGroups', 'apods:CreateGroup']
+        ['apods:ReadGroups', 'apods:CreateGroup'],
+        ['http://activitypods.org/ns/core#CreateGroup'],
+        ['http://activitypods.org/ns/core#ReadGroups'],
+        ['http://activitypods.org/ns/core#CreateGroup',
+          'http://activitypods.org/ns/core#ReadGroups']
       ]) {
         expect(await audit(operation, rights)).toEqual([]);
       }

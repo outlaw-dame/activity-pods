@@ -20,6 +20,7 @@ const { reserveFingerprint } = require('./utils/collective-grant-claims');
 const { leaseReference } = require('./utils/collective-worker-lease');
 
 const NS = 'http://activitypods.org/ns/core#';
+const ACCOUNT_NS = 'http://semapps.org/ns/core#';
 const TYPE = 'CollectiveReservationV1';
 const PREFIX = 'urn:apods:collective:';
 const STAGES = Object.freeze(['reserved', 'ap-key-pending', 'did-pending']);
@@ -65,6 +66,24 @@ function safeCompare(a, b) {
 
 function sparqlString(value) {
   return JSON.stringify(value);
+}
+
+// SemApps @semapps/auth TripleStoreAdapter stores AuthAccount in the settings
+// dataset using the semapps core ontology. The reservation/worker transaction
+// must verify the SAME account state atomically, not only in an earlier
+// findByWebId call that may race with deleteByWebId or setTombstone.
+function accountCondition(principal) {
+  const value = sparqlString(principal);
+  const webIdPredicate = '<' + ACCOUNT_NS + 'webId>';
+  const type = '<' + ACCOUNT_NS + 'AuthAccount>';
+  const account = '?collectiveAccount';
+  return account + ' a ' + type + ' ; ' + webIdPredicate + ' ' + value + ' . ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'deletedAt> ?deletedAt . } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'suspendedAt> ?suspendedAt . } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'disabled> ?disabled . ' +
+    'FILTER(LCASE(STR(?disabled)) = "true") } ' +
+    'FILTER NOT EXISTS { ?duplicateAccount a ' + type + ' ; ' +
+    webIdPredicate + ' ' + value + ' . FILTER(?duplicateAccount != ' + account + ') } ';
 }
 
 function unpack(row, name) {
@@ -192,6 +211,7 @@ module.exports = {
           query: 'INSERT { ' + record + ' } WHERE { ' +
             (ledger ? ledger + ' <' + NS + 'collectiveConsentStatus> "stable" ; ' +
               '<' + NS + 'collectiveConsentRevision> ?consentRevision . ' +
+              accountCondition(p.principal) +
               'FILTER NOT EXISTS { ' + ledger + ' <' + NS +
               'collectivePendingMutation> ?pending . } ' : '') +
             'FILTER NOT EXISTS { <' + p.uri + '> ?existing ?value . } }'
@@ -289,6 +309,7 @@ module.exports = {
               consentSubject(before.owner, before.app) +
               ' apods:collectiveConsentStatus "stable" ; apods:collectiveConsentRevision ?liveConsentRevision . ' +
               'FILTER(?reservationConsentRevision = ?liveConsentRevision) ' +
+              accountCondition(before.owner) +
               'FILTER NOT EXISTS { ' + consentSubject(before.owner, before.app) +
               ' apods:collectivePendingMutation ?pending . } ' : '') +
             'FILTER(xsd:integer(?heldUntil) > ' + now + ') ' +

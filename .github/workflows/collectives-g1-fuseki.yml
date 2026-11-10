@@ -14,6 +14,9 @@ on:
       - 'pod-provider/backend/services/utils/collective-worker-lease.js'
       - 'pod-provider/backend/scripts/proof-collective-fuseki.js'
       - 'pod-provider/backend/scripts/proof-collective-consent-fence.js'
+      - 'pod-provider/backend/scripts/recover-collective-consent-offline.js'
+      - 'pod-provider/backend/services/utils/collective-consent-recovery.js'
+      - 'pod-provider/backend/tests/collective-consent-recovery.test.js'
       - '.github/workflows/collectives-g1-fuseki.yml'
   workflow_dispatch:
 

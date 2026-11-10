@@ -1,6 +1,32 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
 
+// Provider-owned social Group capability grants are NOT WebACL permissions
+// on a person's Pod collections/files. These rights are enforced by the
+// provider's collective identity service only.
+const { isGroupRight, onlyGroupRights } = require('../utils/collective-special-rights');
+
+// Never store internal mutation tokens in propagating ctx.meta or client data.
+const inFlightGroupMutations = new WeakMap();
+async function beginGroupMutation(ctx, resource) {
+  const principal = resource['interop:grantedBy'];
+  const app = resource['interop:grantee'];
+  const result = await ctx.call('collective-consent-fence.begin', { principal, app });
+  if (!result || result.status !== 'blocked' || typeof result.token !== 'string' ||
+      !/^[0-9a-f-]{36}$/u.test(result.token)) {
+    throw new Error('COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
+  }
+  const { token } = result;
+  inFlightGroupMutations.set(ctx, { principal, app, token });
+}
+async function finishGroupMutation(ctx) {
+  const held = inFlightGroupMutations.get(ctx);
+  if (!held) return;
+  // A failed after-hook intentionally leaves durable pending state blocked.
+  await ctx.call('collective-consent-fence.finish', held);
+  inFlightGroupMutations.delete(ctx);
+}
+
 // Return true if all elements of a1 can be found on a2. Order does not matter.
 const arraysEqual = (a1, a2) =>
   arrayOf(a1).length === arrayOf(a2).length && arrayOf(a1).every(i => arrayOf(a2).includes(i));
@@ -153,6 +179,7 @@ module.exports = {
     },
     async addPermissionsFromSpecialRights(ctx) {
       const { podOwner, appUri, specialRightsUris } = ctx.params;
+      if (onlyGroupRights(specialRightsUris)) return;
 
       // Give read permissions on all activities, if requested
       if (specialRightsUris.includes('apods:ReadInbox') || specialRightsUris.includes('apods:ReadOutbox')) {
@@ -227,6 +254,7 @@ module.exports = {
     },
     async removePermissionsFromSpecialRights(ctx) {
       const { podOwner, appUri, specialRightsUris } = ctx.params;
+      if (onlyGroupRights(specialRightsUris)) return;
 
       // Remove read permissions on all activities, if requested
       if (specialRightsUris.includes('apods:ReadInbox') || specialRightsUris.includes('apods:ReadOutbox')) {
@@ -316,6 +344,30 @@ module.exports = {
     }
   },
   hooks: {
+    before: {
+      // Pre-write barrier: a group-capability mutation must be persisted as
+      // blocked BEFORE the native SAI LDP post/delete is allowed to commit.
+      // This is deny-first only. There is intentionally no unsafe automatic
+      // regrant until all SAI and account mutation paths are serialized.
+      async post(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = ctx.params.resource || {};
+        const rights = arrayOf(resource['apods:hasSpecialRights']);
+        if (!rights.some(isGroupRight)) return;
+        await beginGroupMutation(ctx, resource);
+      },
+      async delete(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        // Read authoritative persisted authorization: callers cannot decide
+        // whether their own deletion requires a barrier.
+        const resource = await ctx.call('access-authorizations.get', {
+          resourceUri: ctx.params.resourceUri, webId: 'system'
+        });
+        if (!arrayOf(resource?.['apods:hasSpecialRights'])
+          .some(isGroupRight)) return;
+        await beginGroupMutation(ctx, resource);
+      }
+    },
     after: {
       async post(ctx, res) {
         const podOwner = ctx.params.resource['interop:grantedBy'];
@@ -327,7 +379,10 @@ module.exports = {
         });
 
         // For migration, we don't want this to go further
-        if (ctx.meta.isMigration === true) return;
+        if (ctx.meta.isMigration === true) {
+          await finishGroupMutation(ctx);
+          return;
+        }
 
         // Add permissions based on the special rights
         await this.actions.addPermissionsFromSpecialRights(
@@ -357,6 +412,7 @@ module.exports = {
           contentType: MIME_TYPES.JSON
         });
 
+        await finishGroupMutation(ctx);
         return res;
       },
       // Mirror of the above hook
@@ -388,6 +444,7 @@ module.exports = {
           });
         }
 
+        await finishGroupMutation(ctx);
         return res;
       }
     }

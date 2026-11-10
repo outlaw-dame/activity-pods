@@ -8,6 +8,8 @@ const {
 } = require('../config/moleculer-fabric');
 const { childExitCode } = require('../scripts/run-moleculer-fabric');
 const RdfJSONSerializer = require('../RdfJSONSerializer');
+const path = require('node:path');
+const glob = require('glob');
 const dockerEcosystem = require('../../docker/ecosystem.config');
 
 describe('ADSP P1 Moleculer fabric configuration', () => {
@@ -23,7 +25,34 @@ describe('ADSP P1 Moleculer fabric configuration', () => {
     expect(config.registry).toEqual({ preferLocal: true });
     expect(config.serializer).toBeInstanceOf(RdfJSONSerializer);
     expect(config.serviceGroup).toBe('pod-cell');
-    expect(config.servicePatterns).toEqual(['services/*.js', 'services/**/*.js']);
+    expect(config.servicePatterns).toEqual(['services/*.js', 'services/!(utils)/**/*.js']);
+  });
+
+  test('production runner globs load real service schemas, never utility helpers', () => {
+    const config = createMoleculerFabricConfig({});
+    const cwd = path.resolve(__dirname, '..');
+    const loaded = new Set(config.servicePatterns.flatMap(pattern =>
+      glob.sync(pattern, { cwd, nodir: true })));
+    expect(loaded.size).toBeGreaterThan(40);
+    expect(loaded.has('services/collective-consent-fence.service.js')).toBe(true);
+    expect(loaded.has('services/collective-reservations.service.js')).toBe(true);
+    expect(loaded.has('services/sai/access-authorizations.js')).toBe(true);
+    expect(loaded.has('services/core/auth.js')).toBe(true);
+    expect(loaded.has('services/utils/collective-release-gate.js')).toBe(false);
+    expect(loaded.has('services/utils/collective-consent-recovery.js')).toBe(false);
+    expect([...loaded].some(x => x.startsWith('services/utils/'))).toBe(false);
+    // Validate the exact glob selection without importing unrelated runtime
+    // services into Jest (some contain ESM/native startup dependencies).
+    // The Moleculer runner itself uses glob.sync from the same dependency.
+    expect([...loaded].every(x => x.endsWith('.js'))).toBe(true);
+    for (const file of ['services/collective-consent-fence.service.js',
+      'services/collective-reservations.service.js',
+      'services/collective-reservations-api.service.js',
+      'services/collective-provisioning-leases.service.js']) {
+      const schema = require(path.join(cwd, file));
+      expect(typeof schema.name).toBe('string');
+      expect(schema.name.length).toBeGreaterThan(0);
+    }
   });
 
   test('serializer and local-first registry policy are transport-independent', () => {

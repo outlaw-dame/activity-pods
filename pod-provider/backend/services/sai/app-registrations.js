@@ -1,5 +1,44 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
+const { parseApprovedApps } = require('../utils/collective-access-policy');
+
+// Do not add a Group consent barrier to every unrelated local SAI app install,
+// upgrade or removal. Only apps explicitly eligible to create Groups require
+// this extra settings-dataset transaction. Runtime policy changes require the
+// documented quiescent allowlist rollout; never infer eligibility from a
+// client-provided rights document.
+let cachedPolicy = null;
+let cachedApprovedApps = new Set();
+function isCollectiveApproved(app) {
+  const policy = process.env.PROVIDER_COLLECTIVES_APPROVED_APPS || '';
+  if (cachedPolicy !== policy) {
+    cachedApprovedApps = new Set(parseApprovedApps(policy));
+    cachedPolicy = policy;
+  }
+  return typeof app === 'string' && cachedApprovedApps.has(app);
+}
+
+
+// Per-action, non-propagating context. Crashed/failed writes stay blocked.
+const inFlightRegistrations = new WeakMap();
+async function beginRegistrationMutation(ctx, resource) {
+  const principal = resource['interop:registeredBy'];
+  const app = resource?.['interop:registeredAgent'];
+  if (!isCollectiveApproved(app)) return;
+  const result = await ctx.call('collective-consent-fence.begin', { principal, app });
+  if (!result || result.status !== 'blocked' || typeof result.token !== 'string' ||
+      !/^[0-9a-f-]{36}$/u.test(result.token)) {
+    throw new Error('COLLECTIVE_CONSENT_FENCE_UNVERIFIED');
+  }
+  const { token } = result;
+  inFlightRegistrations.set(ctx, { principal, app, token });
+}
+async function finishRegistrationMutation(ctx) {
+  const held = inFlightRegistrations.get(ctx);
+  if (!held) return;
+  await ctx.call('collective-consent-fence.finish', held);
+  inFlightRegistrations.delete(ctx);
+}
 
 module.exports = {
   name: 'app-registrations',
@@ -99,6 +138,38 @@ module.exports = {
     }
   },
   hooks: {
+    before: {
+      async post(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = ctx.params.resource || {};
+        // Registration creation must be fenced as well as updates/deletes:
+        // a direct LDP POST may race with an already approved SAI grant.
+        await beginRegistrationMutation(ctx, resource);
+      },
+      async put(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = ctx.params.resource || {};
+        const resourceUri = ctx.params.resourceUri || resource.id || resource['@id'];
+        // A client-supplied replacement body is not an authority for changing
+        // the registration owner or app identifier. Read the persisted record.
+        if (!resourceUri) throw new Error('SAI_REGISTRATION_URI_REQUIRED');
+        const stored = await ctx.call('app-registrations.get', {
+          resourceUri, webId: 'system'
+        });
+        if (!stored || stored['interop:registeredBy'] !== resource['interop:registeredBy'] ||
+            stored['interop:registeredAgent'] !== resource['interop:registeredAgent']) {
+          throw new Error('SAI_REGISTRATION_IDENTITY_IMMUTABLE');
+        }
+        await beginRegistrationMutation(ctx, stored);
+      },
+      async delete(ctx) {
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
+        const resource = await ctx.call('app-registrations.get', {
+          resourceUri: ctx.params.resourceUri, webId: 'system'
+        });
+        await beginRegistrationMutation(ctx, resource);
+      }
+    },
     after: {
       async post(ctx, res) {
         const appUri = ctx.params.resource['interop:registeredAgent'];
@@ -116,6 +187,7 @@ module.exports = {
           appRegistrationUri: res
         });
 
+        await finishRegistrationMutation(ctx);
         return res;
       },
       async put(ctx, res) {
@@ -124,6 +196,7 @@ module.exports = {
         const webId = ctx.params.resource['interop:registeredBy'];
         await ctx.call('ldp.remote.store', { resourceUri: appUri, webId });
 
+        await finishRegistrationMutation(ctx);
         return res;
       },
       async delete(ctx, res) {
@@ -162,6 +235,7 @@ module.exports = {
           appRegistrationUri: res.resourceUri
         });
 
+        await finishRegistrationMutation(ctx);
         return res;
       }
     }

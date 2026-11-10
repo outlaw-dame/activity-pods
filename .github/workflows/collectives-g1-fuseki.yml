@@ -1,0 +1,93 @@
+name: G1 Collectives — Real Fuseki TDB2 Proof
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/services/collective-reservations.service.js'
+      - 'pod-provider/backend/services/collective-consent-fence.service.js'
+      - 'pod-provider/backend/services/sai/access-authorizations.js'
+      - 'pod-provider/backend/services/sai/app-registrations.js'
+      - 'pod-provider/backend/services/utils/collective-release-gate.js'
+      - 'pod-provider/backend/tests/collective-consent-fence.test.js'
+      - 'pod-provider/backend/tests/collective-release-gate.test.js'
+      - 'pod-provider/backend/services/collective-provisioning-leases.service.js'
+      - 'pod-provider/backend/services/utils/collective-worker-lease.js'
+      - 'pod-provider/backend/scripts/proof-collective-fuseki.js'
+      - 'pod-provider/backend/scripts/proof-collective-consent-fence.js'
+      - 'pod-provider/backend/scripts/recover-collective-consent-offline.js'
+      - 'pod-provider/backend/services/utils/collective-consent-recovery.js'
+      - 'pod-provider/backend/tests/collective-consent-recovery.test.js'
+      - '.github/workflows/collectives-g1-fuseki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuseki-proof:
+    name: concurrent conditional writes + durable restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: pod-provider/backend/yarn.lock
+
+      - name: Install backend dependencies
+        working-directory: pod-provider/backend
+        run: |
+          set -euo pipefail
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
+          # This isolated proof imports only the JS Moleculer error contract.
+          # Do not run unrelated Sharp/libvips native postinstall downloads.
+          yarn install --ignore-scripts
+
+      - name: Start isolated persistent Fuseki TDB2
+        run: |
+          set -euo pipefail
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Prove concurrent idempotent reservation and CAS on real Fuseki
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: node backend/scripts/proof-collective-fuseki.js prepare
+
+      - name: Prove same-dataset consent and reservation transactions on real Fuseki
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: node backend/scripts/proof-collective-consent-fence.js prepare
+
+      - name: Restart Fuseki without discarding its persistent volume
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml restart fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Verify identity and revision persisted across restart
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: node backend/scripts/proof-collective-fuseki.js verify
+
+      - name: Verify consent revisions and reservations survived restart
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: node backend/scripts/proof-collective-consent-fence.js verify
+
+      - name: Capture isolated diagnostic logs on failure
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color fuseki_test | tail -n 250
+
+      - name: Stop isolated Fuseki
+        if: always()
+        run: docker compose -f docker-compose-test.yml down -v

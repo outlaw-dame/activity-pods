@@ -1,0 +1,99 @@
+name: G1 Collectives — Persisted SAI Integration
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/scripts/proof-collective-sai-persistence.js'
+      - 'pod-provider/backend/services/sai/access-authorizations.js'
+      - 'pod-provider/backend/services/sai/app-registrations.js'
+      - 'pod-provider/backend/services/collective-consent-fence.service.js'
+      - 'pod-provider/backend/services/collective-reservations.service.js'
+      - 'pod-provider/backend/services/utils/collective-access-policy.js'
+      - 'pod-provider/backend/services/utils/collective-grant-claims.js'
+      - 'pod-provider/backend/yarn.lock'
+      - '.github/workflows/collectives-g1-sai-persistence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  persisted-sai:
+    name: real TDB2 settings + SAI Pod datasets
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: yarn
+          cache-dependency-path: pod-provider/backend/yarn.lock
+
+      - name: Prepare native SemApps LDP dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libvips-dev pkg-config build-essential python3
+          pkg-config --modversion vips-cpp
+
+      - name: Install full backend dependencies without skipping native postinstall
+        working-directory: pod-provider/backend
+        env:
+          SHARP_FORCE_GLOBAL_LIBVIPS: '1'
+          npm_config_build_from_source: 'true'
+        run: |
+          set -euo pipefail
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
+          for attempt in 1 2 3; do
+            if yarn install; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::SAI integration dependency install failed after 3 attempts"
+              exit 1
+            fi
+            sleep $(( 7 * attempt * attempt ))
+          done
+
+      - name: Validate SAI integration script syntax
+        run: node --check backend/scripts/proof-collective-sai-persistence.js
+
+      - name: Start two isolated persistent Fuseki TDB2 datasets
+        run: |
+          set -euo pipefail
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 EXTRA_DATASETS=g1_sai_fixture WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Prove persisted SAI grant/revoke/regrant against real Group fence
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
+          PROVIDER_COLLECTIVES_APPROVED_APPS: 'https://paper-proof.example/sai'
+        run: node backend/scripts/proof-collective-sai-persistence.js prepare
+
+      - name: Restart both persistent datasets
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml restart fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 EXTRA_DATASETS=g1_sai_fixture WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Verify consent data, ledger and stale-replay denial after restart
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
+          PROVIDER_COLLECTIVES_APPROVED_APPS: 'https://paper-proof.example/sai'
+        run: node backend/scripts/proof-collective-sai-persistence.js verify
+
+      - name: Show Fuseki logs on failure
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color fuseki_test | tail -n 300
+
+      - name: Destroy isolated fixture datasets
+        if: always()
+        run: docker compose -f docker-compose-test.yml down -v

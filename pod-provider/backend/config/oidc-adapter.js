@@ -1,5 +1,6 @@
 const fetch = require('node-fetch');
 const isEmpty = require('lodash/isEmpty.js');
+const { clientFetchOptions } = require('./oidc-client-network-policy');
 
 const grantable = new Set([
   'AccessToken',
@@ -76,14 +77,23 @@ class RedisAdapter {
         if (!/^https:|^http:\/\/localhost(?::\d+)?(?:\/|$)/u.test(id)) {
           throw new Error(`SSL is required for client_id authentication unless working locally.`);
         }
+        // Remote Client ID Documents are untrusted network input on the
+        // authentication path. Bound their latency, response size and redirect
+        // behavior so an external app cannot monopolize a Pod cell or redirect
+        // the provider's request toward private services.
         const response = await fetch(id, {
           headers: {
             Accept: 'application/ld+json',
             JsonLdContext: 'https://www.w3.org/ns/solid/oidc-context.jsonld'
-          }
+          },
+          ...clientFetchOptions(id)
         });
         if (response.status !== 200) {
-          throw new Error(`Unable to access data at ${id}. Error ${response.status} ${await response.text()}`);
+          throw new Error(`Unable to access Client ID Document at ${id}. HTTP ${response.status}`);
+        }
+        const contentType = response.headers.get('content-type') || '';
+        if (!/^application\/(?:ld\+json|json)(?:\s*;|\s*$)/iu.test(contentType)) {
+          throw new Error('Client ID Document must have a JSON-LD/JSON content type');
         }
         const data = await response.text();
         let json;
@@ -95,8 +105,10 @@ class RedisAdapter {
             throw new Error('Missing context https://www.w3.org/ns/solid/oidc-context.jsonld');
           }
         } catch (error) {
-          json = undefined;
-          console.error(`Found unexpected client ID for ${id}: ${error.message}`);
+          // A malformed or unexpectedly contextualized document must never
+          // fall through as a client with an implicit public auth method.
+          // No RDF fallback parser is implemented on this adapter.
+          throw new Error('Invalid Solid-OIDC Client ID Document JSON-LD');
         }
 
         if (json) {
@@ -105,14 +117,17 @@ class RedisAdapter {
             throw new Error('The client registration `client_id` field must match the client ID');
           }
           // Reformat if necessary as the @container directive doesn't work
-          if (json.redirect_uris['@none']) json.redirect_uris = json.redirect_uris['@none'];
+          if (json.redirect_uris && !Array.isArray(json.redirect_uris) &&
+              json.redirect_uris['@none']) json.redirect_uris = json.redirect_uris['@none'];
+          if (!Array.isArray(json.redirect_uris) || json.redirect_uris.length === 0 ||
+              json.redirect_uris.length > 32 ||
+              json.redirect_uris.some(uri => typeof uri !== 'string' || uri.length > 2048)) {
+            throw new Error('Client ID Document redirect_uris must be a bounded nonempty list');
+          }
           json = {
             client_id: json.client_id,
             redirect_uris: json.redirect_uris
           };
-        } else {
-          // Since the client ID does not match the default JSON-LD we try to interpret it as RDF
-          // payload = await this.parseRdfClientId(data, id, response);
         }
 
         // `token_endpoint_auth_method: 'none'` prevents oidc-provider from requiring a client_secret

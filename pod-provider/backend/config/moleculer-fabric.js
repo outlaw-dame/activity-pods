@@ -138,7 +138,11 @@ function resolveHeartbeatPolicy(mode, env) {
 
 function resolveServicePatterns(group) {
   if (group === GROUP_POD_CELL) {
-    return ['services/*.js', 'services/**/*.js'];
+    // A complete service cell, excluding helpers under services/utils.
+    // Moleculer CLI interprets each entry as a glob. Loading utilities as
+    // service schemas breaks startup because they have no service name.
+    // Keep root service files and every non-utils subdirectory recursively.
+    return ['services/*.js', 'services/!(utils)/**/*.js'];
   }
   return ['p1-fixtures/services/*.service.js'];
 }

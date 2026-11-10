@@ -15,41 +15,17 @@ const { MoleculerError } = require('moleculer').Errors;
 const { CONSENT_BRIDGE_RELEASED } = require('./utils/collective-release-gate');
 const { parseApprovedApps, assertLiveCollectiveConsent } = require('./utils/collective-access-policy');
 const rdf = require('../utils/collective-membership-rdf');
+const membershipGrant = require('./utils/collective-membership-grant');
 
-const PURPOSE = 'provider.collective.membership.v1';
+const PURPOSE = membershipGrant.PURPOSE;
 const NS = 'http://activitypods.org/ns/core#';
 
 function deny(code, status = 403) { throw new MoleculerError(code, status, code); }
-function hash(value) { return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 function getValue(row, field) {
   const data = row?.[field];
   return typeof data === 'string' ? data : data?.value;
 }
-function canonicalRequest(operation, params) {
-  const { groupId, owner, app } = params;
-  rdf.validateId(groupId);
-  rdf.validateActor(owner);
-  rdf.validateActor(app);
-  switch (operation) {
-    case 'initialize':
-      return hash([operation, groupId, owner, app]);
-    case 'change':
-      rdf.validateActor(params.member);
-      if (!rdf.ROLES.has(params.role) || !rdf.STATUSES.has(params.status)) deny('GROUP_MEMBER_INVALID_INPUT', 400);
-      if (!Number.isSafeInteger(params.expectedEpoch) || params.expectedEpoch < 1) {
-        deny('GROUP_MEMBERSHIP_INVALID_EPOCH', 400);
-      }
-      return hash([operation, groupId, owner, app, params.member,
-        params.role, params.status, params.expectedEpoch]);
-    case 'list':
-      if (params.cursor != null) rdf.validateActor(params.cursor);
-      if (!Number.isSafeInteger(params.limit) || params.limit < 1 ||
-          params.limit > rdf.MAX_LIMIT) deny('GROUP_MEMBERSHIP_INVALID_LIMIT', 400);
-      return hash([operation, groupId, owner, app, params.cursor ?? null, params.limit]);
-    default:
-      deny('GROUP_MEMBERSHIP_INVALID_OPERATION', 400);
-  }
-}
+const canonicalRequest = membershipGrant.requestHash;
 function authenticate(settings, params, operation) {
   if (!settings?.enabled) deny('GROUP_MEMBERSHIP_DISABLED', 503);
   if (typeof settings.secret !== 'string' || Buffer.byteLength(settings.secret) < 32) {

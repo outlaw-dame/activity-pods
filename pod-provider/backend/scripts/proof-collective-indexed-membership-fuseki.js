@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const rdf = require('../utils/collective-membership-rdf');
 const index = require('../utils/collective-membership-page-index');
+const delta = require('../utils/collective-membership-delta-snapshot');
 const { performance } = require('node:perf_hooks');
 
 if (process.env.G2_BENCH_DISPOSABLE !== 'confirmed') {
@@ -259,6 +260,33 @@ async function main() {
   const fresh = 'https://remote-benchmark.example/users/fresh';
   await request('update', mutation(fresh, 'active', 3));
   assert.deepEqual(await readDelta(), { epoch: 4, count: 2 });
+  // Direct Group-scoped changed member reads are real TDB2; they must
+  // reflect the SAME authenticated settings revision as the CAS updates,
+  // with no global member scan or remote actor dereference.
+  const deltaQuery = delta.readDeltaSnapshotQuery({ groupId, owner, app });
+  const deltaRows = await request('query', deltaQuery);
+  const deltaState = delta.decodeDeltaSnapshot(deltaRows, { groupId, owner });
+  assert.equal(deltaState.baseRevision, 1);
+  assert.equal(deltaState.membershipRevision, 4);
+  assert.equal(deltaState.deltaCount, 2);
+  assert.deepEqual(deltaState.changes, [
+    { actorUri: actor(0), kind: 'upsert', role: 'member' },
+    { actorUri: fresh, kind: 'upsert', role: 'member' }
+  ].sort((a, b) => a.actorUri < b.actorUri ? -1 : 1));
+  const linkRows = await request('query',
+    'PREFIX apods: <' + ns + '> SELECT ?member WHERE { ' + subject +
+    ' apods:collectiveIndexChangedMember ?member . } LIMIT 514');
+  assert.equal(linkRows.length, 2, 'Wrong number of Group-scoped member index pointers');
+  assert.deepEqual(
+    delta.decodeDeltaSnapshot(await request('query', deltaQuery), { groupId, owner }),
+    deltaState, 'Durable delta changed after recreating the query/read snapshot'
+  );
+  const deltaStart = performance.now();
+  for (let i = 0; i < 5; i++) {
+    const sample = await request('query', deltaQuery);
+    assert.equal(delta.decodeDeltaSnapshot(sample, { groupId, owner }).deltaCount, 2);
+  }
+  const deltaReadPentaMs = Number((performance.now() - deltaStart).toFixed(2));
   const stale = await request('query', index.readPageQuery({
     groupId, owner, app, revision, cursor: null
   }));
@@ -273,6 +301,8 @@ async function main() {
     indexBuildMs: Number(indexBuildMs.toFixed(2)),
     indexStageHttpRequests: stageStatements,
     indexedPages: pages.length,
+    deltaRead5QueriesMs: deltaReadPentaMs,
+    deltaPointerCount: linkRows.length,
     totalReadRequests: [...output, ...alternatives, ...indexMetrics].reduce((sum, x) => sum + x.queryCount, 0),
     measuredNodeRssBytes: process.memoryUsage().rss,
     warning: 'Synthetic snapshot materialization; indexed reads are real TDB2, but production mutation/build/recovery costs remain UNPROVEN'

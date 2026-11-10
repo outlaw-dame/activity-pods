@@ -162,7 +162,9 @@ module.exports = {
         grant: { type: 'object', strict: false }
       },
       async handler(ctx) {
-        if (!this.settings.enabled || !this.settings.bootstrapEnabled) {
+        if (!this.settings.enabled || !this.settings.bootstrapEnabled ||
+            process.env.PROVIDER_COLLECTIVES_API_ENABLED === 'true' ||
+            process.env.PROVIDER_COLLECTIVES_RESERVATIONS_ENABLED === 'true') {
           throw new MoleculerError('COLLECTIVE_BOOTSTRAP_DISABLED', 503, 'COLLECTIVE_BOOTSTRAP_DISABLED');
         }
         const { principal, app } = ctx.params;

@@ -31,7 +31,7 @@ function resource(res, obj) {
 }
 const app = {
   id: appUri, type: 'interop:Application',
-  'interop:hasAccessNeedGroup': { id: accessNeedUri },
+  'interop:hasAccessNeedGroup': accessNeedUri,
   'interop:hasAuthorizationCallbackEndpoint': origin + '/callback'
 };
 const need = {

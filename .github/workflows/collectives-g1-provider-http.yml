@@ -1,0 +1,125 @@
+name: G1 Collectives — Live Provider HTTP + SAI Consent
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/scripts/proof-collective-provider-http-server.js'
+      - 'pod-provider/backend/scripts/proof-collective-provider-http.js'
+      - 'pod-provider/docker-compose-collectives-e2e.yml'
+      - 'pod-provider/backend/services/sai/access-authorizations.js'
+      - 'pod-provider/backend/services/sai/app-registrations.js'
+      - 'pod-provider/backend/services/sai/auth-agent.js'
+      - 'pod-provider/backend/services/solid/solid-oidc.js'
+      - 'pod-provider/backend/services/collective-consent-fence.service.js'
+      - 'pod-provider/backend/services/utils/collective-access-policy.js'
+      - '.github/workflows/collectives-g1-provider-http.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actual-provider-sai:
+    name: real Pod provider / HTTPS / native SAI HTTP endpoints
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+
+      - name: Create disposable TLS authority and two HTTPS origins
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-tls
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
+            -keyout e2e-tls/ca.key -out e2e-tls/ca.crt \
+            -subj '/CN=Paper-G1-Disposable-CI-CA'
+          openssl req -new -newkey rsa:2048 -nodes -sha256 \
+            -keyout e2e-tls/leaf.key -out e2e-tls/leaf.csr \
+            -subj '/CN=paper-e2e.test'
+          printf 'subjectAltName=DNS:paper-e2e.test,DNS:app-e2e.test\nextendedKeyUsage=serverAuth\n' > e2e-tls/leaf.ext
+          openssl x509 -req -in e2e-tls/leaf.csr -CA e2e-tls/ca.crt \
+            -CAkey e2e-tls/ca.key -CAcreateserial -out e2e-tls/leaf.crt \
+            -days 1 -sha256 -extfile e2e-tls/leaf.ext
+          chmod 600 e2e-tls/*.key
+          echo '127.0.0.1 paper-e2e.test app-e2e.test' | sudo tee -a /etc/hosts
+          openssl verify -CAfile e2e-tls/ca.crt e2e-tls/leaf.crt
+
+      - name: Build real Pod provider backend
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml build backend; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Full Pod-provider backend image build failed after 3 attempts"
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+
+      - name: Start isolated real Pod storage, SAI and Redis
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml down -v || true
+          sudo rm -rf data/fuseki_test data/redis_test
+          mkdir -p data/fuseki_test data/redis_test
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            up -d fuseki_test redis mailcatcher
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Start disposable CA-trusted HTTPS gateway and real Pod provider
+        run: |
+          set -euo pipefail
+          G1_E2E_CERT="$PWD/e2e-tls/leaf.crt" G1_E2E_KEY="$PWD/e2e-tls/leaf.key" \
+            nohup node backend/scripts/proof-collective-provider-http-server.js \
+              > /tmp/g1-provider-https-proxy.log 2>&1 < /dev/null &
+          echo $! > /tmp/g1-provider-https-proxy.pid
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            up -d --no-deps backend
+          ready=false
+          for attempt in $(seq 1 180); do
+            if curl -sS --max-time 3 --cacert e2e-tls/ca.crt \
+              --resolve paper-e2e.test:3443:127.0.0.1 \
+              'https://paper-e2e.test:3443/' -o /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            echo "::error::Real HTTPS Pod provider did not become reachable"
+            cat /tmp/g1-provider-https-proxy.log
+            exit 1
+          fi
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T backend node scripts/apdm-phase8-warm-restart-ready.js
+
+      - name: Execute actual Pod HTTPS signup and SAI consent/revoke/unregister
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e FUSEKI_URL=http://fuseki_test:3030 backend \
+              node scripts/proof-collective-provider-http.js
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          cat /tmp/g1-provider-https-proxy.log || true
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            logs --no-color --tail=500 backend fuseki_test redis || true
+
+      - name: Destroy disposable provider and CA
+        if: always()
+        run: |
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml down -v || true
+          if [ -f /tmp/g1-provider-https-proxy.pid ]; then
+            kill "$(cat /tmp/g1-provider-https-proxy.pid)" 2>/dev/null || true
+          fi
+          sudo rm -rf data/fuseki_test data/redis_test e2e-tls

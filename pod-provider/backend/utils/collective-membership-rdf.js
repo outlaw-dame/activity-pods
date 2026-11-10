@@ -116,15 +116,20 @@ function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch,
     : '';
   const deltaInsert = indexDelta
     ? g + ' apods:collectiveIndexDeltaCount ?newDeltaCount . ' +
-      m + ' apods:collectiveChangedSinceIndex true . '
+      m + ' apods:collectiveChangedSinceIndex true . ' +
+      g + ' apods:collectiveIndexChangedMember ' + m + ' . '
     : '';
   const deltaWhere = indexDelta
     ? g + ' apods:collectiveIndexedMembershipEpoch ?baselineEpoch ; ' +
       'apods:collectiveIndexDeltaCount ?oldDeltaCount . ' +
       'FILTER(xsd:integer(?baselineEpoch) <= xsd:integer(?oldEpoch)) ' +
       'OPTIONAL { ' + m + ' apods:collectiveChangedSinceIndex ?wasChanged . } ' +
+      'OPTIONAL { ' + g + ' apods:collectiveIndexChangedMember ' + m + ' . ' +
+        'BIND(true AS ?wasGroupIndexed) } ' +
+      // Corrupt partial linkage must not get silently re-counted.
+      'FILTER(BOUND(?wasChanged) = BOUND(?wasGroupIndexed)) ' +
       'BIND(xsd:integer(?oldDeltaCount) + ' +
-        'IF(BOUND(?wasChanged), 0, 1) AS ?newDeltaCount) ' +
+        'IF(BOUND(?wasGroupIndexed), 0, 1) AS ?newDeltaCount) ' +
       'FILTER(?newDeltaCount >= 0 && ?newDeltaCount <= ' + MAX_INDEX_DELTA + ') '
     : '';
   return 'PREFIX apods: <' + NS + '>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n' +

@@ -53,12 +53,13 @@ def configure_transaction(conn):
     conn.execute("SET LOCAL idle_in_transaction_session_timeout = '5000ms'")
 
 
-def _identity(conn, owner: str, lock: str = "SHARE",\n              require_active: bool = True):
+def _identity(conn, owner: str, lock: str = "SHARE",
+              require_active: bool = True):
     result = conn.execute(
         "SELECT enabled,lifecycle_revision FROM paper_groups_candidate.identities "
         "WHERE webid=%s FOR " + lock, (owner,)
     ).fetchone()
-    if not result or not result[0]:
+    if not result or (require_active and not result[0]):
         raise AuthorityDenied("owner disabled or unknown")
     return result
 

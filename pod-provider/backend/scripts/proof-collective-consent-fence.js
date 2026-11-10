@@ -340,6 +340,8 @@ async function prepare() {
   const committed = await createFencedReservation(fencedKeyA);
   assert.equal(committed.canonicalGroupId, fencedId(fencedKeyA));
   assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
+  const replay = await createFencedReservation(fencedKeyA);
+  assert.equal(replay.canonicalGroupId, fencedId(fencedKeyA));
 
   const fourth = await callLiveFence('begin', pendingPrincipal, pendingApp);
   await assert.rejects(createFencedReservation(fencedKeyB),
@@ -348,6 +350,9 @@ async function prepare() {
   const newer = await createFencedReservation(fencedKeyB);
   assert.equal(newer.canonicalGroupId, fencedId(fencedKeyB));
   assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
+  await assert.rejects(createFencedReservation(fencedKeyA),
+    e => e.type === 'COLLECTIVE_STALE_CONSENT_REVISION');
+  assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
   // Tombstoning the account is a write in the same TDB2 dataset; even
   // unchanged live SAI fixtures cannot authorize another reservation.
   await sparql('update', 'INSERT DATA { ' + accountUri +
@@ -384,6 +389,8 @@ async function verify() {
     { status: 'stable', revision: 2 });
   assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
   assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
+  await assert.rejects(createFencedReservation(fencedKeyA),
+    e => e.type === 'COLLECTIVE_STALE_CONSENT_REVISION');
   assert.equal(await loadFencedReservation(fencedKeyC), null);
   const tombstone = await sparql('query', 'SELECT ?value WHERE { ' + accountUri +
     ' <' + accountNs + 'deletedAt> ?value . }');

@@ -75,10 +75,16 @@ Real disposable PostgreSQL integration tests check:
 - Transactional membership state, exact revision and unique transition
 - Operation-ID replay, stale expected epoch, wrong Group and owner changes
 - 1,000 synthetic remote member identities with bounded 100-member
-  keyset pages and complete sorted/nonduplicated results
+  keyset pages and complete sorted/nonduplicated results; stale epoch
+  and unversioned next-page cursors rejected
+- 100,000 synthetic remote member rows with first/middle/deep keyset
+  reads and an EXPLAIN-verified index-based query plan (no table scan)
 - Eight independent Groups simultaneously mutated through separate
-  connections without lost updates
+  connections without lost updates; a second 16-writer/384-mutation
+  contention case measures actual consent-row shared-lock overhead
 - Revoked consent denies subsequent writes and private roster reads
+- A held Group read lock prevents a writer from modifying a page
+  mid-snapshot; subsequent roster reads require the expected revision
 - Cross-connection held consent lock forces revocation to wait
 - Disabled owner denies subsequent writes
 

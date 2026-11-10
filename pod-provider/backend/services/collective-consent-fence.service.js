@@ -104,19 +104,26 @@ function pendingQuery(principal, app, token) {
 function completeQuery(principal, app, token) {
   const s = subject(principal, app);
   const t = JSON.stringify(token);
-  // Both operations run in one TDB2 SPARQL-update transaction. A completion
-  // may only restore "stable" when no *other* mutation is still pending.
-  // The durable completed-token marker lets us prove this exact invocation
-  // committed even when other writers race. It must never imply SAI consent.
-  return 'PREFIX apods: <' + NS + '>\n' +
-    'DELETE { ' + s + ' apods:collectivePendingMutation ' + t + ' . }\n' +
-    'INSERT { ' + s + ' apods:collectiveCompletedMutation ' + t + ' . }\n' +
-    'WHERE { ' + s + ' apods:collectivePendingMutation ' + t + ' . };\n' +
-    'DELETE { ' + s + ' apods:collectiveConsentStatus "blocked" . }\n' +
-    'INSERT { ' + s + ' apods:collectiveConsentStatus "stable" . }\n' +
-    'WHERE { ' + s + ' apods:collectiveCompletedMutation ' + t + ' ; ' +
+  // Keep a one-update-only proof that THIS invocation removed a pending
+  // mutation. A historical completedMutation alone must never restore stable:
+  // after offline recovery it remains as audit evidence, and replaying finish
+  // must not undo the operator's deny-first recovery.
+  //
+  // Fuseki executes this semicolon-separated SPARQL update in one dataset
+  // transaction. The short-lived completionReady marker is removed regardless
+  // of whether other mutations remain pending.
+  return 'PREFIX apods: <' + NS + '>\\n' +
+    'DELETE { ' + s + ' apods:collectivePendingMutation ' + t + ' . }\\n' +
+    'INSERT { ' + s + ' apods:collectiveCompletedMutation ' + t +
+    ' ; apods:collectiveCompletionReady ' + t + ' . }\\n' +
+    'WHERE { ' + s + ' apods:collectivePendingMutation ' + t + ' . };\\n' +
+    'DELETE { ' + s + ' apods:collectiveConsentStatus "blocked" ; ' +
+    'apods:collectiveCompletionReady ' + t + ' . }\\n' +
+    'INSERT { ' + s + ' apods:collectiveConsentStatus "stable" . }\\n' +
+    'WHERE { ' + s + ' apods:collectiveCompletionReady ' + t + ' ; ' +
     'apods:collectiveConsentStatus "blocked" . ' +
-    'FILTER NOT EXISTS { ' + s + ' apods:collectivePendingMutation ?other . } }';
+    'FILTER NOT EXISTS { ' + s + ' apods:collectivePendingMutation ?other . } };\\n' +
+    'DELETE WHERE { ' + s + ' apods:collectiveCompletionReady ' + t + ' . }';
 }
 
 function completedQuery(principal, app, token) {

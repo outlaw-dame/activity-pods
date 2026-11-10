@@ -113,18 +113,18 @@ function completeQuery(principal, app, token, receipt) {
   // Fuseki executes this semicolon-separated SPARQL update in one dataset
   // transaction. The short-lived completionReady marker is removed regardless
   // of whether other mutations remain pending.
-  return 'PREFIX apods: <' + NS + '>\\n' +
-    'DELETE { ' + s + ' apods:collectivePendingMutation ' + t + ' . }\\n' +
+  return 'PREFIX apods: <' + NS + '>\n' +
+    'DELETE { ' + s + ' apods:collectivePendingMutation ' + t + ' . }\n' +
     'INSERT { ' + s + ' apods:collectiveCompletedMutation ' + t +
     ' ; apods:collectiveFinishReceipt ' + r +
-    ' ; apods:collectiveCompletionReady ' + t + ' . }\\n' +
-    'WHERE { ' + s + ' apods:collectivePendingMutation ' + t + ' . };\\n' +
+    ' ; apods:collectiveCompletionReady ' + t + ' . }\n' +
+    'WHERE { ' + s + ' apods:collectivePendingMutation ' + t + ' . };\n' +
     'DELETE { ' + s + ' apods:collectiveConsentStatus "blocked" ; ' +
-    'apods:collectiveCompletionReady ' + t + ' . }\\n' +
-    'INSERT { ' + s + ' apods:collectiveConsentStatus "stable" . }\\n' +
+    'apods:collectiveCompletionReady ' + t + ' . }\n' +
+    'INSERT { ' + s + ' apods:collectiveConsentStatus "stable" . }\n' +
     'WHERE { ' + s + ' apods:collectiveCompletionReady ' + t + ' ; ' +
     'apods:collectiveConsentStatus "blocked" . ' +
-    'FILTER NOT EXISTS { ' + s + ' apods:collectivePendingMutation ?other . } };\\n' +
+    'FILTER NOT EXISTS { ' + s + ' apods:collectivePendingMutation ?other . } };\n' +
     'DELETE WHERE { ' + s + ' apods:collectiveCompletionReady ' + t + ' . }';
 }
 

@@ -1,0 +1,68 @@
+name: Paper Groups G2 — Indexed Membership TDB2 Proof
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/utils/collective-membership-page-index.js'
+      - 'pod-provider/backend/tests/collective-membership-page-index.test.js'
+      - 'pod-provider/backend/scripts/proof-collective-indexed-membership-fuseki.js'
+      - '.github/workflows/paper-groups-g2-indexed-membership.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  indexed-membership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Validate index source and proof syntax
+        run: |
+          set -euo pipefail
+          node --check backend/utils/collective-membership-page-index.js
+          node --check backend/tests/collective-membership-page-index.test.js
+          node --check backend/scripts/proof-collective-indexed-membership-fuseki.js
+      - name: Run isolated authoritative TDB2 cardinalities on one runner
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
+          G2_BENCH_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          printf 'runner=%s cpu=%s count=%s\n' "$RUNNER_NAME" "$(grep -m1 'model name' /proc/cpuinfo)" "$(nproc)"
+          : > /tmp/g2-indexed-membership-evidence.jsonl
+          for members in 1000 10000 100000; do
+            docker compose -f docker-compose-test.yml down -v || true
+            sudo rm -rf data/fuseki_test
+            mkdir -p data/fuseki_test
+            docker compose -f docker-compose-test.yml up -d fuseki_test
+            FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+            G2_BENCH_MEMBERS="$members" \
+              node backend/scripts/proof-collective-indexed-membership-fuseki.js |
+              tee -a /tmp/g2-indexed-membership-evidence.jsonl
+          done
+      - name: Upload real TDB2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g2-indexed-membership-fuseki-matched-host
+          path: /tmp/g2-indexed-membership-evidence.jsonl
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color --tail=150 fuseki_test
+      - name: Remove disposable TDB2
+        if: always()
+        run: |
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test

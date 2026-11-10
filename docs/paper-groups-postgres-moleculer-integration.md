@@ -92,6 +92,46 @@ The long-term primary Group operational database may be PostgreSQL,
 but identity, WebID, Solid Pod resources, ACLs and interoperable RDF remain
 with ActivityPods/Jena until a **separate** account-authority migration.
 
+## Candidate v2: durable deny-first consent receipt
+
+The v2 SQL migration adds `consent_revocations` with unique
+(owner_webid, app_uri, operation UUID) and (owner_webid, app_uri,
+resulting revision). It adds **one small event per actual revocation**,
+not per membership change or remote follower. The non-activated
+Moleculer `revokeConsent` candidate locks the identity row FOR SHARE
+(even if disabled), consent FOR UPDATE, conditionally updates
+`granted=false, revision=revision+1`, and inserts the receipt in one
+transaction. Repeated operation UUID returns the exact committed
+result only while that revocation is the latest consent state; a
+later regrant or different input revision rejects stale replay.
+
+All membership operations hold the exact same consent row FOR SHARE
+before their Group FOR UPDATE lock, so a PostgreSQL revoke cannot
+become visible while an earlier mutation remains uncommitted. A new
+mutation after revoke commits fails. The real PostgreSQL integration
+proof holds a consent row lock on one connection and verifies that
+another connection's revocation cannot finish until the first
+transaction releases it; then it checks durable receipt and
+post-revoke denial. Do not substitute an ordinary TTL/cache/pubsub
+event for this commit barrier.
+
+**This currently proves only an internally consistent PostgreSQL
+candidate**, not an ActivityPods Solid-OIDC revoke. Runtime integration
+must carry a *verified server-side* SAI event with an authenticated
+source and operation UUID; an ordinary Group owner or application must
+never invoke this provider maintenance action. The cross-store
+protocol must commit the PostgreSQL deny barrier before the live
+provider tells the user SAI access was revoked. If PostgreSQL is down,
+revoke acknowledgement cannot succeed on a stale/ambiguous grant:
+mark authorization pending/denied and repair idempotently. Future
+regrant requests must carry a new SAI consent epoch and cannot
+reactivate an earlier revoked authorization without fresh approval.
+
+Record PostgreSQL write-lock waits and revocation transaction
+latencies, but do not log application grants or user member lists.
+Keep a bounded retention policy for already-reconciled revocation
+events only after restart/recovery/idempotency windows are specified.
+
 ## Beyond Groups: PostgreSQL scope evaluation
 
 **Good candidates for PostgreSQL, after separate performance and security

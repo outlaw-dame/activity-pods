@@ -158,6 +158,14 @@ function createCandidateService({ pool, fixtureOnly = false } = {}) {
             if (previous.rowCount === 1) {
               const revision = Number(previous.rows[0].revision);
               if (!Number.isSafeInteger(revision)) fail('GROUP_POSTGRES_EPOCH_UNVERIFIED', 503);
+              // A historical revocation operation cannot claim that a
+              // later re-granted consent is still revoked. Replays are valid
+              // only for the exact current state and original input epoch.
+              if (consent.rows[0].granted !== false ||
+                  Number(consent.rows[0].revision) !== revision ||
+                  p.expectedConsentRevision !== revision - 1) {
+                fail('GROUP_POSTGRES_STALE_CONSENT_REVISION', 409);
+              }
               return { consentRevision: revision, replay: true, granted: false };
             }
             const before = Number(consent.rows[0].revision);

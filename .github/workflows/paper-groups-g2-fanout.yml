@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/utils/collective-fanout-plan.js'
+      - 'pod-provider/backend/utils/collective-membership-cursor.js'
+      - 'pod-provider/backend/tests/collective-membership-cursor.node-test.js'
       - 'pod-provider/backend/tests/collective-fanout-plan.test.js'
       - 'pod-provider/backend/tests/collective-fanout-plan.node-test.js'
       - 'pod-provider/backend/scripts/benchmark-collective-fanout-plan.js'
@@ -27,11 +29,13 @@ jobs:
       - name: Syntax-check bounded planning implementation and tests
         run: |
           node --check pod-provider/backend/utils/collective-fanout-plan.js
+          node --check pod-provider/backend/utils/collective-membership-cursor.js
+          node --check pod-provider/backend/tests/collective-membership-cursor.node-test.js
           node --check pod-provider/backend/tests/collective-fanout-plan.test.js
           node --check pod-provider/backend/tests/collective-fanout-plan.node-test.js
           node --check pod-provider/backend/scripts/benchmark-collective-fanout-plan.js
       - name: Run real native Node contract tests without backend dependencies
-        run: node --test pod-provider/backend/tests/collective-fanout-plan.node-test.js
+        run: node --test pod-provider/backend/tests/collective-fanout-plan.node-test.js pod-provider/backend/tests/collective-membership-cursor.node-test.js
       - name: Run planning workload at 1, 10, 100 and 1000 local/remote recipients
         run: |
           node pod-provider/backend/scripts/benchmark-collective-fanout-plan.js > /tmp/g2-plan-results.json

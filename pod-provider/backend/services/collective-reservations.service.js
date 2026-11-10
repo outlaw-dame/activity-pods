@@ -82,6 +82,10 @@ function accountCondition(principal) {
     'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'suspendedAt> ?suspendedAt . } ' +
     'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'disabled> ?disabled . ' +
     'FILTER(LCASE(STR(?disabled)) = "true") } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'deleted> ?deletedFlag . ' +
+    'FILTER(LCASE(STR(?deletedFlag)) = "true") } ' +
+    'FILTER NOT EXISTS { ' + account + ' <' + ACCOUNT_NS + 'status> ?accountStatus . ' +
+    'FILTER(LCASE(STR(?accountStatus)) IN ("suspended", "deleted", "disabled")) } ' +
     'FILTER NOT EXISTS { ?duplicateAccount a ' + type + ' ; ' +
     webIdPredicate + ' ' + value + ' . FILTER(?duplicateAccount != ' + account + ') } ';
 }

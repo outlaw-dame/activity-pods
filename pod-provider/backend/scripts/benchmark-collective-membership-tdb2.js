@@ -8,6 +8,9 @@ const assert = require('node:assert/strict');
 const rdf = require('../utils/collective-membership-rdf');
 const { performance } = require('node:perf_hooks');
 
+if (process.env.G2_BENCH_DISPOSABLE !== 'confirmed') {
+  throw new Error('G2_BENCH_DISPOSABLE=confirmed required');
+}
 const base = process.env.FUSEKI_URL;
 if (!base || !/^http:\/\/(?:127\.0\.0\.1|localhost):[0-9]+\/?$/u.test(base)) {
   throw new Error('Benchmark requires a disposable localhost FUSEKI_URL');
@@ -49,6 +52,9 @@ function percentile(values, percentileValue) {
   return Number(ordered[Math.ceil(percentileValue * ordered.length) - 1].toFixed(2));
 }
 async function main() {
+  // Refuse to seed into any existing Group fixture or reused settings store.
+  const prior = await request('query', 'SELECT ?p WHERE { ' + subject + ' ?p ?o } LIMIT 1');
+  assert.equal(prior.length, 0, 'Disposable benchmark Group must not already exist');
   // Required proof fixture lives only in this disposable settings dataset.
   const account = '<urn:apods:benchmark:owner>';
   const ledger = rdf.consentSubject(owner, app);

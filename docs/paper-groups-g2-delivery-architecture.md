@@ -17,6 +17,7 @@ Do not create another Group-specific recipient-oriented loop that performs per-u
 - Deterministic plan fingerprints include Group actor, operation intent, visibility, consented membership revision and destinations; not authorization tokens or persisted delivery acknowledgements.
 - `tests/collective-fanout-plan.test.js` and the dedicated Actions workload check the 1/10/100/1,000-recipient levels, source-order invariance, conflicts, privacy, bounded batches and absence of broker/network calls.
 - `scripts/benchmark-collective-fanout-plan.js` reports planning p50/p95 and process RSS. These measurements **do not** estimate delivery throughput or deployment expense.
+- `utils/collective-membership-cursor.js` verifies stable membership revision, lexically increasing keyset actor URI pages, 1,000-entry bounds, no duplicate/overlapping members, explicit continuation and a complete terminal page. It records a rolling digest but **does not authenticate the page source**. The future membership authority must supply and sign/authorize the snapshot before use.
 
 No consumer, Group service action, public endpoint or federation queue is wired to this kernel yet. That is deliberate: ActivityPods has no production-active Group actor or authoritative Group membership source in this G1 branch. Exposing caller-provided recipient lists as an authoritative Group-delivery action would be an IDOR and private-membership leak.
 

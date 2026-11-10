@@ -192,7 +192,7 @@ module.exports = {
 };
  },
         cursor: { type: 'string', optional: true },
-        limit: { type: 'number', integer: true, min: 1, max: 1000 }
+        limit: { type: 'number', integer: true, min: 1, max: 1000, convert: true }
       },
       async handler(ctx) {
         if (!this.settings.enabled || !this.settings.membershipApiEnabled ||

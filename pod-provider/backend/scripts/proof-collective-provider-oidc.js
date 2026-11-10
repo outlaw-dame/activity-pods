@@ -107,31 +107,17 @@ async function main() {
     assert(typeof discovery[field] === 'string', 'Missing OIDC ' + field);
   }
   const person = await signup();
-  const metadata = {
-    client_name: 'Paper G1 disposable HTTP OIDC proof',
-    application_type: 'web',
-    redirect_uris: [callback],
-    response_types: ['code'],
-    grant_types: ['authorization_code'],
-    scope: 'openid profile webid',
-    token_endpoint_auth_method: 'none',
-    id_token_signed_response_alg: 'ES256'
-  };
-  const regRes = await response(discovery.registration_endpoint, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(metadata)
-  });
-  const registered = await json(regRes);
-  ensure(regRes, registered, [200, 201], 'OIDC dynamic client registration');
-  assert(typeof registered.client_id === 'string' && registered.client_id,
-    'OIDC registration returned no client identifier');
+  // The existing Solid-OIDC adapter recognizes dereferenceable HTTPS Client
+  // ID Documents. Use the very same URI registered through native SAI.
+  // Never substitute an unrelated dynamically assigned opaque client ID.
+  const canonicalClientId = app + '/app';
 
   const verifier = random(48);
   const state = random(20);
   const nonce = random(20);
   const authorization = new URL(discovery.authorization_endpoint);
   for (const [k, v] of Object.entries({
-    client_id: registered.client_id,
+    client_id: canonicalClientId,
     redirect_uri: callback,
     response_type: 'code',
     scope: 'openid profile webid',
@@ -199,7 +185,7 @@ async function main() {
   keyPair.publicJwk = await exportJWK(keyPair.publicKey);
   const tokenRequest = new URLSearchParams({
     grant_type: 'authorization_code',
-    client_id: registered.client_id,
+    client_id: canonicalClientId,
     code,
     redirect_uri: callback,
     code_verifier: verifier
@@ -230,19 +216,21 @@ async function main() {
   const keySet = createRemoteJWKSet(new URL(discovery.jwks_uri));
   const verified = await jwtVerify(tokens.id_token, keySet, {
     issuer: discovery.issuer,
-    audience: registered.client_id
+    audience: canonicalClientId
   });
   assert.equal(verified.payload.webid, person.webId,
     'OIDC token WebID does not match authenticated user');
   assert.equal(verified.payload.sub, person.webId,
     'OIDC signed subject does not match authenticated user');
-  assert.equal(verified.payload.azp, registered.client_id,
+  assert.equal(verified.payload.azp, canonicalClientId,
     'OIDC authorized app does not match its registered client identifier');
+  assert.equal(canonicalClientId, app + '/app',
+    'Solid-OIDC and SAI must share one exact app URI');
   console.log(JSON.stringify({
     ok: true, proof: 'real-provider-solid-oidc-authorization-code',
     webId: person.webId,
     issuer: discovery.issuer,
-    clientIdType: registered.client_id.startsWith('https://') ? 'https-url' : 'opaque',
+    clientIdType: 'https-url',
     flow: 'native interaction cookie, session login, PKCE code exchange, issuer JWKS signature verified',
     caveat: 'This automates native HTTP browser interactions, not a rendered frontend/Playwright UI'
   }));

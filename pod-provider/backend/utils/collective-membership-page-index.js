@@ -95,12 +95,18 @@ function publishQuery({ groupId, owner, app, revision }) {
   // The epoch equality and account/SAI ledger authorization participate
   // in the same Fuseki TDB2 transaction as publishing the version pointer.
   return 'PREFIX apods: <' + NS + '> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> ' +
-    'DELETE { ' + g + ' apods:collectiveIndexedMembershipEpoch ?oldIndexEpoch . } ' +
-    'INSERT { ' + g + ' apods:collectiveIndexedMembershipEpoch ?epoch . } ' +
+    'DELETE { ' + g + ' apods:collectiveIndexedMembershipEpoch ?oldIndexEpoch ; ' +
+    'apods:collectiveIndexDeltaCount ?oldDeltaCount . ' +
+    '?changedMember apods:collectiveChangedSinceIndex true . } ' +
+    'INSERT { ' + g + ' apods:collectiveIndexedMembershipEpoch ?epoch ; ' +
+    'apods:collectiveIndexDeltaCount "0"^^xsd:integer . } ' +
     'WHERE { ' + authorizedWhere +
     ' FILTER(xsd:integer(?epoch) = ' + revision + ') ' +
     'OPTIONAL { ' + g +
-    ' apods:collectiveIndexedMembershipEpoch ?oldIndexEpoch . } }';
+    ' apods:collectiveIndexedMembershipEpoch ?oldIndexEpoch . } ' +
+    'OPTIONAL { ' + g + ' apods:collectiveIndexDeltaCount ?oldDeltaCount . } ' +
+    'OPTIONAL { ?changedMember apods:collectiveMemberGroup ' +
+      JSON.stringify(groupId) + ' ; apods:collectiveChangedSinceIndex true . } }';
 }
 function value(row, key) {
   const v = row?.[key];

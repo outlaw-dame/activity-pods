@@ -98,6 +98,26 @@ async function proof(keyPair, method, uri, nonce) {
     .sign(keyPair.privateKey);
 }
 
+async function providerDatasetQuery(dataset, query) {
+  const origin = (process.env.FUSEKI_URL ||
+    process.env.SEMAPPS_SPARQL_ENDPOINT || 'http://fuseki_test:3030/')
+    .replace(/\\/+$/u, '');
+  const credentials = 'Basic ' + Buffer.from(
+    (process.env.FUSEKI_USER || process.env.SEMAPPS_JENA_USER || 'admin') +
+    ':' + (process.env.FUSEKI_PASSWORD || process.env.SEMAPPS_JENA_PASSWORD || 'admin')
+  ).toString('base64');
+  const res = await fetch(origin + '/' + encodeURIComponent(dataset) + '/query', {
+    method: 'POST',
+    headers: { authorization: credentials,
+      'content-type': 'application/sparql-query',
+      accept: 'application/sparql-results+json' },
+    body: query,
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error('Native Pod RDF assertion query failed: HTTP ' + res.status);
+  return (await res.json()).results.bindings;
+}
+
 async function main() {
   const discoveryRes = await response(base + '/.well-known/openid-configuration');
   const discovery = await json(discoveryRes);
@@ -242,6 +262,34 @@ async function main() {
     })
   });
   ensure(consent, await json(consent), [200, 201], 'Same-user SAI consent');
+  const dataset = new URL(person.webId).pathname.split('/').filter(Boolean)[0];
+  assert(/^p8ms[0-9]{16}$/u.test(dataset), 'Unexpected disposable Pod dataset');
+  const authRows = await providerDatasetQuery(dataset,
+    'SELECT ?right WHERE { ?authorization ' +
+    '<http://www.w3.org/ns/solid/interop#grantedBy> ?principal ; ' +
+    '<http://www.w3.org/ns/solid/interop#grantee> ?app ; ' +
+    '<http://activitypods.org/ns/core#hasSpecialRights> ?right . ' +
+    'FILTER(STR(?principal) = ' + JSON.stringify(person.webId) + ' && ' +
+    'STR(?app) = ' + JSON.stringify(canonicalClientId) + ') }');
+  assert(authRows.some(row =>
+    row.right.value === 'http://activitypods.org/ns/core#CreateGroup'),
+  'Native same-user SAI Group capability not persisted on the user Pod');
+  const subjectHash = crypto.createHash('sha256').update(
+    JSON.stringify([person.webId, canonicalClientId, 'apods:CreateGroup'])
+  ).digest('hex');
+  const ledgerRows = await providerDatasetQuery('settings',
+    'PREFIX apods: <http://activitypods.org/ns/core#> ' +
+    'SELECT ?revision ?status ?pending WHERE { ' +
+    '<urn:apods:collective-consent:' + subjectHash + '> ' +
+    'apods:collectiveConsentRevision ?revision ; ' +
+    'apods:collectiveConsentStatus ?status . ' +
+    'OPTIONAL { <urn:apods:collective-consent:' + subjectHash + '> ' +
+    'apods:collectivePendingMutation ?pending . } } LIMIT 2');
+  assert.equal(ledgerRows.length, 1, 'Same-user provider consent ledger absent/ambiguous');
+  assert.equal(ledgerRows[0].status.value, 'stable');
+  assert(!ledgerRows[0].pending, 'Same-user SAI mutation did not finish');
+  assert(Number(ledgerRows[0].revision.value) >= 2,
+    'Same-user SAI registration did not advance consent revision');
 
   console.log(JSON.stringify({
     ok: true, proof: 'real-provider-solid-oidc-authorization-code',

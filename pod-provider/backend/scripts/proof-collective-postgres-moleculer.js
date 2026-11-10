@@ -37,6 +37,7 @@ async function main() {
     assert.equal(empty.rows[0].n, 0);
     await pool.query(fs.readFileSync(path.resolve(__dirname,
       '../sql/paper-groups-postgres-candidate-v1.sql'), 'utf8'));
+    await pool.query(fs.readFileSync(path.resolve(__dirname, '../sql/paper-groups-postgres-candidate-v2-revocation.sql'), 'utf8'));
     await pool.query('INSERT INTO paper_groups_candidate.identities (webid) VALUES ($1)', [owner]);
     await pool.query(
       'INSERT INTO paper_groups_candidate.consent (owner_webid,app_uri,granted) VALUES ($1,$2,true)',
@@ -87,11 +88,38 @@ async function main() {
     // The same single consent row is locked by each membership write.
     // A revoke cannot race past an active writer; after commit, both
     // writes and private reads fail without a cache fallback.
-    await pool.query(
-      'UPDATE paper_groups_candidate.consent ' +
-      'SET granted=false,revision=revision+1 WHERE owner_webid=$1 AND app_uri=$2',
-      [owner,app]
+    const revocationOp = uuid();
+    const held = await pool.connect();
+    let revokedCommitted = false;
+    try {
+      await held.query('BEGIN');
+      await held.query(
+        'SELECT granted FROM paper_groups_candidate.consent ' +
+        'WHERE owner_webid=$1 AND app_uri=$2 FOR SHARE',
+        [owner,app]
+      );
+      const revokePromise = execute('revokeConsent',{
+        owner,app,expectedConsentRevision:1,operationId:revocationOp
+      }).then(value=>{revokedCommitted=true;return value;});
+      await new Promise(resolve=>setTimeout(resolve,120));
+      assert.equal(revokedCommitted,false,'revocation bypassed the held consent lock');
+      await held.query('COMMIT');
+      assert.deepEqual(await revokePromise,{consentRevision:2,replay:false,granted:false});
+    } finally {
+      try { await held.query('ROLLBACK'); } catch (_) {}
+      held.release();
+    }
+    assert.deepEqual(await execute('revokeConsent',{
+      owner,app,expectedConsentRevision:1,operationId:revocationOp
+    }),{consentRevision:2,replay:true,granted:false});
+    await assert.rejects(
+      ()=>execute('revokeConsent',{
+        owner,app,expectedConsentRevision:1,operationId:uuid()
+      }),e=>e.type==='GROUP_POSTGRES_STALE_CONSENT_REVISION'
     );
+    assert.equal((await pool.query(
+      'SELECT count(*)::integer AS n FROM paper_groups_candidate.consent_revocations'
+    )).rows[0].n,1);
     await assert.rejects(
       () => execute('change',{...change,expectedRevision:2,operationId:uuid()}),
       e => e.type === 'GROUP_POSTGRES_AUTHORITY_DENIED'
@@ -107,7 +135,7 @@ async function main() {
     assert.equal(Number(proof),2);
     console.log(JSON.stringify({
       proof:'paper-groups-moleculer-pg-transaction-bridge',ok:true,
-      fixtureOnly:true,revision:2,poolMax:pool.options.max,
+      fixtureOnly:true,revision:2,poolMax:pool.options.max,revocationEvents:1,
       liveSAI:false,activated:false,remoteDelivery:false
     }));
   } finally { await pool.end(); }

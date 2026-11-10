@@ -17,6 +17,7 @@ const ID = /^cg_[0-9a-f]{32}$/u;
 const ROLES = new Set(['member', 'moderator', 'admin']);
 const STATUSES = new Set(['active', 'banned', 'left']);
 const MAX_LIMIT = 1000;
+const MAX_INDEX_DELTA = 512;
 
 function fail(message) { throw new TypeError('Invalid Group membership operation: ' + message); }
 function validateId(id) {
@@ -93,7 +94,8 @@ function initializeQuery({ groupId, owner, app }) {
       'FILTER NOT EXISTS { ' + g + ' apods:collectiveMembershipEpoch ?existing . } ' +
       'FILTER NOT EXISTS { ' + m + ' ?existingMemberProperty ?existingMemberValue . } }';
 }
-function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch, receipt }) {
+function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch, receipt,
+  indexDelta = false }) {
   const g = groupSubject(groupId);
   const memberUri = validateActor(member);
   const ownerUri = validateActor(owner);
@@ -105,12 +107,34 @@ function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch,
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(receipt)) {
     fail('invalid mutation receipt');
   }
+  if (typeof indexDelta !== 'boolean') fail('invalid index delta flag');
+  // Additional index delta records only when explicitly requested by a
+  // trusted provider worker. The ordinary release-disabled G2 mutation
+  // query remains byte-for-byte unchanged when indexDelta is false.
+  const deltaDelete = indexDelta
+    ? g + ' apods:collectiveIndexDeltaCount ?oldDeltaCount . '
+    : '';
+  const deltaInsert = indexDelta
+    ? g + ' apods:collectiveIndexDeltaCount ?newDeltaCount . ' +
+      m + ' apods:collectiveChangedSinceIndex true . '
+    : '';
+  const deltaWhere = indexDelta
+    ? g + ' apods:collectiveIndexedMembershipEpoch ?baselineEpoch ; ' +
+      'apods:collectiveIndexDeltaCount ?oldDeltaCount . ' +
+      'FILTER(xsd:integer(?baselineEpoch) <= xsd:integer(?oldEpoch)) ' +
+      'OPTIONAL { ' + m + ' apods:collectiveChangedSinceIndex ?wasChanged . } ' +
+      'BIND(xsd:integer(?oldDeltaCount) + ' +
+        'IF(BOUND(?wasChanged), 0, 1) AS ?newDeltaCount) ' +
+      'FILTER(?newDeltaCount >= 0 && ?newDeltaCount <= ' + MAX_INDEX_DELTA + ') '
+    : '';
   return 'PREFIX apods: <' + NS + '>\nPREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n' +
     'DELETE { ' + g + ' apods:collectiveMembershipEpoch ?oldEpoch . ' +
+      deltaDelete +
       m + ' apods:collectiveMemberRole ?oldRole ; ' +
       'apods:collectiveMemberStatus ?oldStatus ; ' +
       'apods:collectiveMemberMutationReceipt ?oldReceipt . }\n' +
     'INSERT { ' + g + ' apods:collectiveMembershipEpoch ?nextEpoch . ' +
+      deltaInsert +
       m + ' a apods:CollectiveMembershipV1 ; ' +
       'apods:collectiveMemberGroup ' + literal(groupId) + ' ; ' +
       'apods:collectiveMemberActor ' + literal(memberUri) + ' ; ' +
@@ -125,6 +149,7 @@ function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch,
       consentCondition(ownerUri, app) +
       'FILTER(xsd:integer(?oldEpoch) = ' + expectedEpoch + ') ' +
       'BIND(xsd:integer(?oldEpoch) + 1 AS ?nextEpoch) ' +
+      deltaWhere +
       'OPTIONAL { ' + m + ' apods:collectiveMemberRole ?oldRole . } ' +
       'OPTIONAL { ' + m + ' apods:collectiveMemberStatus ?oldStatus . } ' +
       'OPTIONAL { ' + m + ' apods:collectiveMemberMutationReceipt ?oldReceipt . } ' +
@@ -182,7 +207,7 @@ function listQuery({ groupId, owner, app, cursor = null, limit = 100 }) {
     '} ORDER BY STR(?actor) LIMIT ' + (limit + 1);
 }
 module.exports = Object.freeze({
-  MAX_LIMIT, ROLES, STATUSES,
+  MAX_LIMIT, MAX_INDEX_DELTA, ROLES, STATUSES,
   validateId, validateActor, groupSubject, memberSubject, consentSubject,
   initializeQuery, mutateQuery, readEpochQuery, readMutationQuery, listQuery
 });

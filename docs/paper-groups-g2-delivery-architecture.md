@@ -2,6 +2,43 @@
 
 **Implementation status:** G2-P1 (bounded planning kernel) implemented for review. Member authority, actor activation, local delivery executor, Fedify delivery connector and load validation are **not** yet implemented by this slice. `CONSENT_BRIDGE_RELEASED=false` remains immutable.
 
+## November 10, 2026 — Indexed membership performance and release gates
+
+- The existing SPARQL cursor read is **not** large-Group efficient. Matched
+  disposable TDB2 at 100k members showed approximately 2.17 seconds p50
+  for the first 100 actors, and direct-term sorting did not fix the scan.
+  Reproducible benchmark/evidence was merged as ActivityPods PR #121.
+- The separately release-disabled read-only Solid-OIDC/SAI membership bridge
+  was merged as PR #120. It does **not** expose owner-forced activation.
+- App-neutral consent-first admission policy tests were merged as PR #122,
+  but the policy is not a provider-authoritative runtime writer.
+- PR #123 demonstrates direct-addressed page reads below 12ms median at
+  1k/10k/100k under the disposable TDB2 test, comparing the same actor,
+  role and order projections and denying stale/unauthorized epochs. Its
+  revision-fenced page storage, bounded delta merge and opt-in atomic
+  delta bookkeeping are **not yet a released, fully integrated writer**.
+- The core local Pod delivery work must reuse APDM. Phase 10's measured
+  dataset-existence memo was closed NO-GO/default-off; APDM Phase 11
+  evidence/optimization remains open in PR #78. No Group-specific fan-out
+  executor or delivery-path duplication is justified before that cost issue
+  is actually reduced.
+
+**G2 production acceptance remains open until all of the following pass:**
+provider-authenticated invitation/request/acceptance and moderator delegation
+persisted atomically with TDB2 + SAI; complete and recoverable indexed
+membership base/delta state, multi-replica CAS, controlled compaction and
+quota-limited garbage collection; no private membership exposure or
+cross-Group IDOR; provider-owned active Group AP actor, key and real ATProto
+DID after proven signing/control; Tier-1 Pod local delivery with measured
+nested actions/Fuseki work far below historical marginal cost; single
+Tier-2 Fedify durable remote authority and dedup; SIGKILL/restart
+fault-injection and 1/10/100/1000 local/remote/mixed workloads across
+1/2/4/8 cells; measured CPU, RAM, disk, Redis, egress and cost envelopes.
+
+The immutable `CONSENT_BRIDGE_RELEASED=false` stays closed until then.
+Green unit tests or a fast isolated read benchmark are not a replacement
+for these operational gates.
+
 ## Why this architecture is necessary
 
 ActivityPods' senior-engineering analysis demonstrated a delivery cost problem for **local Pod recipients**, not just remote federation: the 1,000-local-recipient pre-P9 baseline averaged 57,911.3 nested Moleculer actions, 29,303 Fuseki HTTP requests, and 333.538 seconds. Phase 9 improved scheduling using bounded concurrency but did not remove the underlying ~57-action/~29-Fuseki-request marginal recipient cost. Local Pod metadata, WebACL and RDF persistence remain Tier 1 responsibilities; Fedify can only take over **remote** network execution.

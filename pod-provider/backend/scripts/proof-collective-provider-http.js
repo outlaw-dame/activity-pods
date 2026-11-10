@@ -176,8 +176,6 @@ async function main() {
   assert(rights.some(row =>
     row.right.value === 'http://activitypods.org/ns/core#ManageMembers'),
     'Native SAI ManageMembers right not persisted');
-  {
-  }
   const revision1 = await ledger(webId);
   assert(revision1 >= 2, 'Expected registration and grant mutation revisions');
 

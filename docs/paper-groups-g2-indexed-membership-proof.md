@@ -77,6 +77,36 @@ resolved. When deltas fill, bounded compaction/backpressure must be tested
 so one busy Group cannot force unbounded rebuilds, stale reads, or
 excessive Fuseki/CPU/disk churn.
 
+## Compression and storage efficiency policy
+
+No new compression codec or compressed wire envelope is introduced by this
+TDB2 index. Pages are bounded to **32 KiB of UTF-8 JSON** with a cryptographic
+integrity digest. `packPage` splits a sorted authoritative read window
+into smaller pages when remote actor URIs are long; it never silently drops
+a valid actor or turns a page-size overflow into an authorization bypass.
+
+The sidecar already has separate, measured codec choices: **Zstd level 1
+for Redpanda/Kafka batches** (only with decode-capable mixed-version-safe
+workers), and feature-gated **Brotli quality 0** for Redis Stream payload
+envelopes when above the minimum compression threshold and actually smaller.
+These are transport-level choices; they must not be inserted into signed
+ActivityPub body bytes or independently transformed into a second member
+directory. Brotli write activation remains a separate rolling-upgrade
+decision.
+
+A local synthetic 100-member page with repeated actor URI prefixes
+measured approximately 8.9 KiB raw and much smaller gzip/Brotli/Zstd
+representations. That extremely repetitive fixture cannot establish the
+real-world tradeoff. Before any TDB2 page compression, run a representative
+mix of remote URI lengths/entropy plus mutation workloads and enforce:
+lossless digest validation, bounded compressed and decompressed sizes,
+versioned decode compatibility across all replicas, corruption handling,
+CPU/heap/p95 latency guards, safe rollback, and crash recovery.
+
+Avoid compressing tiny pages or the canonical JSON before it is hashed.
+The present uncompressed bounded pages keep the read path inspectable and
+limit operational codec risk while index lifecycle proof is unfinished.
+
 ## Non-activation boundaries / open production blockers
 
 This prototype does **not** offer a production-safe index writer.

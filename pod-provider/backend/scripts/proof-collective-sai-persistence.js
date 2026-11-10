@@ -11,6 +11,8 @@
  * not a deployed-provider browser-consent E2E test.
  */
 const assert = require('node:assert/strict');
+assert.equal(process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED, 'true',
+  'SAI integration requires hooks enabled only inside disposable test process');
 const crypto = require('node:crypto');
 const access = require('../services/sai/access-authorizations');
 const registration = require('../services/sai/app-registrations');

@@ -42,6 +42,7 @@ jobs:
           const results = JSON.parse(fs.readFileSync('/tmp/g2-plan-results.json', 'utf8')).results;
           assert.equal(results.length, 8);
           assert(results.every(x => x.callsToMoleculer === 0 && x.fusekiRequests === 0 && x.remoteHttpRequests === 0));
-          assert(results.filter(x => x.topology === 'remote').every(x => x.batches === Math.ceil(x.recipients / 64)));
+          assert(results.filter(x => x.topology === 'remote').every(x => x.batches === 1),
+            'A sharedInbox must produce one destination intent regardless of recipient count');
           console.log('PASS: bounded Group planning with zero broker/HTTP/Fuseki work');
           NODE

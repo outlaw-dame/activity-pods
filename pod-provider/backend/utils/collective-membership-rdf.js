@@ -34,6 +34,21 @@ function validateActor(value) {
 }
 function literal(value) { return JSON.stringify(value); }
 function groupSubject(id) { return '<' + PREFIX + validateId(id) + '>'; }
+// The G1 deny-first SAI fence hashes (owner, app, CreateGroup) as one
+// provider application consent boundary. ManageMembers is an independent
+// special right, but its mutations share the same begin/finish barrier.
+function consentSubject(owner, app) {
+  const value = JSON.stringify([validateActor(owner), validateActor(app), 'apods:CreateGroup']);
+  return '<urn:apods:collective-consent:' +
+    crypto.createHash('sha256').update(value).digest('hex') + '>';
+}
+function consentCondition(owner, app) {
+  const ledger = consentSubject(owner, app);
+  return ledger + ' apods:collectiveConsentStatus "stable" ; ' +
+    'apods:collectiveConsentRevision ?membershipConsentRevision . ' +
+    'FILTER NOT EXISTS { ' + ledger + ' apods:collectivePendingMutation ?membershipPending . } ';
+}
+
 // SemApps AuthAccount and Group revision live in the SAME Fuseki settings
 // dataset, so a membership update must join current account authority in the
 // same atomic conditional write rather than trust an earlier service lookup.
@@ -59,7 +74,7 @@ function memberSubject(id, actorUri) {
   const seed = JSON.stringify([validateId(id), validateActor(actorUri)]);
   return '<' + MEMBER_PREFIX + crypto.createHash('sha256').update(seed).digest('hex') + '>';
 }
-function initializeQuery({ groupId, owner }) {
+function initializeQuery({ groupId, owner, app }) {
   const g = groupSubject(groupId);
   const ownerUri = validateActor(owner);
   const m = memberSubject(groupId, ownerUri);
@@ -71,12 +86,15 @@ function initializeQuery({ groupId, owner }) {
       'apods:collectiveMemberRole "owner" ; ' +
       'apods:collectiveMemberStatus "active" . } WHERE { ' +
       g + ' a apods:CollectiveReservationV1 ; ' +
-      'apods:collectiveOwner ' + literal(ownerUri) + ' . ' +
+      'apods:collectiveOwner ' + literal(ownerUri) + ' ; ' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
       activeOwnerCondition(ownerUri) +
+      consentCondition(ownerUri, app) +
       'FILTER NOT EXISTS { ' + g + ' apods:collectiveMembershipEpoch ?existing . } ' +
       'FILTER NOT EXISTS { ' + m + ' ?existingMemberProperty ?existingMemberValue . } }';
 }
-function mutateQuery({ groupId, owner, member, role, status, expectedEpoch, receipt }) {
+function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch, receipt }) {
   const g = groupSubject(groupId);
   const memberUri = validateActor(member);
   const ownerUri = validateActor(owner);
@@ -102,8 +120,10 @@ function mutateQuery({ groupId, owner, member, role, status, expectedEpoch, rece
       'apods:collectiveMemberMutationReceipt ' + literal(receipt) + ' . }\n' +
     'WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(ownerUri) + ' ; ' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
       'apods:collectiveMembershipEpoch ?oldEpoch . ' +
       activeOwnerCondition(ownerUri) +
+      consentCondition(ownerUri, app) +
       'FILTER(xsd:integer(?oldEpoch) = ' + expectedEpoch + ') ' +
       'BIND(xsd:integer(?oldEpoch) + 1 AS ?nextEpoch) ' +
       'OPTIONAL { ' + m + ' apods:collectiveMemberRole ?oldRole . } ' +
@@ -114,30 +134,34 @@ function mutateQuery({ groupId, owner, member, role, status, expectedEpoch, rece
       'FILTER NOT EXISTS { ' + m + ' apods:collectiveMemberGroup ?otherGroup . ' +
       'FILTER(?otherGroup != ' + literal(groupId) + ') } }';
 }
-function readEpochQuery({ groupId, owner }) {
+function readEpochQuery({ groupId, owner, app }) {
   const g = groupSubject(groupId);
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?epoch WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
     'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
     'apods:collectiveMembershipEpoch ?epoch . ' +
-    activeOwnerCondition(owner) + '} LIMIT 2';
+    activeOwnerCondition(owner) +
+      consentCondition(owner, app) + '} LIMIT 2';
 }
-function readMutationQuery({ groupId, owner, member }) {
+function readMutationQuery({ groupId, owner, app, member }) {
   const g = groupSubject(groupId);
   const m = memberSubject(groupId, member);
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?epoch ?role ?status ?receipt WHERE { ' +
       g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(validateActor(owner)) + ' ; ' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
       'apods:collectiveMembershipEpoch ?epoch . ' +
       activeOwnerCondition(owner) +
+      consentCondition(owner, app) +
       m + ' a apods:CollectiveMembershipV1 ; ' +
       'apods:collectiveMemberGroup ' + literal(groupId) + ' ; ' +
       'apods:collectiveMemberActor ' + literal(validateActor(member)) + ' ; ' +
       'apods:collectiveMemberRole ?role ; apods:collectiveMemberStatus ?status ; ' +
       'apods:collectiveMemberMutationReceipt ?receipt . } LIMIT 2';
 }
-function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
+function listQuery({ groupId, owner, app, cursor = null, limit = 100 }) {
   const g = groupSubject(groupId);
   validateActor(owner);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
@@ -147,8 +171,10 @@ function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?actor ?role ?epoch WHERE { ' + g + ' a apods:CollectiveReservationV1 ; ' +
       'apods:collectiveOwner ' + literal(owner) + ' ; ' +
+      'apods:collectiveApp ' + literal(validateActor(app)) + (i===0 ? ' . ' : ' ; ') +' +
       'apods:collectiveMembershipEpoch ?epoch . ' +
       activeOwnerCondition(owner) +
+      consentCondition(owner, app) +
       '?membership a apods:CollectiveMembershipV1 ; ' +
       'apods:collectiveMemberGroup ' + literal(groupId) + ' ; ' +
       'apods:collectiveMemberActor ?actor ; apods:collectiveMemberRole ?role ; ' +
@@ -158,6 +184,6 @@ function listQuery({ groupId, owner, cursor = null, limit = 100 }) {
 }
 module.exports = Object.freeze({
   MAX_LIMIT, ROLES, STATUSES,
-  validateId, validateActor, groupSubject, memberSubject,
+  validateId, validateActor, groupSubject, memberSubject, consentSubject,
   initializeQuery, mutateQuery, readEpochQuery, readMutationQuery, listQuery
 });

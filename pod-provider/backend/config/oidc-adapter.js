@@ -1,5 +1,6 @@
 const fetch = require('node-fetch');
 const isEmpty = require('lodash/isEmpty.js');
+const { clientFetchOptions } = require('./oidc-client-network-policy');
 
 const grantable = new Set([
   'AccessToken',
@@ -85,9 +86,7 @@ class RedisAdapter {
             Accept: 'application/ld+json',
             JsonLdContext: 'https://www.w3.org/ns/solid/oidc-context.jsonld'
           },
-          timeout: 6000,
-          size: 65536,
-          redirect: 'error'
+          ...clientFetchOptions(id)
         });
         if (response.status !== 200) {
           throw new Error(`Unable to access Client ID Document at ${id}. HTTP ${response.status}`);

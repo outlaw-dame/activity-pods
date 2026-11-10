@@ -62,7 +62,15 @@ revisions, and atomically switch pointers only after all pages and deltas
 are durable. Snapshot-cursor tokens must be revision-bound and cannot
 accept an untrusted base-page anchor.
 
-**The overlay is not persisted or wired to runtime.** The module establishes
+**The overlay planner is not wired to runtime. A separate opt-in RDF query
+variant now records up to 512 changed actor keys and the delta count **inside
+the same canonical membership-epoch CAS transaction**; it is NOT selected
+by the current provider membership service. A real disposable Fuseki proof
+checks stale CAS rejection, repeated-actor count stability, and new-actor
+count advancement. Index publication resets changed-key markers and its
+delta counter transactionally, under the same owner/SAI authorization.
+
+The overlay is not fully persisted as a production read protocol or wired to runtime.** The module establishes
 bounded merge/correctness semantics and does not imply the full write
 cost, storage growth, compactor behavior or live recovery problem is
 resolved. When deltas fill, bounded compaction/backpressure must be tested

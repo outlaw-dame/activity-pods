@@ -115,13 +115,28 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 2000));
   } while (true);
   assert(discovery.data.issuer, 'Native Solid-OIDC discovery missing issuer');
-  const username = 'g1' + crypto.randomBytes(6).toString('hex');
-  const signup = await api(provider + '/auth/signup', {
-    method: 'POST', body: {
-      username, email: username + '@example.invalid',
-      password: 'G1Test!' + crypto.randomBytes(12).toString('hex')
+  // Match the proven, moderation-compatible Phase 8 username shape. Only a
+  // definitive 422 USERNAME_NOT_ALLOWED may be retried; signup 5xx/timeouts
+  // are ambiguous and must never be replayed.
+  const password = 'G1Test!' + crypto.randomBytes(12).toString('hex');
+  let signup, username;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const seed = crypto.randomBytes(16).toString('hex');
+    const digest = crypto.createHash('sha256').update(seed).digest('hex');
+    const digits = (BigInt('0x' + digest.slice(0, 16)) % 10000000000000000n)
+      .toString().padStart(16, '0');
+    username = 'p8ms' + digits;
+    signup = await api(provider + '/auth/signup', {
+      method: 'POST', body: {
+        username, email: username + '@example.invalid', password
+      }
+    });
+    if (signup.status === 200 || signup.status === 201) break;
+    if (signup.status !== 422 || signup.data?.type !== 'USERNAME_NOT_ALLOWED') {
+      throw new Error('Native Pod signup failed ambiguously/unexpectedly: HTTP ' +
+        signup.status + ' ' + JSON.stringify(signup.data).slice(0, 650));
     }
-  });
+  }
   if (signup.status !== 200 && signup.status !== 201) {
     throw new Error('Native Pod signup failed: HTTP ' + signup.status + ' ' +
       JSON.stringify(signup.data).slice(0, 1500));

@@ -1,0 +1,32 @@
+name: Paper Groups G2 — Consent-First Admission Policy
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/services/utils/collective-admission-policy.js'
+      - 'pod-provider/backend/tests/collective-admission-policy.test.js'
+      - '.github/workflows/paper-groups-g2-admission-policy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  admission-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Check standalone policy syntax
+        run: |
+          node --check pod-provider/backend/services/utils/collective-admission-policy.js
+          node --check pod-provider/backend/tests/collective-admission-policy.test.js
+      - name: Verify consent and role transition matrix
+        run: |
+          set -euo pipefail
+          NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
+            --runInBand --testEnvironment=node --runTestsByPath \
+            pod-provider/backend/tests/collective-admission-policy.test.js

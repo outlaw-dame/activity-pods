@@ -1,3 +1,4 @@
+const { assertUnifiedRequest } = require('../utils/unified-identity-policy');
 const { Errors } = require('moleculer');
 const { MoleculerError } = Errors;
 const crypto = require('crypto');
@@ -112,6 +113,19 @@ module.exports = {
     normalizeAccountCreateParams(params) {
       const accountParams = { ...params };
       const protocols = params.protocols && typeof params.protocols === 'object' ? params.protocols : null;
+      const requested = {
+        ...accountParams,
+        ...(protocols ? {
+          solid: protocols.solid ?? accountParams.solid,
+          activitypub: protocols.activitypub ?? accountParams.activitypub,
+          atproto: protocols.atproto ?? accountParams.atproto
+        } : {})
+      };
+      try {
+        assertUnifiedRequest(requested);
+      } catch (error) {
+        throw new MoleculerError(error.message, 400, error.code);
+      }
 
       if (protocols) {
         if (Object.prototype.hasOwnProperty.call(protocols, 'solid')) {
@@ -160,9 +174,7 @@ module.exports = {
     },
 
     normalizeDidMethod(value) {
-      if (value === 'did:plc') return 'plc';
-      if (value === 'did:web') return 'web';
-      return value;
+      return value === 'did:plc' ? 'plc' : value;
     },
 
     requestedProtocolsFromAccountParams(params) {

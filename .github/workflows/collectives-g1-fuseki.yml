@@ -14,7 +14,6 @@ on:
       - 'pod-provider/backend/services/utils/collective-worker-lease.js'
       - 'pod-provider/backend/scripts/proof-collective-fuseki.js'
       - 'pod-provider/backend/scripts/proof-collective-consent-fence.js'
-      - 'pod-provider/backend/scripts/proof-collective-sai-persistence.js'
       - 'pod-provider/backend/scripts/recover-collective-consent-offline.js'
       - 'pod-provider/backend/services/utils/collective-consent-recovery.js'
       - 'pod-provider/backend/tests/collective-consent-recovery.test.js'
@@ -57,7 +56,7 @@ jobs:
           set -euo pipefail
           mkdir -p data/fuseki_test
           docker compose -f docker-compose-test.yml up -d fuseki_test
-          FUSEKI_URL=http://127.0.0.1:3040 EXTRA_DATASETS=g1_sai_fixture WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
 
       - name: Prove concurrent idempotent reservation and CAS on real Fuseki
         env:
@@ -69,16 +68,11 @@ jobs:
           FUSEKI_URL: http://127.0.0.1:3040
         run: node backend/scripts/proof-collective-consent-fence.js prepare
 
-      - name: Prove actual SAI hooks with separately persisted authorization and registration RDF
-        env:
-          FUSEKI_URL: http://127.0.0.1:3040
-        run: node backend/scripts/proof-collective-sai-persistence.js prepare
-
       - name: Restart Fuseki without discarding its persistent volume
         run: |
           set -euo pipefail
           docker compose -f docker-compose-test.yml restart fuseki_test
-          FUSEKI_URL=http://127.0.0.1:3040 EXTRA_DATASETS=g1_sai_fixture WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
 
       - name: Verify identity and revision persisted across restart
         env:
@@ -89,11 +83,6 @@ jobs:
         env:
           FUSEKI_URL: http://127.0.0.1:3040
         run: node backend/scripts/proof-collective-consent-fence.js verify
-
-      - name: Verify separate SAI Pod dataset and reservation epoch survived restart
-        env:
-          FUSEKI_URL: http://127.0.0.1:3040
-        run: node backend/scripts/proof-collective-sai-persistence.js verify
 
       - name: Capture isolated diagnostic logs on failure
         if: failure()

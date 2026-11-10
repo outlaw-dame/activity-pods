@@ -11,7 +11,6 @@ function requestHash(operation, params) {
   if (operation === 'initialize') return digest([operation, groupId, owner, app]);
   if (operation === 'change') {
     rdf.validateActor(params.member);
-    if (params.member === owner) throw new TypeError('cannot modify Group owner membership');
     if (!rdf.ROLES.has(params.role) || !rdf.STATUSES.has(params.status)) {
       throw new TypeError('GROUP_MEMBER_INVALID_INPUT');
     }

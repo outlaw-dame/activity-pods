@@ -28,11 +28,12 @@ function resource(res, obj) {
     'x-content-type-options': 'nosniff'
   });
   res.end(JSON.stringify({ '@context': obj === app
-    ? [context, 'https://www.w3.org/ns/solid/oidc-context.jsonld']
+    ? [{ interop: context.interop, apods: context.apods },
+      'https://www.w3.org/ns/solid/oidc-context.jsonld']
     : context, ...obj }));
 }
 const app = {
-  id: appUri, type: 'interop:Application',
+  '@id': appUri, '@type': 'interop:Application',
   'interop:hasAccessNeedGroup': accessNeedUri,
   'interop:hasAuthorizationCallbackEndpoint': origin + '/callback',
   // Same HTTPS URI is both the SAI Application and Solid-OIDC Client ID.

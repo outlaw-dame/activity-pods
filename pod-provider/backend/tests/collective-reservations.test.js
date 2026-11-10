@@ -66,6 +66,7 @@ function harness(db = new Map()) {
   let onBeforeWrite = null;
   let registered = true;
   let rights = ['apods:CreateGroup', 'apods:ReadGroups'];
+  let consentRevision = '3';
   const instance = { settings: { enabled: true, providerOrigin: PROVIDER, secret: SECRET, identityKey: 'i'.repeat(48), workerSecret: WORKER_SECRET, approvedApps: [APP, 'https://forum.example/app'] } };
   instance._load = service.methods._load.bind(instance);
   const ctx = params => ({
@@ -78,6 +79,9 @@ function harness(db = new Map()) {
       expect(args.dataset).toBe('settings');
       expect(args.webId).toBe('system');
       if (name === 'triplestore.query') {
+        if (args.query.includes('SELECT ?revision WHERE {')) {
+          return consentRevision ? [{ revision: { value: consentRevision } }] : [];
+        }
         const id = /<urn:apods:collective:([^>]+)> a apods:CollectiveReservationV1/u.exec(args.query)?.[1];
         if (!id) throw new Error('Unexpected query');
         const row = db.get(id);
@@ -125,6 +129,7 @@ function harness(db = new Map()) {
   }
   return { db, calls, instance, action, setFailWrite(v) { failWrite = v; },
     setBeforeWrite(fn) { onBeforeWrite = fn; },
+    setConsentRevision(v) { consentRevision = v; },
     setRegistration(v) { registered = v; }, setRights(v) { rights = v; } };
 }
 async function expectError(promise, code) {
@@ -161,6 +166,24 @@ describe('G1 durable collective reservations — provider authority', () => {
     const retry = await h.action('reserve', reservation());
     expect(retry.stage).toBe('reserved');
     expect(h.db.size).toBe(1);
+  });
+
+  test('replayed reservation is rejected after revoke/regrant advances consent revision', async () => {
+    const h = harness();
+    const first = await h.action('reserve', reservation());
+    const row = h.db.get(first.canonicalGroupId);
+    // Existing record from a previous permission epoch. The real Fuseki
+    // integration proof covers the transactional creation/ledger writes.
+    row.consentRevision = '3';
+    h.instance.settings.consentBridgeEnabled = true;
+    h.setConsentRevision('3');
+    const sameEpoch = await h.action('reserve', reservation());
+    expect(sameEpoch.canonicalGroupId).toBe(first.canonicalGroupId);
+    h.setConsentRevision('4');
+    await expectError(h.action('reserve', reservation()), 'COLLECTIVE_STALE_CONSENT_REVISION');
+    h.setConsentRevision(null);
+    await expectError(h.action('reserve', reservation()), 'COLLECTIVE_STALE_CONSENT_REVISION');
+    expect(h.db.get(first.canonicalGroupId).stage).toBe('reserved');
   });
 
   test('different payload with same principal, app and idempotency key fails closed', async () => {

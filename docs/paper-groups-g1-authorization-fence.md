@@ -94,3 +94,28 @@ Implemented on PR #117 (subject to final CI):
 6. Require final-head CI, live-provider tests, and release review before lifting the code-level fuse.
 
 The new work does not establish a complete production authorization bridge. Keep the public route, the worker lease service, and reservation operations disabled until all items above are verified.
+
+## Review and operations update — 2026-11-09
+
+### Resolved in the code (with isolated integration evidence)
+
+- SAI AccessAuthorization POST/DELETE plus app registration POST/PUT/DELETE each acquire and finish a durable mutation barrier. Registration PUT refuses owner/app identity retargeting. Authorization replacement and orphan cleanup call the same underlying controlled authorization DELETE/POST actions.
+- For a registered LDP container, the SemApps 1.1.4 LDP API dispatches to registry controlled actions, and ControlledContainerMixin binds the container's post/put/delete to that service. The lower-level ldp.resource actions bypass those hooks and must remain a trusted internal provider-only surface; the broker is not an authorization boundary for third-party clients. Source: https://github.com/assemblee-virtuelle/semapps/blob/middleware-v1.1.4/src/middleware/packages/ldp/mixins/controlled-container.js and its ldp/services/api/actions handlers.
+- SemApps 1.1.4 auth.account uses TripleStoreAdapter(type=AuthAccount,dataset=settings) with ontology http://semapps.org/ns/core#. The reservation insert and worker transition use same-dataset existence/non-tombstone/non-disabled checks; auth.account.findByWebId independently rejects deletedAt. Tested with a real TDB2 account tombstone fixture. Source: https://github.com/assemblee-virtuelle/semapps/blob/middleware-v1.1.4/src/middleware/packages/auth/services/account.js and triplestore/adapter.js.
+- Operator-signed bootstrap can initialize a virgin authorization ledger after existing SAI grants, account eligibility and registration are confirmed. It cannot overwrite an existing revision or clear pending/revocation state; real TDB2 proof covers initial bootstrap and denial of replay after a revision change.
+- Offline, operator-only crash recovery exists in backend/scripts/recover-collective-consent-offline.js. Its compare-and-swap uses RDF integer revisions, invalidates pending mutation tokens and **keeps status blocked**. The old token cannot complete afterwards; the user must make a new SAI consent change. The recovery script is not an HTTP endpoint or broker service.
+
+### Mandatory offline recovery procedure
+
+1. Keep the G1 release fuse closed and disable both public Group route and worker activity. Stop **all** Pod-provider replicas and all other writers of SAI authorization data, not just the API gateway. Keep Fuseki running.
+2. Take a verified backup of the settings dataset and the affected Pod's authorization data, document the incident and identify the exact owner WebID and registered app URI.
+3. Inspect the fenced ledger with `node backend/scripts/recover-collective-consent-offline.js inspect WEBID APP`. Review the revision, blocked status and pending token count; investigate any unexpected values.
+4. With `COLLECTIVES_OFFLINE_MAINTENANCE_CONFIRMED=ALL_PROVIDER_WRITERS_STOPPED` and the Group feature flags off, execute `node backend/scripts/recover-collective-consent-offline.js apply WEBID APP REVISION`. The command rejects stale revisions, missing pending markers and any attempt to reauthorize.
+5. Verify revision increment and blocked status; restart the provider with the Group release fuse still closed; require a fresh native SAI consent mutation before any later review of Group creation eligibility.
+6. Retain the audit trail and backup; never automate pending-marker expiry or cleanup merely by elapsed time.
+
+### Review readiness is not release readiness
+
+A PR may be ready for **human code review** with the immutable `CONSENT_BRIDGE_RELEASED=false` gate, disabled public endpoint and explicit open integration requirements. It is not approved for merge as a production Group feature, and it must not enable public Group creation or worker side effects. The G1 implementation still requires a deployed-provider real Solid-OIDC + SAI consent ceremony, actual HTTP route and LDP bypass tests, process restart and federation/identity side-effect proofs, and operator confirmation of rollout topology and access controls. These are not satisfied by synthetic test fixtures alone.
+
+Future provider-side policy changes (including app disapproval) require an explicitly sequenced deployment protocol; the service allowlist is loaded from environment at process start, so overlapping old/new replicas must not be treated as an atomic policy update. Until that protocol is tested, leave the code release fuse closed.

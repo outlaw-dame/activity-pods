@@ -23,6 +23,13 @@ strictly increasing actor keys and exact lookahead cardinality. The JSON
 artifact reports seed time, p50/p95/max query latency, read request count
 and Node RSS.
 
+A paired exploratory query uses direct literal comparison/order rather than
+`STR(?actor)`. Each page runs both query forms in alternating order on the
+**same seeded TDB2 dataset**. Their complete actor, role, membership-epoch
+and ordering projections must match exactly; otherwise the experiment fails.
+The alternative is NOT a production code path and cannot be promoted solely
+on isolated timings.
+
 **Not measured:** Fuseki worker CPU/RSS, provider Moleculer calls, actual
 local Pod inbox writes, network federation, 1/2/4/8 Pod-cell topology,
 throughput under simultaneous writes, retries, remote egress or monetary cost.

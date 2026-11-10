@@ -47,7 +47,7 @@ CREATE TABLE paper_groups_candidate.members (
 -- revision are validated through the owning Group before row access.
 CREATE INDEX members_active_by_group_actor
   ON paper_groups_candidate.members (group_id, actor_uri COLLATE "C")
-  INCLUDE (role, change_revision) WHERE status = 'active';
+  INCLUDE (role) WHERE status = 'active';
 CREATE INDEX members_pending_by_group
   ON paper_groups_candidate.members (group_id, status, actor_uri COLLATE "C")
   WHERE status IN ('invited','requested');

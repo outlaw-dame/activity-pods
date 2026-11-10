@@ -5,6 +5,7 @@
  * "settings" dataset, and does NOT assert unmeasured scalability SLAs.
  */
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const rdf = require('../utils/collective-membership-rdf');
 const index = require('../utils/collective-membership-page-index');
 const { performance } = require('node:perf_hooks');
@@ -231,11 +232,33 @@ async function main() {
     groupId, owner, app, revision, cursor: null
   }));
   assert.equal(before.length, 1);
-  await request('update',
-    'PREFIX apods: <http://activitypods.org/ns/core#> ' +
-    'DELETE { ' + subject + ' apods:collectiveMembershipEpoch "1"^^<http://www.w3.org/2001/XMLSchema#integer> . } ' +
-    'INSERT { ' + subject + ' apods:collectiveMembershipEpoch "2"^^<http://www.w3.org/2001/XMLSchema#integer> . } ' +
-    'WHERE { ' + subject + ' apods:collectiveMembershipEpoch "1"^^<http://www.w3.org/2001/XMLSchema#integer> . }');
+  // Use the REAL canonical same-dataset member CAS plus delta bookkeeping,
+  // not an artificial update of the epoch. A failed/stale CAS must not grow
+  // the delta count, and a repeat change to the same actor remains one key.
+  const readDelta = async () => {
+    const result = await request('query', 'PREFIX apods: <' + ns + '> ' +
+      'SELECT ?epoch ?count WHERE { ' + subject +
+      ' apods:collectiveMembershipEpoch ?epoch ; ' +
+      'apods:collectiveIndexDeltaCount ?count . } LIMIT 2');
+    assert.equal(result.length, 1);
+    return { epoch: Number(result[0].epoch.value), count: Number(result[0].count.value) };
+  };
+  assert.deepEqual(await readDelta(), { epoch: 1, count: 0 });
+  const mutation = (member, status, expectedEpoch) => rdf.mutateQuery({
+    groupId, owner, app, member, role: 'member', status,
+    expectedEpoch, receipt: crypto.randomUUID(), indexDelta: true
+  });
+  await request('update', mutation(actor(0), 'banned', 1));
+  assert.deepEqual(await readDelta(), { epoch: 2, count: 1 });
+  await request('update', mutation(actor(0), 'left', 1));
+  assert.deepEqual(await readDelta(), { epoch: 2, count: 1 },
+    'Stale expected-epoch changed membership or delta');
+  await request('update', mutation(actor(0), 'active', 2));
+  assert.deepEqual(await readDelta(), { epoch: 3, count: 1 },
+    'Repeated actor transition should not count as another delta key');
+  const fresh = 'https://remote-benchmark.example/users/fresh';
+  await request('update', mutation(fresh, 'active', 3));
+  assert.deepEqual(await readDelta(), { epoch: 4, count: 2 });
   const stale = await request('query', index.readPageQuery({
     groupId, owner, app, revision, cursor: null
   }));

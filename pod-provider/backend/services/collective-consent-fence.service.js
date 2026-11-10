@@ -101,9 +101,10 @@ function pendingQuery(principal, app, token) {
     'apods:collectivePendingMutation ' + JSON.stringify(token) + ' . } LIMIT 2';
 }
 
-function completeQuery(principal, app, token) {
+function completeQuery(principal, app, token, receipt) {
   const s = subject(principal, app);
   const t = JSON.stringify(token);
+  const r = JSON.stringify(receipt);
   // Keep a one-update-only proof that THIS invocation removed a pending
   // mutation. A historical completedMutation alone must never restore stable:
   // after offline recovery it remains as audit evidence, and replaying finish
@@ -115,6 +116,7 @@ function completeQuery(principal, app, token) {
   return 'PREFIX apods: <' + NS + '>\\n' +
     'DELETE { ' + s + ' apods:collectivePendingMutation ' + t + ' . }\\n' +
     'INSERT { ' + s + ' apods:collectiveCompletedMutation ' + t +
+    ' ; apods:collectiveFinishReceipt ' + r +
     ' ; apods:collectiveCompletionReady ' + t + ' . }\\n' +
     'WHERE { ' + s + ' apods:collectivePendingMutation ' + t + ' . };\\n' +
     'DELETE { ' + s + ' apods:collectiveConsentStatus "blocked" ; ' +
@@ -126,11 +128,12 @@ function completeQuery(principal, app, token) {
     'DELETE WHERE { ' + s + ' apods:collectiveCompletionReady ' + t + ' . }';
 }
 
-function completedQuery(principal, app, token) {
+function completedQuery(principal, app, token, receipt) {
   const s = subject(principal, app);
   return 'PREFIX apods: <' + NS + '>\n' +
     'SELECT ?revision ?status WHERE { ' + s +
     ' apods:collectiveCompletedMutation ' + JSON.stringify(token) + ' ; ' +
+    'apods:collectiveFinishReceipt ' + JSON.stringify(receipt) + ' ; ' +
     'apods:collectiveConsentRevision ?revision ; ' +
     'apods:collectiveConsentStatus ?status . ' +
     'FILTER NOT EXISTS { ' + s + ' apods:collectivePendingMutation ' +
@@ -229,13 +232,14 @@ module.exports = {
         if (!TOKEN.test(token)) throw new MoleculerError(
           'COLLECTIVE_INVALID_MUTATION_TOKEN', 400, 'COLLECTIVE_INVALID_MUTATION_TOKEN'
         );
+        const receipt = crypto.randomUUID();
         await ctx.call('triplestore.update', {
           dataset: 'settings', webId: 'system',
-          query: completeQuery(principal, app, token)
+          query: completeQuery(principal, app, token, receipt)
         });
         const rows = await ctx.call('triplestore.query', {
           dataset: 'settings', webId: 'system',
-          query: completedQuery(principal, app, token)
+          query: completedQuery(principal, app, token, receipt)
         });
         return ensureRevision(rows);
       }

@@ -92,6 +92,56 @@ describe('G2 immutable provider membership page projection', () => {
     expect(() => page(0, 101)).toThrow('SIZE');
     expect(() => page(0, 1, true, member(100))).toThrow('CURSOR');
   });
+  test('long remote actor URIs are packed into bounded variable-size pages without loss', () => {
+    const members = Array.from({ length: 101 }, (_, i) => ({
+      actorUri: 'https://remote.example/actors/' +
+        String(i).padStart(4, '0') + '-' + 'a'.repeat(900),
+      role: 'member'
+    }));
+    const first = index.packPage({
+      groupId, revision: 17, members, sourceHasMore: false
+    });
+    expect(first.consumedCount).toBeGreaterThan(0);
+    expect(first.consumedCount).toBeLessThan(100);
+    expect(Buffer.byteLength(first.page.json, 'utf8')).toBeLessThanOrEqual(
+      index.MAX_PAGE_BYTES
+    );
+    expect(first.page.nextCursor).toBe(members[first.consumedCount - 1].actorUri);
+    expect(first.page.hasMore).toBe(true);
+    let consumed = first.consumedCount;
+    let cursor = first.page.nextCursor;
+    while (consumed < members.length) {
+      const next = index.packPage({
+        groupId, revision: 17, cursor,
+        members: members.slice(consumed, consumed + 101),
+        sourceHasMore: consumed + 101 < members.length
+      });
+      consumed += next.consumedCount;
+      cursor = next.page.nextCursor;
+      expect(Buffer.byteLength(next.page.json, 'utf8')).toBeLessThanOrEqual(
+        index.MAX_PAGE_BYTES
+      );
+      if (consumed < members.length) expect(next.page.hasMore).toBe(true);
+      else expect(next.page.hasMore).toBe(false);
+    }
+    expect(consumed).toBe(101);
+  });
+  test('page packer rejects disorder, oversized single actors and unsupported source windows', () => {
+    expect(() => index.packPage({
+      groupId, revision: 17, members: [], sourceHasMore: false
+    })).toThrow('WINDOW');
+    expect(() => index.packPage({
+      groupId, revision: 17, members: [
+        { actorUri: member(2), role: 'member' },
+        { actorUri: member(1), role: 'member' }
+      ]
+    })).toThrow('ORDER');
+    expect(() => index.packPage({
+      groupId, revision: 17, members: [
+        { actorUri: member(0), role: 'member' }
+      ], sourceHasMore: 'maybe'
+    })).toThrow('WINDOW');
+  });
   test('staging is fixed-subject/immutable and never publishes the revision pointer', () => {
     const p = page();
     const q = index.stagePageQuery(p);

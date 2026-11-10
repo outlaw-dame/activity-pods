@@ -132,8 +132,7 @@ function mutateQuery({ groupId, owner, app, member, role, status, expectedEpoch,
       deltaDelete +
       m + ' apods:collectiveMemberRole ?oldRole ; ' +
       'apods:collectiveMemberStatus ?oldStatus ; ' +
-      'apods:collectiveMemberMutationReceipt ?oldReceipt . ' +
-      (indexDelta ? deltaDelete : '') + ' }\n' +
+      'apods:collectiveMemberMutationReceipt ?oldReceipt . }\n' +
     'INSERT { ' + g + ' apods:collectiveMembershipEpoch ?nextEpoch . ' +
       deltaInsert +
       m + ' a apods:CollectiveMembershipV1 ; ' +

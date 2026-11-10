@@ -1,3 +1,4 @@
+const { assertUnifiedResult } = require('../../utils/unified-identity-policy');
 const path = require('path');
 const urlJoin = require('url-join');
 const {
@@ -92,19 +93,32 @@ module.exports = {
             }
           });
 
-          if (this.settings.atproto.autoProvisionOnSignup) {
+          // Production accounts must never succeed without their did:plc
+          // and PDS repository, even when legacy fixture toggles are set.
+          const mandatoryAtproto = process.env.NODE_ENV === 'production' ||
+            this.settings.atproto.autoProvisionOnSignup;
+          if (mandatoryAtproto) {
             atprotoProvisioning = await ctx.call('atproto-provisioning.provisionForAccount', {
               canonicalAccountId: webId,
               webId,
               requestedHandle: accountData.username || username,
               activityPubActorId: activityPubProvisioning?.actorId || webId,
               activityPubHandle: activityPubProvisioning?.handle || null,
-              didMethod: this.settings.atproto.didMethod,
+              didMethod: 'plc',
               profile: {
                 displayName: rest?.name || accountData?.username || username,
                 ...(rest?.summary ? { summary: rest.summary } : {})
               }
             });
+            try {
+              assertUnifiedResult({
+                webId, actorId: activityPubProvisioning?.actorId,
+                did: atprotoProvisioning?.did,
+                repoInitialized: atprotoProvisioning?.repoInitialized
+              });
+            } catch (error) {
+              throw new MoleculerError(error.message, 503, error.code);
+            }
           }
         } catch (e) {
           const provisioningStage = this.settings.atproto.autoProvisionOnSignup

@@ -150,7 +150,7 @@ async function main() {
   const reg = await registrationRows(username, webId);
   assert.equal(reg.length, 1, 'Native SAI registration not persisted on Pod');
   const rights = await authorizationRows(username, webId);
-  if (!rights.some(row => row.right.value === 'apods:CreateGroup')) {
+  if (!rights.some(row => row.right.value === 'http://activitypods.org/ns/core#CreateGroup')) {
     // Only print synthetic CI Pod graph statements. Never print credentials,
     // session tokens, password hashes or unrelated user profile data.
     const debug = await query(username,
@@ -183,7 +183,7 @@ async function main() {
   assert(revision2 > revision1, 'Revoke must advance ledger revision');
 
   await doSai('upgrade-app', token, ['apods:CreateGroup', 'apods:ReadGroups']);
-  assert((await authorizationRows(username, webId)).some(x => x.right.value === 'apods:CreateGroup'),
+  assert((await authorizationRows(username, webId)).some(x => x.right.value === 'http://activitypods.org/ns/core#CreateGroup'),
     'Regrant did not persist SAI CreateGroup right');
   const revision3 = await ledger(webId);
   assert(revision3 > revision2, 'Regrant must advance ledger revision');

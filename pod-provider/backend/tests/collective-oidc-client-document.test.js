@@ -3,6 +3,8 @@
 jest.mock('node-fetch', () => jest.fn());
 const fetch = require('node-fetch');
 const RedisAdapter = require('../config/oidc-adapter');
+const { safeUri, isAllowedAddress, clientFetchOptions } =
+  require('../config/oidc-client-network-policy');
 
 const URI = 'https://paper.example/app';
 const CONTEXT = 'https://www.w3.org/ns/solid/oidc-context.jsonld';
@@ -65,6 +67,30 @@ describe('remote HTTPS Solid-OIDC Client ID document hardening', () => {
     fetch.mockResolvedValue({ status: 502, text });
     await expect(adapter().find(URI)).rejects.toThrow('HTTP 502');
     expect(text).not.toHaveBeenCalled();
+  });
+
+  test('public DNS addresses are permitted and private/metadata networks denied', () => {
+    for (const address of ['127.0.0.1', '10.1.2.3', '169.254.169.254',
+      '172.18.0.1', '192.168.1.1', '100.64.0.1', '198.51.100.8']) {
+      expect(isAllowedAddress(address, 4, 'example.net')).toBe(false);
+    }
+    for (const address of ['::1', 'fe80::1', 'fc00::1', '2001:db8::1']) {
+      expect(isAllowedAddress(address, 6, 'example.net')).toBe(false);
+    }
+    expect(isAllowedAddress('8.8.8.8', 4, 'example.net')).toBe(true);
+    expect(isAllowedAddress('2606:4700:4700::1111', 6, 'example.net')).toBe(true);
+  });
+
+  test('rejects malformed and direct private URLs before any HTTP request', () => {
+    for (const uri of [
+      'http://127.0.0.1/admin', 'https://127.0.0.1/admin',
+      'https://10.0.0.2/', 'https://169.254.169.254/latest/meta-data',
+      'https://user:secret@example.net/app', 'https://example.net/app query'
+    ]) {
+      expect(() => safeUri(uri)).toThrow();
+    }
+    expect(clientFetchOptions(URI).agent).toBeDefined();
+    expect(clientFetchOptions(URI).agent.maxTotalSockets).toBe(64);
   });
 
   test('oversized, slow or redirected fetch errors propagate fail closed', async () => {

@@ -128,12 +128,16 @@ module.exports = {
         grant: { type: 'object', strict: false } },
       async handler(ctx) {
         authenticate(this.settings, ctx.params, 'change');
+        // Build and validate the bounded statement before issuing three
+        // authoritative SAI lookups. Invalid owner/role/epoch inputs must
+        // consume no broker calls or Fuseki resources.
+        const receipt = crypto.randomUUID();
+        const sparql = rdf.mutateQuery({ ...ctx.params, receipt });
         await assertLiveCollectiveConsent(ctx, {
           principal: ctx.params.owner, app: ctx.params.app, operation: 'members',
           approvedApps: this.settings.approvedApps
         });
-        const receipt = crypto.randomUUID();
-        await update(ctx, rdf.mutateQuery({ ...ctx.params, receipt }));
+        await update(ctx, sparql);
         const rows = await query(ctx, rdf.readMutationQuery(ctx.params));
         await assertLiveCollectiveConsent(ctx, {
           principal: ctx.params.owner, app: ctx.params.app, operation: 'members',

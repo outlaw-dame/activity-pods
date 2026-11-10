@@ -93,6 +93,9 @@ describe('Paper G2 admission policy: consent, moderation and non-activation', ()
   });
   test('invalid snapshots and role substitution fail closed', () => {
     deny({ actorRole: 'superadmin' }, 'GROUP_ADMISSION_INVALID_INPUT');
+    deny({ actor: 'http://provider.example/users/alice' }, 'GROUP_ADMISSION_INVALID_INPUT');
+    deny({ actor: 'https://provider.example/users/alice\\n' }, 'GROUP_ADMISSION_INVALID_INPUT');
+    deny({ actor: 'https://user@provider.example/users/alice' }, 'GROUP_ADMISSION_INVALID_INPUT');
     deny({ visibility: 'unlisted' }, 'GROUP_ADMISSION_INVALID_INPUT');
     deny({ current: { status: 'wat', role: 'member' } },
       'GROUP_ADMISSION_INVALID_STATE');

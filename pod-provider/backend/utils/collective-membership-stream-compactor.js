@@ -17,6 +17,58 @@ const rdf = require('./collective-membership-rdf');
 const index = require('./collective-membership-page-index');
 const { validateDelta } = require('./collective-membership-delta-merge');
 
+/**
+ * Existing base-index pages remain readable to a trusted compactor after
+ * the canonical membership epoch advances, but ONLY while both the
+ * expected current epoch and indexed base epoch match in one SAI/account
+ * authorization-fenced TDB2 snapshot. This is never a public roster route.
+ */
+function readCompactionBaseQuery({ groupId, owner, app, baseRevision,
+  membershipRevision, cursor = null }) {
+  rdf.validateId(groupId);
+  rdf.validateActor(owner);
+  rdf.validateActor(app);
+  if (!Number.isSafeInteger(baseRevision) || baseRevision < 1 ||
+      !Number.isSafeInteger(membershipRevision) || membershipRevision < baseRevision) {
+    fail('GROUP_COMPACTION_INVALID_REVISION');
+  }
+  const page = index.pageSubject(groupId, baseRevision, cursor);
+  const g = rdf.groupSubject(groupId);
+  const query = rdf.readEpochQuery({ groupId, owner, app });
+  const modified = query.replace('SELECT ?epoch WHERE {',
+    'SELECT ?epoch ?baseEpoch ?pageJson ?pageDigest WHERE {');
+  if (query === modified || !modified.endsWith('} LIMIT 2')) {
+    fail('GROUP_COMPACTION_AUTHORITY_TEMPLATE_DRIFT');
+  }
+  return modified.replace('} LIMIT 2',
+    g + ' apods:collectiveIndexedMembershipEpoch ?baseEpoch . ' +
+    'FILTER(xsd:integer(?epoch) = ' + membershipRevision + ') ' +
+    'FILTER(xsd:integer(?baseEpoch) = ' + baseRevision + ') ' +
+    page + ' apods:collectiveIndexPageJson ?pageJson ; ' +
+    'apods:collectiveIndexPageDigest ?pageDigest . } LIMIT 2')
+    .replace('PREFIX apods: <http://activitypods.org/ns/core#>',
+      'PREFIX apods: <http://activitypods.org/ns/core#> ' +
+      'PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>');
+}
+function decodeCompactionBase(rows, { groupId, baseRevision,
+  membershipRevision, cursor = null }) {
+  if (!Array.isArray(rows) || rows.length !== 1) {
+    fail('GROUP_COMPACTION_BASE_UNAVAILABLE');
+  }
+  const get = (name) => typeof rows[0]?.[name] === 'string'
+    ? rows[0][name] : rows[0]?.[name]?.value;
+  if (!/^[0-9]+$/u.test(String(get('epoch'))) ||
+      !/^[0-9]+$/u.test(String(get('baseEpoch'))) ||
+      Number(get('epoch')) !== membershipRevision ||
+      Number(get('baseEpoch')) !== baseRevision) {
+    fail('GROUP_COMPACTION_BASE_UNAVAILABLE');
+  }
+  return index.decodeRead([{
+    epoch: { value: String(baseRevision) },
+    pageJson: { value: get('pageJson') },
+    pageDigest: { value: get('pageDigest') }
+  }], { groupId, revision: baseRevision, cursor });
+}
 const PAGE_WINDOW = index.PAGE_LIMIT + 1;
 const STAGE_BATCH = 20;
 const DEFAULT_MAX_BASE_PAGES = 2000;
@@ -191,6 +243,7 @@ async function stageCompactedMembership({
   });
 }
 module.exports = Object.freeze({
+  readCompactionBaseQuery, decodeCompactionBase,
   stageCompactedMembership, STAGE_BATCH, DEFAULT_MAX_BASE_PAGES,
   MAX_BASE_PAGES
 });

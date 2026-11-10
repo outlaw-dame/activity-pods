@@ -27,12 +27,23 @@ function resource(res, obj) {
     'access-control-allow-origin': '*',
     'x-content-type-options': 'nosniff'
   });
-  res.end(JSON.stringify({ '@context': context, ...obj }));
+  res.end(JSON.stringify({ '@context': obj === app
+    ? [context, 'https://www.w3.org/ns/solid/oidc-context.jsonld']
+    : context, ...obj }));
 }
 const app = {
   id: appUri, type: 'interop:Application',
   'interop:hasAccessNeedGroup': accessNeedUri,
-  'interop:hasAuthorizationCallbackEndpoint': origin + '/callback'
+  'interop:hasAuthorizationCallbackEndpoint': origin + '/callback',
+  // Same HTTPS URI is both the SAI Application and Solid-OIDC Client ID.
+  // Existing RedisAdapter.find('Client', uri) validates this exact match.
+  client_id: appUri,
+  client_name: 'Paper disposable G1 application',
+  redirect_uris: [origin + '/callback'],
+  response_types: ['code'],
+  grant_types: ['authorization_code'],
+  token_endpoint_auth_method: 'none',
+  scope: 'openid profile webid'
 };
 const need = {
   id: accessNeedUri,

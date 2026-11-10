@@ -1,0 +1,65 @@
+name: Paper Groups G2 — Disposable Membership Cost Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/scripts/benchmark-collective-membership-tdb2.js'
+      - '.github/workflows/paper-groups-g2-membership-cost.yml'
+  workflow_dispatch:
+    inputs:
+      members:
+        description: Disposable TDB2 membership cardinality
+        required: true
+        type: choice
+        default: '1000'
+        options:
+          - '1000'
+          - '10000'
+          - '100000'
+
+permissions:
+  contents: read
+
+jobs:
+  membership-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Static-check cost probe
+        run: node --check backend/scripts/benchmark-collective-membership-tdb2.js
+      - name: Start isolated TDB2 settings dataset
+        run: |
+          set -euo pipefail
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+      - name: Record first/middle/deep keyset latency
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
+          G2_BENCH_DISPOSABLE: confirmed
+          G2_BENCH_MEMBERS: ${{ github.event_name == 'workflow_dispatch' && inputs.members || '1000' }}
+        run: |
+          set -euo pipefail
+          node backend/scripts/benchmark-collective-membership-tdb2.js |
+            tee /tmp/g2-membership-cost.jsonl
+      - name: Upload measured cost evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: g2-membership-tdb2-query-cost
+          path: /tmp/g2-membership-cost.jsonl
+          retention-days: 14
+      - name: Diagnostics if real query probe fails
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color --tail=150 fuseki_test
+      - name: Delete disposable test database
+        if: always()
+        run: docker compose -f docker-compose-test.yml down -v

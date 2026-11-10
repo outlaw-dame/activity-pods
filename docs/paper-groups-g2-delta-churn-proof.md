@@ -55,6 +55,41 @@ SIGKILL/restart, complete mutable index, private-public contract, full
 ActivityPods service identity/consent lookup, Fedify, other hosts, provisioned
 remote actors, p95/p99 under load or dollar operating cost is proven.
 
+## TDB2 operational constraints: avoid confusing two kinds of compaction
+
+The Group **logical index compaction** described above merges immutable
+100-member index pages and <=512 changed members. It is **not** Apache
+Jena's **TDB2 storage compaction**.
+
+Official Jena documentation establishes:
+
+- TDB2 has MVCC and serializable transactions, supporting multiple
+  simultaneous readers but **only one active writer per dataset**. Adding
+  Node.js/Fedify workers does not increase Fuseki's per-dataset writer
+  concurrency. Keep membership CAS statements small and bounded; measure
+  aggregate write queue time and isolate expensive background builds from
+  interactive join/leave operations.
+- TDB2 databases must be owned by **one JVM**; multiple app processes
+  cannot directly open the same TDB2 directory. Pod cells use the Fuseki
+  API rather than file sharing.
+- TDB2 storage compaction creates a new on-disk generation and can be done
+  live; **writes may be blocked for the duration**, so schedule it with
+  capacity headroom and monitor backlog rather than running it on every
+  Group revision. Jena also supports consistent live backups. Restore
+  testing is a separate release gate, not assumed from a successful backup.
+
+Primary references:
+[Jena TDB transactions](https://jena.apache.org/documentation/tdb/tdb_transactions.html),
+[Jena TDB2](https://jena.apache.org/documentation/tdb2/index.html),
+[Jena TDB2 administration](https://jena.apache.org/documentation/tdb2/tdb2_admin.html).
+
+Therefore test Group membership-write throughput **together with**
+normal ActivityPods SAI/account/settings updates, and measure
+single-writer queuing, p95/p99, storage generations, backup/restore,
+disk I/O and write-stall time. A fast isolated delta read and a
+successful single-run CAS do not prove the shared settings dataset is
+uncontended or affordable.
+
 ## Required next acceptance
 
 - Implement a streaming base/delta compactor that reads the current

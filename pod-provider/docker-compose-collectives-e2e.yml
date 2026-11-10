@@ -11,6 +11,8 @@ services:
       SEMAPPS_HOME_URL: 'https://paper-e2e.test:3443/'
       SEMAPPS_FRONTEND_URL: 'https://paper-e2e.test:3443/'
       NODE_EXTRA_CA_CERTS: '/app/e2e-tls/ca.crt'
+      # Only disposable test backend may access its private Docker test proxy.
+      G1_E2E_ALLOW_PRIVATE_CLIENT_HOST: 'app-e2e.test'
       PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
       PROVIDER_COLLECTIVES_APPROVED_APPS: 'https://app-e2e.test:3443/app'
       PROVIDER_COLLECTIVES_API_ENABLED: 'false'

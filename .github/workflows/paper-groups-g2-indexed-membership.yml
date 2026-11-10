@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/utils/collective-membership-page-index.js'
+      - 'pod-provider/backend/utils/collective-membership-rdf.js'
       - 'pod-provider/backend/tests/collective-membership-page-index.test.js'
       - 'pod-provider/backend/utils/collective-membership-delta-merge.js'
       - 'pod-provider/backend/tests/collective-membership-delta-merge.test.js'
@@ -30,6 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check backend/utils/collective-membership-page-index.js
+          node --check backend/utils/collective-membership-rdf.js
           node --check backend/tests/collective-membership-page-index.test.js
           node --check backend/utils/collective-membership-delta-merge.js
           node --check backend/tests/collective-membership-delta-merge.test.js

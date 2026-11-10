@@ -81,7 +81,10 @@ function groupBatches(rows, key, capacity, make) {
   }
   const result = [];
   for (const id of [...buckets.keys()].sort()) {
-    const items = buckets.get(id).sort((a, b) => a.actorUri.localeCompare(b.actorUri));
+    // Do not use localeCompare: locale/collation settings may differ across
+    // Pod cells and change snapshot fingerprints on otherwise identical data.
+    const items = buckets.get(id).sort((a, b) =>
+      a.actorUri < b.actorUri ? -1 : a.actorUri > b.actorUri ? 1 : 0);
     for (let start = 0; start < items.length; start += capacity) {
       result.push(make(id, items.slice(start, start + capacity)));
     }
@@ -155,6 +158,10 @@ function planGroupFanout({
   if (!HEX.test(fingerprint)) invalid('invalid fingerprint');
   return Object.freeze({
     version: 'paper.groups.fanout-plan.v1',
+    // Intentionally not an ap.delivery-plan.v1 or a queue payload. The
+    // authoritative cross-page snapshot and consent transaction do not yet
+    // exist, therefore no caller may directly dispatch these candidate routes.
+    dispatchable: false,
     intentId, groupActorUri, membershipRevision, visibility, fingerprint,
     recipientCount: local.length + remote.length,
     localRecipientCount: local.length,

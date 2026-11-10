@@ -52,6 +52,11 @@ async function members(cursor, limit = 100) {
   return request('query', rdf.listQuery({ groupId, owner, cursor, limit }));
 }
 async function prepare() {
+  // Seed the real SemApps account ontology into the same settings dataset:
+  // owner deletion, suspension and duplicate records must fence mutations.
+  await request('update', 'INSERT DATA { <urn:apods:proof:g2-owner> ' +
+    'a <http://semapps.org/ns/core#AuthAccount> ; ' +
+    '<http://semapps.org/ns/core#webId> ' + JSON.stringify(owner) + ' . }');
   await request('update', 'PREFIX apods: <http://activitypods.org/ns/core#>\n' +
     'INSERT DATA { ' + g + ' a apods:CollectiveReservationV1 ; ' +
     'apods:collectiveOwner ' + JSON.stringify(owner) + ' ; ' +

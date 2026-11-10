@@ -71,6 +71,10 @@ function protectedLookup(hostname, options, callback) {
     if (!accepted.length) return callback(
       new Error('Solid-OIDC Client ID resolves to a prohibited network')
     );
+    // Node 22's HTTP(S) auto-select-family requests lookup({ all: true })
+    // and expects an address-record array. The legacy single-IP callback
+    // produces ERR_INVALID_IP_ADDRESS even when DNS resolution succeeded.
+    if (options?.all) return callback(null, accepted);
     callback(null, accepted[0].address, accepted[0].family);
   });
 }

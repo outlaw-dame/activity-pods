@@ -48,6 +48,12 @@ function safeUri(raw) {
       !url.hostname || url.port === '0') {
     throw new Error('Invalid Solid-OIDC Client ID URL');
   }
+  // WHATWG URL.hostname includes brackets for IPv6 literals on Node 22;
+  // net.isIP('[::1]') returns 0. Reject bracketed literals explicitly so
+  // they can never bypass the DNS/socket address validation path.
+  if (url.hostname.startsWith('[')) {
+    throw new Error('Solid-OIDC Client ID resolves to a prohibited network');
+  }
   const literal = net.isIP(url.hostname);
   if (literal && !isAllowedAddress(url.hostname, literal, url.hostname) && !localDev) {
     throw new Error('Solid-OIDC Client ID resolves to a prohibited network');

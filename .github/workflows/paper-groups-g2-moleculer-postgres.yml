@@ -1,0 +1,78 @@
+name: Paper Groups — Moleculer PostgreSQL Candidate Bridge
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/candidates/collective-postgres-moleculer.js'
+      - 'pod-provider/backend/scripts/proof-collective-postgres-moleculer.js'
+      - '.github/workflows/paper-groups-g2-moleculer-postgres.yml'
+      - 'docs/paper-groups-postgres-moleculer-integration.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  moleculer-postgres-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Verify candidate source syntax
+        run: |
+          node --check pod-provider/backend/candidates/collective-postgres-moleculer.js
+          node --check pod-provider/backend/scripts/proof-collective-postgres-moleculer.js
+      - name: Install existing backend dependencies without changing production lockfile
+        working-directory: pod-provider/backend
+        run: |
+          set -euo pipefail
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          sed -i 's#ssh://git@github.com/#https://github.com/#g; s#git+ssh://git@github.com/#git+https://github.com/#g; s#git@github.com:#https://github.com/#g' yarn.lock
+          yarn install --frozen-lockfile
+      - name: Install isolated pinned PG client for proof only
+        run: |
+          mkdir -p /tmp/paper-g2-pg-client
+          npm install --prefix /tmp/paper-g2-pg-client --no-save --ignore-scripts --no-audit --no-fund pg@8.16.3
+      - name: Boot disposable PostgreSQL 18
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name paper-g2-node-pg \
+            -e POSTGRES_PASSWORD=bench -e POSTGRES_DB=paper_g2_node \
+            -p 127.0.0.1:5546:5432 postgres:18
+          NODE_PATH=/tmp/paper-g2-pg-client/node_modules node - <<'NODE'
+          const { Client } = require('pg');
+          const url = 'postgresql://postgres:bench@127.0.0.1:5546/paper_g2_node';
+          (async () => {
+            for (let i = 0; i < 60; i++) {
+              const client = new Client({ connectionString: url, connectionTimeoutMillis: 2000 });
+              try {
+                await client.connect();
+                const r = await client.query('SELECT 1');
+                await client.end();
+                if (r.rows[0]['?column?'] !== 1) throw Error('Invalid readiness');
+                process.exit(0);
+              } catch (_) {
+                try { await client.end(); } catch (_) {}
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
+            }
+            process.exitCode = 1;
+          })();
+          NODE
+      - name: Run actual consent-fenced Node/Moleculer candidate against PostgreSQL
+        working-directory: pod-provider/backend
+        env:
+          NODE_PATH: /tmp/paper-g2-pg-client/node_modules
+          G2_BENCH_DISPOSABLE: confirmed
+          G2_POSTGRES_DSN: postgresql://postgres:bench@127.0.0.1:5546/paper_g2_node
+        run: node scripts/proof-collective-postgres-moleculer.js
+      - name: Print bounded database diagnostics on failure
+        if: failure()
+        run: docker logs --tail=80 paper-g2-node-pg || true
+      - name: Delete disposable database
+        if: always()
+        run: docker rm -f paper-g2-node-pg || true

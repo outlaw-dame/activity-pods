@@ -96,9 +96,25 @@ async function doSai(path, token, acceptedSpecialRights) {
 async function main() {
   assert.equal(process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED, 'true',
     'The disposable Pod-provider backend must start with the SAI bridge enabled');
-  const discovery = await api(provider + '/.well-known/openid-configuration');
-  assert.equal(discovery.status, 200, 'Native Solid-OIDC discovery failed');
-  assert(discovery.data?.issuer, 'Solid-OIDC discovery missing issuer');
+  // The Solid-OIDC service dynamically registers its routes after initializing
+  // the provider and loading JWKs. Readiness of "/" is not OIDC readiness.
+  const deadline = Date.now() + 150000;
+  let discovery;
+  do {
+    try {
+      discovery = await api(provider + '/.well-known/openid-configuration');
+      if (discovery.status === 200 && discovery.data?.issuer) break;
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('Native Solid-OIDC discovery did not become ready: HTTP ' +
+        (discovery?.status ?? 'network error') + ' ' +
+        JSON.stringify(discovery?.data).slice(0, 650));
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  } while (true);
+  assert(discovery.data.issuer, 'Native Solid-OIDC discovery missing issuer');
   const username = 'g1' + crypto.randomBytes(6).toString('hex');
   const signup = await api(provider + '/auth/signup', {
     method: 'POST', body: {

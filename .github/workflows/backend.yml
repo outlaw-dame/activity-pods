@@ -52,6 +52,9 @@ jobs:
                       pod-provider/backend/scripts/proof-collective-fuseki.js \
                       pod-provider/backend/scripts/proof-collective-consent-fence.js \
                       pod-provider/backend/scripts/proof-collective-sai-persistence.js \
+                      pod-provider/backend/scripts/proof-collective-provider-http-server.js \
+                      pod-provider/backend/scripts/proof-collective-provider-http.js \
+                      pod-provider/backend/scripts/proof-collective-provider-oidc.js \
                       pod-provider/backend/scripts/recover-collective-consent-offline.js; do
             [ -f "$file" ] || continue
             node --check "$file"

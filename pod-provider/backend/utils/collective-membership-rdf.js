@@ -207,7 +207,7 @@ function listQuery({ groupId, owner, app, cursor = null, limit = 100 }) {
     '} ORDER BY STR(?actor) LIMIT ' + (limit + 1);
 }
 module.exports = Object.freeze({
-  MAX_LIMIT, ROLES, STATUSES,
+  MAX_LIMIT, MAX_INDEX_DELTA, ROLES, STATUSES,
   validateId, validateActor, groupSubject, memberSubject, consentSubject,
   initializeQuery, mutateQuery, readEpochQuery, readMutationQuery, listQuery
 });

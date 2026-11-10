@@ -1,5 +1,6 @@
 'use strict';
-const { stageCompactedMembership } = require('../utils/collective-membership-stream-compactor');
+const { stageCompactedMembership, readCompactionBaseQuery, decodeCompactionBase } =
+  require('../utils/collective-membership-stream-compactor');
 const index = require('../utils/collective-membership-page-index');
 const groupId = 'cg_' + 'f'.repeat(32);
 const owner = 'https://provider.example/users/owner';
@@ -54,6 +55,39 @@ function fixture(items, changes = []) {
   return { inputs, persisted, pages, get reads() { return reads; } };
 }
 describe('G2 streaming compaction bounded memory and verified staging', () => {
+  test('compactor may read old immutable base only under exact live epoch, owner and SAI fence', () => {
+    const query = readCompactionBaseQuery({
+      groupId, owner, app: 'https://provider.example/app',
+      baseRevision, membershipRevision, cursor: null
+    });
+    expect(query).toContain('collectiveConsentStatus "stable"');
+    expect(query).toContain('AuthAccount');
+    expect(query).toContain('collectiveIndexedMembershipEpoch ?baseEpoch');
+    expect(query).toContain('FILTER(xsd:integer(?epoch) = 21)');
+    expect(query).toContain('FILTER(xsd:integer(?baseEpoch) = 17)');
+    expect(query).not.toContain('ORDER BY');
+    expect(query).not.toContain('OFFSET');
+    const page = index.encodePage({
+      groupId, revision: baseRevision, cursor: null, members: [
+        { actorUri: owner, role: 'owner' } ], hasMore: false
+    });
+    const rows = [{
+      epoch: { value: String(membershipRevision) },
+      baseEpoch: { value: String(baseRevision) },
+      pageJson: { value: page.json },
+      pageDigest: { value: page.digest }
+    }];
+    expect(decodeCompactionBase(rows, {
+      groupId, baseRevision, membershipRevision, cursor: null
+    }).members).toEqual(page.members);
+    expect(() => decodeCompactionBase([{...rows[0],epoch:{value:'22'}}],{
+      groupId, baseRevision, membershipRevision
+    })).toThrow('BASE_UNAVAILABLE');
+    expect(() => decodeCompactionBase([{...rows[0],
+      pageDigest:{value:'0'.repeat(64)}}],{
+      groupId, baseRevision, membershipRevision
+    })).toThrow();
+  });
   test('stages complete immutable sorted base and preserves owner; idempotent deterministic manifest', async () => {
     const before = base();
     const fixture1 = fixture(before);

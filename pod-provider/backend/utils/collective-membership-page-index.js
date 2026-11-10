@@ -62,6 +62,51 @@ function encodePage({ groupId, revision, cursor = null, members, hasMore }) {
   return Object.freeze({ ...payload, json, digest: hash(json),
     subject: pageSubject(groupId, revision, cursor) });
 }
+/**
+ * Pack a bounded (at most 101 actors) authoritative, sorted read window
+ * without silently dropping actors whose long valid URLs would overflow a
+ * 32-KiB literal. Binary search avoids repeated O(100^2) full serializations.
+ *
+ * The caller must resume from returned nextCursor and verify the same
+ * membership revision throughout the complete index construction.
+ */
+function packPage({ groupId, revision, cursor = null, members, sourceHasMore = false }) {
+  if (!Array.isArray(members) || members.length < 1 ||
+      members.length > PAGE_LIMIT + 1 || typeof sourceHasMore !== 'boolean') {
+    reject('INVALID_MEMBERSHIP_INDEX_WINDOW');
+  }
+  // This checks actor/order/role without requiring <=100 entries.
+  let prior = cursor ?? '';
+  for (const m of members) {
+    const actorUri = rdf.validateActor(m?.actorUri);
+    if (actorUri <= prior) reject('INVALID_MEMBERSHIP_INDEX_ORDER');
+    prior = actorUri;
+    if (m.role !== 'owner' && !rdf.ROLES.has(m.role)) {
+      reject('INVALID_MEMBERSHIP_INDEX_ROLE');
+    }
+  }
+  let lo = 1;
+  let hi = Math.min(members.length, PAGE_LIMIT);
+  let best = null;
+  let count = 0;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    try {
+      const candidate = encodePage({
+        groupId, revision, cursor, members: members.slice(0, mid),
+        hasMore: sourceHasMore || members.length > mid
+      });
+      best = candidate;
+      count = mid;
+      lo = mid + 1;
+    } catch (error) {
+      if (error?.message !== 'MEMBERSHIP_INDEX_PAGE_TOO_LARGE') throw error;
+      hi = mid - 1;
+    }
+  }
+  if (best === null) reject('MEMBERSHIP_INDEX_ACTOR_TOO_LARGE');
+  return Object.freeze({ page: best, consumedCount: count });
+}
 function stagePageQuery(page) {
   if (!page || page.digest !== hash(page.json) ||
       page.subject !== pageSubject(page.groupId, page.revision, page.cursor)) {
@@ -142,6 +187,6 @@ function decodeRead(rows, { groupId, revision, cursor = null }) {
   }
 }
 module.exports = Object.freeze({
-  PAGE_LIMIT, MAX_PAGE_BYTES, pageSubject, encodePage, stagePageQuery,
+  PAGE_LIMIT, MAX_PAGE_BYTES, pageSubject, encodePage, packPage, stagePageQuery,
   readPageQuery, publishQuery, decodeRead
 });

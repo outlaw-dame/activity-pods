@@ -37,8 +37,8 @@ G1's release fuse, public Group API, actor issuance, Fedify remote delivery and 
 
 ## G2-P2 follow-on — native Solid-OIDC credential bridge (review branch)
 
-The native provider API now contains a separately release-fenced membership
-list/change bridge. It reuses the **existing authenticated Solid-OIDC gateway**
+The native provider API now contains a separately release-fenced owner-scoped
+membership **read-only** bridge. It reuses the **existing authenticated Solid-OIDC gateway**
 and re-verifies the signed access token and its exact app/user projection.
 A single shared claim module constructs the same canonical request digest as
 the membership authority; its 30-second, operation/group/owner/app/parameters-
@@ -50,7 +50,9 @@ login, passkey ceremony or an app-issued permission.
 Both the G1 API gate and the additional
 `PROVIDER_COLLECTIVES_MEMBERS_API_ENABLED` gate are required; the immutable
 `CONSENT_BRIDGE_RELEASED=false` still blocks the entire route. Only the
-existing owner-scoped list and change operations are bridged. There is no
+existing owner-scoped list operation is bridged. **No HTTP membership mutation
+route exists:** owner-driven active membership insertion cannot be exposed
+until invitations, acceptance and user-consent authorization are implemented. There is no
 moderator delegation, join approval, invitation, membership self-service,
 public Group page, Group actor or delivery activation.
 

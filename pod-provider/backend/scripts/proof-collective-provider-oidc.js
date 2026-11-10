@@ -101,7 +101,7 @@ async function proof(keyPair, method, uri, nonce) {
 async function providerDatasetQuery(dataset, query) {
   const origin = (process.env.FUSEKI_URL ||
     process.env.SEMAPPS_SPARQL_ENDPOINT || 'http://fuseki_test:3030/')
-    .replace(/\\/+$/u, '');
+    .replace(/\/+$/u, '');
   const credentials = 'Basic ' + Buffer.from(
     (process.env.FUSEKI_USER || process.env.SEMAPPS_JENA_USER || 'admin') +
     ':' + (process.env.FUSEKI_PASSWORD || process.env.SEMAPPS_JENA_PASSWORD || 'admin')

@@ -150,8 +150,29 @@ async function main() {
   const reg = await registrationRows(username, webId);
   assert.equal(reg.length, 1, 'Native SAI registration not persisted on Pod');
   const rights = await authorizationRows(username, webId);
-  assert(rights.some(row => row.right.value === 'apods:CreateGroup'),
-    'Native SAI CreateGroup authorization not persisted');
+  if (!rights.some(row => row.right.value === 'apods:CreateGroup')) {
+    // Only print synthetic CI Pod graph statements. Never print credentials,
+    // session tokens, password hashes or unrelated user profile data.
+    const debug = await query(username,
+      'SELECT ?subject ?predicate ?object WHERE { ?subject ?predicate ?object . ' +
+      'FILTER(' +
+      'CONTAINS(LCASE(STR(?predicate)), "specialrights") || ' +
+      'CONTAINS(LCASE(STR(?predicate)), "grantedby") || ' +
+      'CONTAINS(LCASE(STR(?predicate)), "grantee") || ' +
+      'CONTAINS(LCASE(STR(?predicate)), "hasaccessneedgroup")' +
+      ') } LIMIT 50');
+    const current = await query('settings',
+      'PREFIX apods: <http://activitypods.org/ns/core#> ' +
+      'SELECT ?r ?status WHERE { ?s apods:collectiveConsentRevision ?r ; ' +
+      'apods:collectiveConsentStatus ?status . } LIMIT 10');
+    console.error('[G1 SAI diagnostics] ' + JSON.stringify({
+      matchingPodStatements: debug.map(row => ({
+        subject: row.subject.value, predicate: row.predicate.value, object: row.object.value
+      })),
+      ledger: current.map(row => [row.r.value, row.status.value])
+    }));
+    throw new Error('Native SAI CreateGroup authorization not persisted');
+  }
   const revision1 = await ledger(webId);
   assert(revision1 >= 2, 'Expected registration and grant mutation revisions');
 

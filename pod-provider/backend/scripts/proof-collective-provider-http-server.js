@@ -27,24 +27,12 @@ function resource(res, obj) {
     'access-control-allow-origin': '*',
     'x-content-type-options': 'nosniff'
   });
-  res.end(JSON.stringify({ '@context': obj === app
-    ? [{ interop: context.interop, apods: context.apods },
-      'https://www.w3.org/ns/solid/oidc-context.jsonld']
-    : context, ...obj }));
+  res.end(JSON.stringify({ '@context': context, ...obj }));
 }
 const app = {
   '@id': appUri, '@type': 'interop:Application',
   'interop:hasAccessNeedGroup': accessNeedUri,
-  'interop:hasAuthorizationCallbackEndpoint': origin + '/callback',
-  // Same HTTPS URI is both the SAI Application and Solid-OIDC Client ID.
-  // Existing RedisAdapter.find('Client', uri) validates this exact match.
-  client_id: appUri,
-  client_name: 'Paper disposable G1 application',
-  redirect_uris: [origin + '/callback'],
-  response_types: ['code'],
-  grant_types: ['authorization_code'],
-  token_endpoint_auth_method: 'none',
-  scope: 'openid profile webid'
+  'interop:hasAuthorizationCallbackEndpoint': origin + '/callback'
 };
 const need = {
   id: accessNeedUri,
@@ -59,7 +47,31 @@ const proxy = https.createServer({
   const host = String(req.headers.host || '').split(':')[0];
   const pathname = new URL(req.url, 'https://fixture.invalid').pathname;
   if (host === 'app-e2e.test') {
-    if (pathname === '/app') return resource(res, app);
+    if (pathname === '/app') {
+      // SemApps requests the SAI Application Linked Data representation.
+      // RedisAdapter.find('Client') explicitly requests the official OIDC
+      // context via JsonLdContext. Serve two compatible representations of
+      // the same canonical HTTPS identity without colliding JSON-LD terms.
+      if (req.headers.jsonldcontext ===
+          'https://www.w3.org/ns/solid/oidc-context.jsonld') {
+        res.writeHead(200, {
+          'content-type': 'application/ld+json; charset=utf-8',
+          'cache-control': 'no-store',
+          'vary': 'JsonLdContext'
+        });
+        return res.end(JSON.stringify({
+          '@context': ['https://www.w3.org/ns/solid/oidc-context.jsonld'],
+          client_id: appUri,
+          client_name: 'Paper disposable G1 application',
+          redirect_uris: [origin + '/callback'],
+          response_types: ['code'],
+          grant_types: ['authorization_code'],
+          token_endpoint_auth_method: 'none',
+          scope: 'openid profile webid'
+        }));
+      }
+      return resource(res, app);
+    }
     if (pathname === '/access-need') return resource(res, need);
     if (pathname === '/callback') {
       res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });

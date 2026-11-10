@@ -79,6 +79,23 @@ describe('live SAI consent gate', () => {
     const f = fake(fixture);
     await deny(verify(f.ctx), code);
   });
+  test('accepts exact persisted JSON-LD IRIs for each Group capability', async () => {
+    const ns = 'http://activitypods.org/ns/core#';
+    const f = fake({ rights: [ns + 'CreateGroup', ns + 'ReadGroups'] });
+    expect(await verify(f.ctx, 'reserve')).toBe(true);
+    expect(await verify(f.ctx, 'read')).toBe(true);
+  });
+  test.each([
+    'https://activitypods.org/ns/core#CreateGroup',
+    'http://activitypods.org/ns/core#CreateGroupExtra',
+    'http://other.example/ns#CreateGroup',
+    'apods:CreateGroupExtra',
+    'APODS:CreateGroup'
+  ])('never grants similarly named or noncanonical rights %s', async right => {
+    const f = fake({ rights: [right] });
+    await deny(verify(f.ctx, 'reserve'), 'COLLECTIVE_APP_CONSENT_MISSING');
+  });
+
   test('read requires ReadGroups rather than CreateGroup', async () => {
     const f = fake({ rights: ['apods:CreateGroup'] });
     await deny(verify(f.ctx, 'read'), 'COLLECTIVE_APP_CONSENT_MISSING');

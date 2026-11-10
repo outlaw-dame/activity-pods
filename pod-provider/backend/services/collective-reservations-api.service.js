@@ -71,7 +71,7 @@ function expectedIssuer(origin) {
 
 module.exports = {
   name: 'collective-reservations-api',
-  dependencies: ['api', 'jwk', 'collective-reservations', 'collective-memberships'],
+  dependencies: ['api', 'jwk', 'collective-reservations'],
   settings: {
     enabled: CONSENT_BRIDGE_RELEASED &&
       process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED === 'true' &&

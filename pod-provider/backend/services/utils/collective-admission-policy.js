@@ -23,12 +23,19 @@ class AdmissionPolicyError extends Error {
   }
 }
 function fail(code) { throw new AdmissionPolicyError(code); }
+function validActorUri(value) {
+  if (typeof value !== 'string' || value.length > 2048 ||
+      /[\\u0000-\\u0020\\u007f\\\\]/u.test(value)) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' && u.href === value &&
+      !u.username && !u.password && !u.search;
+  } catch { return false; }
+}
 function assertAuthority({ actor, subject, owner, actorRole, current, visibility, action }) {
   if (!ACTIONS.has(action) || !VISIBILITIES.has(visibility) ||
       !ROLES.has(actorRole) ||
-      typeof actor !== 'string' || !actor.startsWith('https://') ||
-      typeof subject !== 'string' || !subject.startsWith('https://') ||
-      typeof owner !== 'string' || !owner.startsWith('https://')) {
+      !validActorUri(actor) || !validActorUri(subject) || !validActorUri(owner)) {
     fail('GROUP_ADMISSION_INVALID_INPUT');
   }
   // No self-assertion of persisted role is permitted; caller must have

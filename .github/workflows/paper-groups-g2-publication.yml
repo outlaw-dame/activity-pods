@@ -1,0 +1,32 @@
+name: Paper Groups G2 — Manifest Publication Fencing
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/utils/collective-membership-publication.js'
+      - 'pod-provider/backend/tests/collective-membership-publication.test.js'
+      - '.github/workflows/paper-groups-g2-publication.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publication-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Check publication source syntax
+        run: |
+          node --check pod-provider/backend/utils/collective-membership-publication.js
+          node --check pod-provider/backend/tests/collective-membership-publication.test.js
+      - name: Run permission- and epoch-fenced publication tests
+        run: |
+          set -euo pipefail
+          NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
+            --runInBand --testEnvironment=node --runTestsByPath \
+            pod-provider/backend/tests/collective-membership-publication.test.js

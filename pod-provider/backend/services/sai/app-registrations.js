@@ -129,10 +129,19 @@ module.exports = {
       },
       async put(ctx) {
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
-        // A registration update can change the effective app authority.
-        // Revocation is committed first, irrespective of API/UI origin.
         const resource = ctx.params.resource || {};
-        await beginRegistrationMutation(ctx, resource);
+        const resourceUri = ctx.params.resourceUri || resource.id || resource['@id'];
+        // A client-supplied replacement body is not an authority for changing
+        // the registration owner or app identifier. Read the persisted record.
+        if (!resourceUri) throw new Error('SAI_REGISTRATION_URI_REQUIRED');
+        const stored = await ctx.call('app-registrations.get', {
+          resourceUri, webId: 'system'
+        });
+        if (!stored || stored['interop:registeredBy'] !== resource['interop:registeredBy'] ||
+            stored['interop:registeredAgent'] !== resource['interop:registeredAgent']) {
+          throw new Error('SAI_REGISTRATION_IDENTITY_IMMUTABLE');
+        }
+        await beginRegistrationMutation(ctx, stored);
       },
       async delete(ctx) {
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;

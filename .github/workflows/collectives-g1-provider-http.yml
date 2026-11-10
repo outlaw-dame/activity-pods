@@ -5,6 +5,7 @@ on:
     paths:
       - 'pod-provider/backend/scripts/proof-collective-provider-http-server.js'
       - 'pod-provider/backend/scripts/proof-collective-provider-http.js'
+      - 'pod-provider/backend/scripts/proof-collective-provider-oidc.js'
       - 'pod-provider/docker-compose-collectives-e2e.yml'
       - 'pod-provider/backend/services/sai/access-authorizations.js'
       - 'pod-provider/backend/services/sai/app-registrations.js'
@@ -107,6 +108,12 @@ jobs:
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
             exec -T -e FUSEKI_URL=http://fuseki_test:3030 backend \
               node scripts/proof-collective-provider-http.js
+
+      - name: Verify native Solid-OIDC interactive PKCE login and signed user token
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T backend node scripts/proof-collective-provider-oidc.js
 
       - name: Diagnostics on failure
         if: failure()

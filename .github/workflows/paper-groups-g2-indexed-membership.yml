@@ -5,6 +5,8 @@ on:
     paths:
       - 'pod-provider/backend/utils/collective-membership-page-index.js'
       - 'pod-provider/backend/tests/collective-membership-page-index.test.js'
+      - 'pod-provider/backend/utils/collective-membership-delta-merge.js'
+      - 'pod-provider/backend/tests/collective-membership-delta-merge.test.js'
       - 'pod-provider/backend/scripts/proof-collective-indexed-membership-fuseki.js'
       - '.github/workflows/paper-groups-g2-indexed-membership.yml'
   workflow_dispatch:
@@ -29,7 +31,17 @@ jobs:
           set -euo pipefail
           node --check backend/utils/collective-membership-page-index.js
           node --check backend/tests/collective-membership-page-index.test.js
+          node --check backend/utils/collective-membership-delta-merge.js
+          node --check backend/tests/collective-membership-delta-merge.test.js
           node --check backend/scripts/proof-collective-indexed-membership-fuseki.js
+      - name: Run isolated index and delta correctness regressions
+        run: |
+          set -euo pipefail
+          cd ..
+          NODE_ENV=test npm exec --yes --package=jest@29.7.0 -- jest \
+            --runInBand --testEnvironment=node --runTestsByPath \
+            pod-provider/backend/tests/collective-membership-page-index.test.js \
+            pod-provider/backend/tests/collective-membership-delta-merge.test.js
       - name: Run isolated authoritative TDB2 cardinalities on one runner
         env:
           FUSEKI_URL: http://127.0.0.1:3040

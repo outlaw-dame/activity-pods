@@ -54,12 +54,7 @@ async function main() {
     const op = uuid();
     const change = { ...common, member: member(1), role: 'member',
       status: 'active', expectedRevision: 1, operationId: op };
-    // Even an injected Pool cannot bypass the hardcoded fixture/release fence.
-    await assert.rejects(
-      () => factory.actions.change.handler.call({ settings: { enabled: true } },
-        { params: change }),
-      { code: undefined }, 'placeholder'
-    ).catch(() => {}); // Replaced with explicit correct disabled test below.
+    // An injected Pool alone cannot bypass the fixture/release fence.
     const disabled = createCandidateService({pool});
     await assert.rejects(
       () => disabled.actions.change.handler.call(service, {params:change}),

@@ -1,0 +1,59 @@
+name: Paper Groups G2 — Real TDB2 Writer Contention
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/scripts/proof-collective-tdb2-writer-contention.js'
+      - '.github/workflows/paper-groups-g2-tdb2-contention.yml'
+      - 'docs/paper-groups-tdb2-postgres-benchmark-gate.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  same-dataset-writer-contention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Check bounded disposable-only proof
+        run: node --check backend/scripts/proof-collective-tdb2-writer-contention.js
+      - name: Real 1/4/16 writer comparison on same Fuseki dataset
+        env:
+          FUSEKI_URL: http://127.0.0.1:3040
+          FUSEKI_USER: admin
+          FUSEKI_PASSWORD: admin
+          G2_BENCH_DISPOSABLE: confirmed
+          G2_WRITE_OPS_PER_WRITER: '24'
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+          node backend/scripts/proof-collective-tdb2-writer-contention.js \
+            | tee /tmp/g2-tdb2-contention.jsonl
+      - name: Preserve anonymous measurable evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-g2-tdb2-mixed-group-writer-evidence
+          path: /tmp/g2-tdb2-contention.jsonl
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Print Fuseki diagnostics on failure
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color --tail=120 fuseki_test
+      - name: Destroy disposable database
+        if: always()
+        run: |
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test

@@ -42,6 +42,33 @@ read cost **and snapshot construction/staging cost**. It tests that
 unpublished pages cannot be fetched, and that incrementing the authoritative
 epoch makes all previously indexed reads unavailable.
 
+## Bounded write amplification: base-plus-delta candidate
+
+A separate pure, IO-free `collective-membership-delta-merge.js` kernel
+bounds a prospective revision-aware overlay to **512 changed actor keys**
+and merges it into at most **8 verified base pages** of 100 members each.
+It handles added/role-changed members and removals (including bans/leaves),
+preserves lexical ordering, deduplicates actor identities, and fails closed
+if it lacks enough base pages to prove the next page. It disallows creating
+an owner role through the delta. Its in-process work depends on the
+page/delta limits, not total Group membership.
+
+This provides a concrete candidate for amortizing full-base compactions:
+the canonical Group epoch must advance atomically with a durable,
+revision-bound delta, and the live reader must verify `baseRevision`,
+`currentRevision`, page provenance and actor-identity authorization.
+Compaction must construct a fresh verified base, replay concurrent
+revisions, and atomically switch pointers only after all pages and deltas
+are durable. Snapshot-cursor tokens must be revision-bound and cannot
+accept an untrusted base-page anchor.
+
+**The overlay is not persisted or wired to runtime.** The module establishes
+bounded merge/correctness semantics and does not imply the full write
+cost, storage growth, compactor behavior or live recovery problem is
+resolved. When deltas fill, bounded compaction/backpressure must be tested
+so one busy Group cannot force unbounded rebuilds, stale reads, or
+excessive Fuseki/CPU/disk churn.
+
 ## Non-activation boundaries / open production blockers
 
 This prototype does **not** offer a production-safe index writer.

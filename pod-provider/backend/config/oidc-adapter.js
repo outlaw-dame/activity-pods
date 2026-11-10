@@ -105,8 +105,10 @@ class RedisAdapter {
             throw new Error('Missing context https://www.w3.org/ns/solid/oidc-context.jsonld');
           }
         } catch (error) {
-          json = undefined;
-          console.error(`Found unexpected client ID for ${id}: ${error.message}`);
+          // A malformed or unexpectedly contextualized document must never
+          // fall through as a client with an implicit public auth method.
+          // No RDF fallback parser is implemented on this adapter.
+          throw new Error('Invalid Solid-OIDC Client ID Document JSON-LD');
         }
 
         if (json) {
@@ -126,9 +128,6 @@ class RedisAdapter {
             client_id: json.client_id,
             redirect_uris: json.redirect_uris
           };
-        } else {
-          // Since the client ID does not match the default JSON-LD we try to interpret it as RDF
-          // payload = await this.parseRdfClientId(data, id, response);
         }
 
         // `token_endpoint_auth_method: 'none'` prevents oidc-provider from requiring a client_secret

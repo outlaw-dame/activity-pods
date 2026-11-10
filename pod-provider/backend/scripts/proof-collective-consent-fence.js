@@ -131,6 +131,9 @@ const reservationIdentityKey = 'i'.repeat(48);
 const reservationPurpose = 'provider.collective.reservation.v1';
 const fencedKeyA = 'g1fencedreservationproof00000001';
 const fencedKeyB = 'g1fencedreservationproof00000002';
+const fencedKeyC = 'g1fencedreservationproof00000003';
+const accountUri = '<urn:AuthAccount:group-fence-proof-account>';
+const accountNs = 'http://semapps.org/ns/core#';
 function fencedId(key) {
   return 'cg_' + crypto.createHmac('sha256', reservationIdentityKey)
     .update(JSON.stringify([pendingPrincipal, pendingApp, key])).digest('hex').slice(0, 32);
@@ -263,6 +266,12 @@ async function prepare() {
     { status: 'stable', revision: 2 });
   assert.deepEqual(await liveState(pendingPrincipal, pendingApp),
     { status: 'stable', revision: 2 });
+  // SemApps auth.account writes to the settings dataset using this ontology.
+  // Seed one active account so the real reservation transaction can join it.
+  await sparql('update', 'INSERT DATA { ' + accountUri +
+    ' a <' + accountNs + 'AuthAccount> ; <' + accountNs + 'webId> ' +
+    JSON.stringify(pendingPrincipal) + ' . }');
+
   // Actual reservation code must atomically reject an in-flight SAI mutation.
   // The SAI consent and registration responses in this proof are deliberately
   // controlled fixtures; the storage transaction is REAL Fuseki.
@@ -281,6 +290,14 @@ async function prepare() {
   const newer = await createFencedReservation(fencedKeyB);
   assert.equal(newer.canonicalGroupId, fencedId(fencedKeyB));
   assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
+  // Tombstoning the account is a write in the same TDB2 dataset; even
+  // unchanged live SAI fixtures cannot authorize another reservation.
+  await sparql('update', 'INSERT DATA { ' + accountUri +
+    ' <' + accountNs + 'deletedAt> "2026-11-09T00:00:00Z" . }');
+  await assert.rejects(createFencedReservation(fencedKeyC),
+    e => e.type === 'COLLECTIVE_CONSENT_FENCE_REQUIRED');
+  assert.equal(await loadFencedReservation(fencedKeyC), null);
+
 
 
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
@@ -304,6 +321,11 @@ async function verify() {
     { status: 'stable', revision: 4 });
   assert.equal((await loadFencedReservation(fencedKeyA)).consentRevision, '3');
   assert.equal((await loadFencedReservation(fencedKeyB)).consentRevision, '4');
+  assert.equal(await loadFencedReservation(fencedKeyC), null);
+  const tombstone = await sparql('query', 'SELECT ?value WHERE { ' + accountUri +
+    ' <' + accountNs + 'deletedAt> ?value . }');
+  assert.equal(tombstone.length, 1);
+
   console.log(JSON.stringify({ ok: true, proof: 'single-dataset-consent-reservation',
     phase: 'verify', caveat: 'synthetic authority only; SAI bridge not implemented' }));
 }

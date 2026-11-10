@@ -19,7 +19,10 @@ const {
 
 const MAX_RECIPIENTS = 1000;
 const MAX_LOCAL_BATCH = 32;
-const MAX_REMOTE_BATCH = 64;
+// Remote sharedInbox is one delivery destination, NEVER one POST per N actors.
+// A single bounded page (<=1000) may reference one destination. The actual
+// Fedify sidecar is responsible for the eventual one-destination delivery.
+const MAX_REMOTE_BATCH = MAX_RECIPIENTS;
 const DATASET = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/u;
 const INTENT = /^[a-zA-Z0-9_-]{16,128}$/u;
 const HEX = /^[0-9a-f]{64}$/u;
@@ -134,10 +137,11 @@ function planGroupFanout({
   const remotes = groupBatches(remote,
     row => sharePublic && row.sharedInboxUrl
       ? 'shared:' + row.sharedInboxUrl
-      : 'direct:' + row.inboxUrl,
+      : 'direct:' + row.actorUri,
     MAX_REMOTE_BATCH,
     (key, rows) => Object.freeze({
-      destination: key.slice(key.indexOf(':') + 1),
+      destination: key.startsWith('shared:')
+        ? key.slice('shared:'.length) : rows[0].inboxUrl,
       mode: key.startsWith('shared:') ? 'sharedInbox' : 'actorInbox',
       recipientActors: Object.freeze(rows.map(row => row.actorUri)),
       targetDomain: rows[0].targetDomain

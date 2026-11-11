@@ -308,7 +308,31 @@ module.exports = {
         }
       );
 
+      // SemApps' registry can return a URI while a different Moleculer
+      // replica is still creating the collection. Its in-memory
+      // collectionsInCreation flag is not a distributed completion barrier.
+      // Never issue a collection.add against an uncommitted collection.
+      await this.awaitPersistedCollection(ctx, contextCollectionUri, actorUri, dataset);
+      await this.awaitPersistedCollection(ctx, historyCollectionUri, actorUri, dataset);
+
       return { contextCollectionUri, historyCollectionUri };
+    },
+
+    async awaitPersistedCollection(ctx, collectionUri, actorUri, dataset) {
+      // Read-only, bounded verification: do not create a duplicate collection
+      // or infer existence from a registry URI. No global account scans.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const exists = await ctx.call(
+          'activitypub.collection.exist',
+          { resourceUri: collectionUri, webId: 'system' },
+          { meta: { dataset, webId: 'system', $cache: false } }
+        );
+        if (exists === true) return;
+        if (attempt < 9) await new Promise(resolve => setTimeout(resolve, Math.min(50 * (attempt + 1), 300)));
+      }
+      const error = new Error('Conversation collection was not durably created before use');
+      error.code = 'CONVERSATION_COLLECTION_NOT_READY';
+      throw error;
     },
 
     async attachHistoryPointer(ctx, { contextCollectionUri, historyCollectionUri, dataset }) {

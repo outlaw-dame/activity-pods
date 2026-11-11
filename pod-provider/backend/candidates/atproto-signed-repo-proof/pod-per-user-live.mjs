@@ -10,6 +10,12 @@
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { execFile, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { once } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
+const execFileAsync = promisify(execFile);
 import { createRequire } from 'node:module';
 const { buildIndexPageQuery } = createRequire(import.meta.url)('../../utils/identitybinding-index-query.js');
 import { createPodOperationTicketAuthority } from './pod-operation-ticket.mjs';
@@ -291,6 +297,54 @@ async function prepare() {
     e => e.code === 'POD_PROJECTION_READBACK_MISMATCH'
   );
 
+  // Four independent Node processes contend on the same real Jena
+  // identitybinding. Whichever updates arrive first, the RDF fence must
+  // finish at the highest epoch and the immutable CID/rev must not drift.
+  const childFile = fileURLToPath(new URL('./pod-fence-child.mjs', import.meta.url));
+  const workers = [3, 4, 5, 6];
+  await Promise.all(workers.map(async n => {
+    await execFileAsync(process.execPath, [childFile, 'write', String(n)], {
+      env: process.env, timeout: 12000
+    });
+  }));
+  const raceRows = await sparql('query',
+    prefix + 'SELECT ?fence ?root ?rev WHERE { ' + iri(subjectUri) +
+    ' apods:repoProjectionFence ?fence ; apods:repoRootCid ?root ; apods:repoRev ?rev . }');
+  assert.equal(raceRows.length, 1);
+  assert.equal(val(raceRows[0], 'fence'), '6');
+  assert.equal(val(raceRows[0], 'root'), rootCid);
+  assert.equal(val(raceRows[0], 'rev'), rev);
+
+  // Kill another worker immediately after dispatching its HTTP update.
+  // Jena may have committed epoch 8 or rejected the interrupted request.
+  // Both outcomes are valid; a partial root, revision or grant is not.
+  const child = spawn(process.execPath, [childFile, 'crash-after-dispatch', '8'], {
+    env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc']
+  });
+  const dispatched = new Promise((resolve, reject) => {
+    child.once('message', message => {
+      if (message?.dispatched === true) resolve();
+      else reject(Error('No dispatched transaction signal'));
+    });
+    child.once('error', reject);
+    child.once('exit', (code, signal) =>
+      reject(Error('Worker exited before fault injection: ' + code + '/' + signal)));
+  });
+  await dispatched;
+  const exited = once(child, 'exit');
+  assert.equal(child.kill('SIGKILL'), true);
+  const [, signal] = await exited;
+  assert.equal(signal, 'SIGKILL');
+  await sleep(500);
+
+  const afterKill = await sparql('query',
+    prefix + 'SELECT ?fence ?root ?rev WHERE { ' + iri(subjectUri) +
+    ' apods:repoProjectionFence ?fence ; apods:repoRootCid ?root ; apods:repoRev ?rev . }');
+  assert.equal(afterKill.length, 1);
+  assert.ok(['6', '8'].includes(val(afterKill[0], 'fence')));
+  assert.equal(val(afterKill[0], 'root'), rootCid);
+  assert.equal(val(afterKill[0], 'rev'), rev);
+
   // Two independent async request sequences race a live Jena permission
   // revocation and a stale projection. Either could acquire the Jena writer
   // first, but the FINAL state must always be denied, never false-ready.
@@ -301,6 +355,15 @@ async function prepare() {
   ]);
   assert.equal(contested[1].status, 'fulfilled', 'Revocation must durably win eventual access state');
   assert.equal(contested[1].value.epoch, '2');
+  // Even a newly claimed PostgreSQL fence cannot pass a revoked SAI
+  // predicate in the same protected RDF transaction.
+  await execFileAsync(process.execPath, [childFile, 'write', '9'], {
+    env: process.env, timeout: 12000
+  });
+  const deniedAfterRevoke = await sparql('query', prefix +
+    'SELECT ?fence WHERE { ' + iri(subjectUri) + ' apods:repoProjectionFence ?fence . }');
+  assert.equal(deniedAfterRevoke.length, 1);
+  assert.ok(['6', '8'].includes(val(deniedAfterRevoke[0], 'fence')));
   await assert.rejects(
     adapter.project({ ...base, rootCid, rev, projectionFence: '3', oidcToken,
       ticket: ticket('project', '1', { projectionFence: '3' }) }),
@@ -322,7 +385,9 @@ async function verify() {
   assert.equal(rows.length, 1);
   assert.equal(val(rows[0], 'root'), rootCid);
   assert.equal(val(rows[0], 'rev'), rev);
-  assert.equal(val(rows[0], 'epoch'), '2');
+  // A killed process can commit or roll back, but neither result can
+  // change the signed head, and a revoked grant cannot advance it.
+  assert.ok(['6', '8'].includes(val(rows[0], 'epoch')));
   // Persistent consent is blocked even after Fuseki restart.
   await assert.rejects(
     adapter.check({ ...base, rootCid, rev, projectionFence: '2', oidcToken }),

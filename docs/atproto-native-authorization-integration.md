@@ -48,3 +48,18 @@ This is not yet a production-ready PDS rollout. Before enabling the new code, we
 - Production PostgreSQL migrations, least-privilege roles and a safe deployment and rollback plan.
 
 Production signup and repository-readiness gates remain closed until these checks have real evidence. Passing a disposable Jena test does not by itself prove deployed authorization coverage.
+
+
+## Low-level LDP guard and authorization ordering
+
+The next integration branch adds two changes that can be reviewed separately from production activation.
+
+First, the native SAI pre-write barrier checks the authenticated Pod owner, the exact grant or authorization target container, and current WebACL permission before it updates the consent record. An app's impersonatedUser metadata does not count as a user-approved SAI grant change. A denied or misrouted request must not be able to block somebody else's active repository simply by triggering a service before-hook. These checks run only for explicitly approved apps and never scan accounts.
+
+Second, the existing SemApps LdpService supports hooksResource and hooksContainer on its internally created ldp.resource and ldp.container services. Those hooks now reject ordinary LDP mutations of resources under a user's identity-bindings container when native ATProto fencing is enabled. This covers direct Moleculer resource PUT, PATCH, DELETE and CREATE calls, and common container POST, attach, detach and delete actions that would otherwise bypass the identitybindings service. It does not change unrelated Pod resources and adds no database query to the normal write path. Tests check the wiring against the exact installed SemApps package version.
+
+**This is not a complete database authorization boundary.** SemApps also exposes triplestore.update, triplestore.insert and triplestore.dropAll, and allows privileged provider writes using the system identity. A direct SPARQL update, an offline migration, or an administrator with Fuseki credentials can bypass a JavaScript hook. The protected writer still needs an enforceable Jena graph/dataset access policy and separate least-privilege credentials, plus end-to-end testing with privileged calls deliberately attempting to cross that boundary. No setting in this branch claims these bypasses are closed.
+
+The new SAI preauthorization is deliberately strict: it requires the authenticated owner, rather than accepting an app identity or a self-asserted webId action parameter. Internal grant-management calls that do not carry the real owner context will be denied when enforcement is enabled. That behavior must be exercised through the actual owner consent and app-removal flows before production rollout; adding an isInternal flag or trusting arbitrary Moleculer metadata would defeat the goal.
+
+The release gate remains closed until the installed provider has tests that establish these behaviors with enforcement enabled.

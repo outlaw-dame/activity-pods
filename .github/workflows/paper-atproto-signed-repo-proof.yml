@@ -1,0 +1,79 @@
+name: ATProto signed repository v3 — disposable PostgreSQL 18 proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/paper-atproto-signed-repo-proof.yml'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-empty-repository:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: atproto_signed_repo_proof_test
+          POSTGRES_USER: paper_probe
+          POSTGRES_PASSWORD: probe_local_only
+        ports:
+          - 5548:5432
+        options: >-
+          --health-cmd "pg_isready -U paper_probe -d atproto_signed_repo_proof_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout trusted PR code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax check before dependency installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/genesis.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/store.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/proof.test.mjs
+
+      - name: Install scoped pinned proof dependencies (no lifecycle scripts)
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix pod-provider/backend/candidates/atproto-signed-repo-proof \
+            --ignore-scripts --no-audit --no-fund --save-exact
+
+      - name: Persist generated lockfile for reviewed reproducibility
+        uses: actions/upload-artifact@v4
+        with:
+          name: atproto-signed-repo-proof-package-lock
+          path: pod-provider/backend/candidates/atproto-signed-repo-proof/package-lock.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check for high/critical dependency advisories
+        shell: bash
+        run: |
+          npm audit --prefix pod-provider/backend/candidates/atproto-signed-repo-proof \
+            --omit=dev --audit-level=high
+
+      - name: Run complete signed-repository and transaction acceptance
+        env:
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test --prefix pod-provider/backend/candidates/atproto-signed-repo-proof

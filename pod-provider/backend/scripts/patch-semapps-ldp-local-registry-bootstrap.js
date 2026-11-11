@@ -197,7 +197,7 @@ function patchRegisteredContainers(source) {
     return { source, changed: false };
   }
   if (matches.length !== 1 || !source.includes("ctx.call('ldp.container.createAndAttach'")) {
-    throw new Error('Pinned SemApps LDP registry contract changed');
+    throw new Error('Pinned SemApps LDP registry contract changed; anchor='+anchor+' matches='+matches.length+' excerpt='+JSON.stringify(source.slice(Math.max(0,anchor-120),Math.max(0,anchor)+900)));
   }
   const replacement = [
     '            } catch (error) {',

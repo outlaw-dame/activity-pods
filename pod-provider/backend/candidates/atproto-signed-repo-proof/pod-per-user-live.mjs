@@ -391,7 +391,8 @@ async function verify() {
   assert.ok(['6', '8'].includes(val(rows[0], 'epoch')));
   // Persistent consent is blocked even after Fuseki restart.
   await assert.rejects(
-    adapter.check({ ...base, rootCid, rev, projectionFence: '2', oidcToken }),
+    adapter.check({ ...base, rootCid, rev,
+      projectionFence: val(rows[0], 'epoch'), oidcToken }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await http(host + '/$/datasets/alice', { method: 'DELETE' });

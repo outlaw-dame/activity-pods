@@ -30,13 +30,14 @@ function hmac(secret, body) {
 export function createPodOperationTicketAuthority({ secret, now = Date.now } = {}) {
   const key = Buffer.isBuffer(secret) ? secret : Buffer.from(secret || '', 'utf8');
   if (key.byteLength < 32) deny();
-  function normalizeScope({ accountId, did, appUri, grantUri, epoch }) {
+  function normalizeScope({ accountId, did, appUri, grantUri, epoch, operation }) {
     safeUrl(accountId);
     safeUrl(appUri);
     safeUrl(grantUri);
-    if (!DID.test(did || '') || typeof epoch !== 'string' ||
+    if (!['bootstrap', 'project', 'revoke'].includes(operation) ||
+        !DID.test(did || '') || typeof epoch !== 'string' ||
         !FENCE.test(epoch) || BigInt(epoch) > 9223372036854775807n) deny();
-    return { accountId, did, appUri, grantUri, epoch };
+    return { accountId, did, appUri, grantUri, epoch, operation };
   }
   function issue(scope) {
     const fields = normalizeScope(scope);

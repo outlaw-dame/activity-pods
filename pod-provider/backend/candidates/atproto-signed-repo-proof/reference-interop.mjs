@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import * as dagCbor from '@ipld/dag-cbor';
 import { buildSignedEmptyRepo, makeTid } from './genesis.mjs';
 
 const refPath = process.env.ATPROTO_REFERENCE_REPO_ENTRY;
@@ -48,11 +49,9 @@ assert.equal(parsed.data.toString(), signed.rootCid);
 assert.equal(parsed.rev, signed.rev);
 assert.equal(parsed.sig.length, 64);
 assert(blocks.get(parsed.data), 'Reference CAR reader must find the MST block');
-assert(crypto.verify('sha256', signed.commitBytes ? 
-  // The independently parsed official commit re-encoded without sig is
-  // guaranteed by the proof's own verification; verify with official
-  // parsing here, keeping signing keys and content separate.
-  (await import('@ipld/dag-cbor')).encode(({ sig, ...withoutSig }) => withoutSig)(parsed)
-  : Buffer.alloc(0), { key: keys.publicKey, dsaEncoding: 'ieee-p1363' }, parsed.sig));
+const { sig, ...unsigned } = parsed;
+assert(crypto.verify('sha256', Buffer.from(dagCbor.encode(unsigned)),
+  { key: keys.publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig)),
+  'Officially parsed commit must verify with the registered public key');
 
 process.stdout.write('Reference @atproto/repo independently accepted genesis CAR, v3 commit and empty MST CID.\n');

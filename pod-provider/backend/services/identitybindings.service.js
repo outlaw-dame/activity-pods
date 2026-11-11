@@ -26,6 +26,7 @@ const PREDICATES = {
   repoInitialized: `${APODS}repoInitialized`,
   repoRootCid: `${APODS}repoRootCid`,
   repoRev: `${APODS}repoRev`,
+  repoProjectionFence: `${APODS}repoProjectionFence`,
   createdAt: `${APODS}createdAt`,
   updatedAt: `${APODS}updatedAt`
 };
@@ -386,9 +387,54 @@ module.exports = {
         repoInitialized: this._coerceBoolean(get('repoInitialized')) ?? false,
         repoRootCid: get('repoRootCid') || null,
         repoRev: get('repoRev') || null,
+        repoProjectionFence: this._readCanonicalRepoFence(resource),
         createdAt: get('createdAt') || null,
         updatedAt: get('updatedAt') || null
       };
+    },
+
+    /**
+     * Reject duplicate, noncanonical or malformed RDF fence terms. Returning
+     * an arbitrary first array member would let a stale/hostile graph appear
+     * ready. The canonical LDP resource, never the settings index, is read.
+     */
+    _readCanonicalRepoFence(resource) {
+      if (!resource || typeof resource !== 'object') return null;
+      const keys = [
+        'repoProjectionFence',
+        'apods:repoProjectionFence',
+        PREDICATES.repoProjectionFence
+      ].filter(key => Object.prototype.hasOwnProperty.call(resource, key));
+      if (keys.length === 0) return null;
+      if (keys.length !== 1) {
+        throw new MoleculerError('Ambiguous RDF repository projection epoch', 409,
+          'IDENTITY_BINDING_FENCE_INCONSISTENT');
+      }
+      let value = resource[keys[0]];
+      if (Array.isArray(value)) {
+        if (value.length !== 1) {
+          throw new MoleculerError('Duplicate RDF projection epochs', 409,
+            'IDENTITY_BINDING_FENCE_INCONSISTENT');
+        }
+        value = value[0];
+      }
+      if (value && typeof value === 'object') {
+        const declaredType = value['@type'] || value.type;
+        if (declaredType && !['http://www.w3.org/2001/XMLSchema#integer',
+          'http://www.w3.org/2001/XMLSchema#long', 'xsd:integer', 'xsd:long'].includes(declaredType)) {
+          throw new MoleculerError('Unsupported RDF projection epoch datatype', 409,
+            'IDENTITY_BINDING_FENCE_INCONSISTENT');
+        }
+        value = value['@value'] ?? value.value;
+      }
+      const epoch = typeof value === 'number' && Number.isSafeInteger(value)
+        ? String(value) : value;
+      if (typeof epoch !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(epoch) ||
+          BigInt(epoch) > 9223372036854775807n) {
+        throw new MoleculerError('Invalid RDF repository projection epoch', 409,
+          'IDENTITY_BINDING_FENCE_INCONSISTENT');
+      }
+      return epoch;
     },
 
     _readField(resource, key) {

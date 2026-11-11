@@ -40,6 +40,7 @@ const auth = 'Basic ' + Buffer.from('admin:' + (process.env.FUSEKI_PASSWORD || '
 const apods = 'http://activitypods.org/ns/core#';
 const interop = 'http://www.w3.org/ns/solid/interop#';
 const prefix = 'PREFIX apods: <' + apods + '> PREFIX interop: <' + interop + '> ';
+const semapps = 'http://semapps.org/ns/core#';
 
 async function http(url, { method = 'GET', body = null, type = null, accept = null } = {}) {
   const reply = await fetch(url, {
@@ -55,7 +56,7 @@ async function http(url, { method = 'GET', body = null, type = null, accept = nu
   return response;
 }
 async function sparql(kind, query, dataset = 'alice') {
-  assert.equal(dataset, 'alice', 'No cross-Pod or settings dataset access');
+  assert.ok(['alice', 'settings'].includes(dataset), 'Only canonical Pod or owner index dataset');
   const reply = await http(host + '/' + dataset + '/' + kind, {
     method: 'POST',
     type: kind === 'query' ? 'application/sparql-query' : 'application/sparql-update',
@@ -73,10 +74,6 @@ let failOidc = false, failGrant = false, forgedLocation = false;
 const actions = [];
 async function call(name, params) {
   actions.push(name);
-  if (name === 'auth.account.findByWebId') {
-    assert.equal(params.webId, accountId);
-    return { webId: accountId, username: 'alice' };
-  }
   if (name === 'solid-storage.getUrl') return forgedLocation ? origin + '/eve/data/' : storageRoot;
   if (name === 'identitybindings.getContainerUri') return containerUri;
   if (name === 'triplestore.dataset.exist') {
@@ -145,6 +142,7 @@ async function call(name, params) {
   }
   if (name === 'triplestore.query' || name === 'triplestore.update') {
     assert.equal(params.webId, 'system');
+    if (name === 'triplestore.update') assert.equal(params.dataset, 'alice', 'Owner lookup dataset is read-only');
     return sparql(name.endsWith('query') ? 'query' : 'update', params.query, params.dataset);
   }
   throw Error('Unexpected action: ' + name);
@@ -162,6 +160,13 @@ const base = { accountId, did, appUri, grantUri, epoch: '1' };
 const oidcToken = 'synthetic-verified-local-jwk-fixture';
 
 async function prepare() {
+  // Seed the actual SemApps AuthAccount shape only in the existing settings
+  // lookup dataset. This is an indexed, max-2-row read; every repository
+  // mutation stays exclusively within the owner 'alice' dataset.
+  await sparql('update', 'PREFIX semapps: <' + semapps + '> INSERT DATA { ' +
+    '<urn:AuthAccount:alice> a semapps:AuthAccount ; semapps:webId "' + accountId + '" ; ' +
+    'semapps:username "alice" . }', 'settings');
+
   // Pod dataset from actual solid-storage.create naming scheme (username),
   // not the globally shared 'settings' lookup projection.
   const created = await http(host + '/$/datasets', {
@@ -210,6 +215,14 @@ async function prepare() {
   assert.equal(location.dataset, 'alice');
   assert.equal(location.resourceUri, subjectUri);
 
+  // Duplicate canonical WebID subjects must not pick one arbitrary owner.
+  const poisoned = 'PREFIX semapps: <' + semapps + '> ';
+  const rogue = '<urn:AuthAccount:mallory> a semapps:AuthAccount ; ' +
+    'semapps:webId "' + accountId + '" ; semapps:username "mallory" . ';
+  await sparql('update', poisoned + 'INSERT DATA { ' + rogue + ' }', 'settings');
+  await assert.rejects(adapter.locate(accountId), e => e.code === 'POD_PROJECTION_OWNER_UNKNOWN');
+  await sparql('update', poisoned + 'DELETE DATA { ' + rogue + ' }', 'settings');
+
   forgedLocation = true;
   await assert.rejects(adapter.locate(accountId), e => e.code === 'POD_PROJECTION_LOCATION_INVALID');
   forgedLocation = false;
@@ -239,9 +252,8 @@ async function prepare() {
     ...base, rootCid, rev, oidcToken, ticket: ticket('project')
   });
   assert.equal(projected.projected, true);
-  const counted = actions.filter(x => x === 'auth.account.findByWebId').length;
-  assert.ok(counted <= 12, 'No per-account population/fan-out lookup');
-  assert.ok(!actions.includes('auth.account.find'));
+  assert.ok(!actions.includes('auth.account.findByWebId'), 'Avoid SemApps unbounded CONSTRUCT');
+  assert.ok(!actions.includes('auth.account.find'), 'No account population/fan-out lookup');
   assert.ok(!actions.includes('access-grants.getForApp'));
   assert.ok(!actions.includes('data-grants.getByAccessNeed'));
   assert.equal((await adapter.check({ ...base, rootCid, rev, oidcToken })).projectionVerified, true);

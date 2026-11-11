@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { MoleculerError } = require('moleculer').Errors;
+const { requireVerifiedManagedRepoProof } = require('../../utils/atproto-repo-proof-policy');
 
 // ATProto handle syntax (RFC-1035 hostname, ≥2 labels, TLD does not start
 // with a digit). See https://atproto.com/specs/handle
@@ -664,8 +665,66 @@ module.exports = {
       return `did:web:${handle}`;
     },
 
-    async initializeRepoState(_ctx, { canonicalAccountId, did, handle }) {
-      await _ctx.call('identitybindings.upsertRepoBootstrap', {
+    _requiresVerifiedManagedRepo() {
+      // The existing synthetic bootstrap is NOT a valid PDS. Production
+      // must be incapable of turning on repoInitialized based on metadata.
+      return process.env.NODE_ENV === 'production' ||
+        process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO === 'true';
+    },
+
+    async _requireTrustedRepoProof(ctx, action, { canonicalAccountId, did, handle }) {
+      // This internal action is intentionally not exposed as a public API.
+      // It must be implemented by the separately reviewed ActivityPods-owned
+      // repo writer/verifier, using a resolved public key and signed CAR.
+      // Until that authority exists, production provisioning fails closed.
+      let evidence;
+      try {
+        evidence = await ctx.call(action, { canonicalAccountId, did, handle });
+      } catch (error) {
+        this.logger.warn('[ATProto] Native repository authority failed/unavailable for managed account');
+        throw new MoleculerError(
+          'A verified native ATProto repository is required before account readiness',
+          503,
+          'ATPROTO_REPO_PROOF_UNAVAILABLE'
+        );
+      }
+      try {
+        return requireVerifiedManagedRepoProof({ canonicalAccountId, did, proof: evidence });
+      } catch {
+        throw new MoleculerError(
+          'Native ATProto repository authority returned incomplete or invalid evidence',
+          503,
+          'ATPROTO_REPO_PROOF_INVALID'
+        );
+      }
+    },
+
+    async initializeRepoState(ctx, { canonicalAccountId, did, handle }) {
+      if (this._requiresVerifiedManagedRepo()) {
+        const verified = await this._requireTrustedRepoProof(
+          ctx, 'atproto-managed-repository.bootstrapAndVerify', { canonicalAccountId, did, handle }
+        );
+        await ctx.call('identitybindings.upsertRepoBootstrap', {
+          canonicalAccountId,
+          did,
+          handle,
+          repoInitialized: true,
+          rootCid: verified.rootCid,
+          rev: verified.rev
+        });
+        return {
+          ok: true,
+          canonicalAccountId,
+          did,
+          handle,
+          rootCid: verified.rootCid,
+          rev: verified.rev
+        };
+      }
+
+      // Transitional NON-PRODUCTION fixtures only. Never interpret this
+      // placeholder as proof of a signed public repository or PDS readiness.
+      await ctx.call('identitybindings.upsertRepoBootstrap', {
         canonicalAccountId,
         did,
         handle,
@@ -673,9 +732,9 @@ module.exports = {
         rootCid: this.settings.repoBootstrapRootCid,
         rev: this.settings.repoBootstrapRev
       });
-
       return {
         ok: true,
+        fixtureOnly: true,
         canonicalAccountId,
         did,
         handle,
@@ -699,6 +758,23 @@ module.exports = {
           500,
           'ATPROTO_REPO_BOOTSTRAP_INVALID'
         );
+      }
+
+      if (this._requiresVerifiedManagedRepo()) {
+        // Re-read from the native authority after binding write; a stale,
+        // forged or placeholder root/revision must never pass signup.
+        const verified = await this._requireTrustedRepoProof(
+          ctx, 'atproto-managed-repository.verifyReady', {
+            canonicalAccountId, did: binding.atprotoDid, handle: binding.atprotoHandle
+          }
+        );
+        if (verified.rootCid !== binding.repoRootCid || verified.rev !== binding.repoRev) {
+          throw new MoleculerError(
+            'Verified ATProto repository does not match canonical identitybinding head',
+            503,
+            'ATPROTO_REPO_BINDING_MISMATCH'
+          );
+        }
       }
 
       const signingMeta = this._signingCallMeta();

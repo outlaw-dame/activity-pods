@@ -154,27 +154,27 @@ function sanitize(proof) {
  *
  * resolveBinding(accountId) -> current protected binding
  * resolveCommitKey(accountId) -> {did,keyId,publicKeyMultibase}
- * resolveDidDocument(did) -> independently resolved DID document
- * resolveHandleDid(handle) -> independently resolved handle DID
+ * resolveDelegatedIdentity({did,handle,pdsUrl}) -> independently verified
+ *   {didDocument,resolvedHandleDid}, including handle and PLC resolution
  * signCommit(accountId,did,rev,bytes) -> {did,keyId,signatureBase64Url}
  */
 export function createProviderManagedRepoAuthority({
-  store, resolveBinding, resolveCommitKey, resolveDidDocument,
-  resolveHandleDid, signCommit
+  store, resolveBinding, resolveCommitKey, resolveDelegatedIdentity,
+  signCommit
 } = {}) {
   if (!store || typeof store.verify !== 'function' || typeof store.bootstrap !== 'function') {
     refusal('MANAGED_REPO_CONFIGURATION_INVALID', 'A durable signed-repository store is required');
   }
-  [resolveBinding, resolveCommitKey, resolveDidDocument, resolveHandleDid, signCommit].forEach((fn, index) =>
-    requireDependency(['resolveBinding', 'resolveCommitKey', 'resolveDidDocument', 'resolveHandleDid', 'signCommit'][index], fn));
+  [resolveBinding, resolveCommitKey, resolveDelegatedIdentity, signCommit].forEach((fn, index) =>
+    requireDependency(['resolveBinding', 'resolveCommitKey', 'resolveDelegatedIdentity', 'signCommit'][index], fn));
 
   async function resolveIdentity({ canonicalAccountId, did, handle }) {
     const accountId = canonicalAccount(canonicalAccountId);
     assertManagedDid(did);
     checkedHandle(handle);
     const binding = validateBinding(await resolveBinding(accountId), accountId, did, handle);
-    const resolvedHandleDid = await resolveHandleDid(handle);
-    if (resolvedHandleDid !== did) {
+    const resolvedIdentity = await resolveDelegatedIdentity({ did, handle, pdsUrl: binding.atprotoPdsUrl });
+    if (resolvedIdentity?.resolvedHandleDid !== did) {
       refusal('MANAGED_REPO_HANDLE_DID_MISMATCH', 'Handle resolution does not match bound DID');
     }
     const signerKey = await resolveCommitKey(accountId);
@@ -182,8 +182,7 @@ export function createProviderManagedRepoAuthority({
       refusal('MANAGED_REPO_PUBLIC_KEY_INVALID', 'Provider signing authority differs from account identity');
     }
     const publicKeyPem = publicKeyPemFromMultibase(signerKey.publicKeyMultibase);
-    const doc = await resolveDidDocument(did);
-    assertDidDocument(doc, did, handle, binding.atprotoPdsUrl, signerKey.publicKeyMultibase);
+    assertDidDocument(resolvedIdentity?.didDocument, did, handle, binding.atprotoPdsUrl, signerKey.publicKeyMultibase);
     return { accountId, did, handle, binding, publicKeyPem };
   }
 

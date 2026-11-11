@@ -76,7 +76,7 @@ async function ask(ctx, name, params) {
  * The feature is off by default. Every app that can use the managed-repo
  * shape must appear in APODS_ATPROTO_SAI_FENCED_APPS before enabling it.
  */
-async function beforeSaiMutation(ctx, kind, resource) {
+async function beforeSaiMutation(ctx, kind, resource, operation) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') {
     return { checked: false };
   }
@@ -85,8 +85,57 @@ async function beforeSaiMutation(ctx, kind, resource) {
   const apps = approvedApps();
   const { owner, app } = bindingIdentity(kind, resource);
   if (!apps.has(app)) return { checked: false };
+  if (operation !== 'post' && operation !== 'delete') {
+    deny('ATPROTO_SAI_FENCE_OPERATION_INVALID');
+  }
+
+  // This must happen before writing the consent barrier. Otherwise an
+  // unauthorized LDP request could revoke someone else's repository access
+  // simply by making the service run its before hook.
+  //
+  // SAI registration is an owner decision. A client acting through
+  // impersonatedUser may use its granted data permissions, but cannot grant
+  // or revoke the owner's repository authority.
+  if (ctx.meta?.webId !== owner || ctx.meta?.impersonatedUser) {
+    throw new MoleculerError(
+      'Only the Pod owner can change this repository authorization',
+      403, 'ATPROTO_SAI_OWNER_REQUIRED'
+    );
+  }
 
   try {
+    const nativeContainer = await ask(ctx, kind + '.getContainerUri', { webId: owner });
+    safeIri(nativeContainer, { httpsOnly: true });
+    const prefix = nativeContainer.endsWith('/') ? nativeContainer : nativeContainer + '/';
+    const target = operation === 'post' ? nativeContainer : ctx.params?.resourceUri;
+    if (operation === 'post' && ctx.params?.containerUri &&
+        ctx.params.containerUri !== nativeContainer) {
+      throw new MoleculerError(
+        'The authorization must be stored in the owner’s SAI container',
+        403, 'ATPROTO_SAI_TARGET_INVALID'
+      );
+    }
+    if (operation === 'delete' &&
+        (typeof target !== 'string' || !target.startsWith(prefix) ||
+         target.length > 4096)) {
+      throw new MoleculerError(
+        'The authorization does not belong to the owner’s SAI container',
+        403, 'ATPROTO_SAI_TARGET_INVALID'
+      );
+    }
+    const rights = await ask(ctx, 'webacl.resource.hasRights', {
+      resourceUri: target,
+      rights: operation === 'post' ? { append: true, write: true } : { write: true },
+      webId: owner
+    });
+    if (operation === 'post' ? rights?.append !== true && rights?.write !== true
+        : rights?.write !== true) {
+      throw new MoleculerError(
+        'The Pod owner lacks permission to change this SAI resource',
+        403, 'ATPROTO_SAI_MUTATION_NOT_ALLOWED'
+      );
+    }
+
     const accountRows = await ask(ctx, 'triplestore.query', {
       dataset: 'settings', webId: 'system',
       query: buildCanonicalPodAccountLookup(owner)

@@ -190,10 +190,22 @@ export function createPodActivityPodsProjection({
     // freshness. Neither ctx.meta.webId nor ctx.meta.impersonatedUser is proof.
     const verified = await invoke('jwk.verifyToken', { token });
     const time = Math.floor(now() / 1000);
-    const audienceOk = verified?.aud === appUri ||
-      (Array.isArray(verified?.aud) && verified.aud.length === 1 && verified.aud[0] === appUri);
+    // Solid-OIDC tokens must include BOTH the client and the "solid"
+    // audience. An app-only ID token is not a conformant Solid-OIDC ID token.
+    // An independently verified DPoP request is still required before live
+    // activation; the cnf claim alone is not proof of possession.
+    const audiences = verified?.aud;
+    const audienceOk = Array.isArray(audiences) &&
+      audiences.length >= 2 && audiences.length <= 8 &&
+      audiences.every(x => typeof x === 'string' && x.length > 0) &&
+      new Set(audiences).size === audiences.length &&
+      audiences.includes(appUri) && audiences.includes('solid');
+    const boundKeyOk = typeof verified?.cnf?.jkt === 'string' &&
+      /^[A-Za-z0-9_-]{43}$/u.test(verified.cnf.jkt);
     if (!verified || verified.iss !== expectedIssuer || !audienceOk ||
         verified.azp !== appUri || verified.webid !== accountId ||
+        typeof verified.sub !== 'string' || !verified.sub ||
+        !boundKeyOk ||
         !Number.isInteger(verified.iat) || !Number.isInteger(verified.exp) ||
         verified.iat > time + 5 || verified.iat < time - 300 ||
         verified.exp <= time) {

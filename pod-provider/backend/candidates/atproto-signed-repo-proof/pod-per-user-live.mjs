@@ -370,7 +370,8 @@ async function prepare() {
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await assert.rejects(
-    adapter.check({ ...base, rootCid, rev, projectionFence: '2', oidcToken }),
+    adapter.check({ ...base, rootCid, rev,
+      projectionFence: val(deniedAfterRevoke[0], 'fence'), oidcToken }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await assert.rejects(

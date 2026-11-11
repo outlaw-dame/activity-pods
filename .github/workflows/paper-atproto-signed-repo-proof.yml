@@ -55,6 +55,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/projection-recovery.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
@@ -92,9 +93,23 @@ jobs:
 
 
   real-fuseki-rdf-projection-fence:
-    name: Real Jena TDB2 fenced RDF CAS + durable restart
+    name: Real PG18 + Jena TDB2 cross-store crash/fencing and restart
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: atproto_signed_repo_proof_test
+          POSTGRES_USER: paper_probe
+          POSTGRES_PASSWORD: probe_local_only
+        ports:
+          - 5548:5432
+        options: >-
+          --health-cmd "pg_isready -U paper_probe -d atproto_signed_repo_proof_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: pod-provider
@@ -126,6 +141,21 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs prepare
 
+      - name: Install locked PG18 proof dependencies (no lifecycle scripts)
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
+
+      - name: Prove combined real PG18 and Fuseki cross-store crash recovery
+        env:
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs prepare
+
       - name: Restart persistent Fuseki TDB2
         run: |
           set -euo pipefail
@@ -139,6 +169,16 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs verify
+
+      - name: Verify combined signed PostgreSQL and Jena state after restart
+        env:
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs verify
 
       - name: Fuseki diagnostics
         if: failure()

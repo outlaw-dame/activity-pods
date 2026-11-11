@@ -79,6 +79,22 @@ export function buildFencedRepoProjectionSparql({
     ' && LCASE(STR(?managed)) = "true" && STR(?source) = "local" && STR(?status) = "active") ';
   const old = oldNames.map(([key, name]) =>
     'OPTIONAL { ' + clean(key, name) + ' }').join(' ');
+  // Detect duplicate contradictory identity claims. Matching one valid
+  // value is insufficient if another value names a different WebID or DID.
+  const uniqueIdentity = [
+    ['canonicalAccountId', accountId],
+    ['webId', accountId],
+    ['activityPubActorId', accountId],
+    ['atprotoDid', did],
+    ['atprotoManaged', 'true'],
+    ['atprotoSource', 'local'],
+    ['status', 'active']
+  ].map(([field, expected], index) => {
+    const variable = '?conflictingIdentity' + index;
+    return 'FILTER NOT EXISTS { ' + subject + ' apods:' + field + ' ' + variable +
+      ' . FILTER(STR(' + variable + ') != ' + literal(expected) + ') } ';
+  }).join(' ');
+
   // Reject *any* malformed, equal or higher fence, not merely the first value.
   // Also refuse replacing an existing different CID or rev. Only a genesis
   // replay with the same immutable PG head may advance the fence.
@@ -92,5 +108,5 @@ export function buildFencedRepoProjectionSparql({
   const prefix = 'PREFIX apods: <' + P + '> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> ';
   return prefix + 'DELETE { ' + graph(deletePatterns) + ' } ' +
     'INSERT { ' + graph(insert) + ' } WHERE { ' +
-    graph(identity + guards + old + immutable + noHigher) + ' }';
+    graph(identity + guards + old + uniqueIdentity + immutable + noHigher) + ' }';
 }

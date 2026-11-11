@@ -43,7 +43,7 @@ describe('conversation collection distributed readiness barrier', () => {
     const source = service.methods.ensureConversationCollections.toString();
     expect(source).toContain('await this.awaitPersistedCollection(ctx, contextCollectionUri, actorUri, dataset)');
     expect(source).toContain('await this.awaitPersistedCollection(ctx, historyCollectionUri, actorUri, dataset)');
-    expect(source.indexOf('await this.awaitPersistedCollection(ctx, historyCollectionUri'))
-      .toBeLessThan(source.indexOf('return { contextCollectionUri, historyCollectionUri }'));
+    expect(source.indexOf('await this.awaitPersistedCollection(ctx, contextCollectionUri'))
+      .toBeLessThan(source.indexOf('await this.awaitPersistedCollection(ctx, historyCollectionUri'));
   });
 });

@@ -4,6 +4,7 @@ const { ControlledContainerMixin } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
 const { sanitizeSparqlQuery } = require('@semapps/triplestore');
 const { MoleculerError } = require('moleculer').Errors;
+const { assertUnfencedIdentityBindingMutation } = require('../utils/identitybinding-fence-policy');
 
 const APODS = 'http://activitypods.org/ns/core#';
 
@@ -110,6 +111,11 @@ module.exports = {
         const now = new Date().toISOString();
         const { bindingWebId, slug, resourceUri } = await this._resolveBindingLocation(canonicalAccountId, ctx);
         const existing = await this._getBindingResourceOrNull(resourceUri, ctx);
+
+        // Legacy full-resource PUT would discard the atomic RDF fence or
+        // overwrite a newer signed repo projection. Do not mutate fenced
+        // bindings through an unfenced method.
+        assertUnfencedIdentityBindingMutation(existing, 'upsert');
 
         const existingValue = key => (existing ? this._readField(existing, key) : null);
         const existingBoolean = key => this._coerceBoolean(existingValue(key));
@@ -289,6 +295,11 @@ module.exports = {
           return { removed: false, canonicalAccountId };
         }
 
+        // Account deletion and signup rollback must not silently remove a
+        // projected, fenced repository identity. Deletion needs coordinated
+        // PG native-repo state transition and protected Jena CAS.
+        const protectedBinding = await this._getBindingResourceOrNull(resourceUri, ctx);
+        assertUnfencedIdentityBindingMutation(protectedBinding, 'remove');
         await this.actions.delete({ resourceUri, webId: 'system' }, { parentCtx: ctx });
         await this._removeBindingIndex(ctx, canonicalAccountId).catch(err => {
           // Index cleanup is best-effort; LDP resource is the source of truth.

@@ -44,7 +44,28 @@ function protectedPath(uri, baseUrl) {
   return segments.includes('identity-bindings');
 }
 
-function assertNotManagedLdpMutation(ctx, baseUrl, { checkResource = true, checkContainer = true } = {}) {
+function isPodStorageAncestor(uri, baseUrl) {
+  if (typeof uri !== 'string' || typeof baseUrl !== 'string') return false;
+  try {
+    const target = new URL(uri);
+    const base = new URL(baseUrl);
+    const root = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
+    if (target.origin !== base.origin || target.protocol !== 'https:' ||
+        !target.pathname.startsWith(root)) return false;
+    const pieces = target.pathname.slice(root.length).split('/')
+      .filter(Boolean).map(segment => decodeURIComponent(segment));
+    // Clearing or deleting a Pod root or its storage root can remove the
+    // protected container indirectly, before per-resource hooks run.
+    return pieces.length === 1 ||
+      (pieces.length === 2 && pieces[1] === 'data');
+  } catch {
+    return false;
+  }
+}
+
+function assertNotManagedLdpMutation(ctx, baseUrl, {
+  checkResource = true, checkContainer = true, protectAncestors = false
+} = {}) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
   const params = ctx?.params || {};
   const candidates = [];
@@ -53,7 +74,8 @@ function assertNotManagedLdpMutation(ctx, baseUrl, { checkResource = true, check
       params.forcedResourceUri);
   }
   if (checkContainer) candidates.push(params.containerUri);
-  if (candidates.some(uri => protectedPath(uri, baseUrl))) {
+  if (candidates.some(uri => protectedPath(uri, baseUrl)) ||
+      (protectAncestors && isPodStorageAncestor(params.containerUri, baseUrl))) {
     throw new MoleculerError(
       'Managed repository identity bindings cannot be changed through the general LDP API',
       409,
@@ -62,4 +84,4 @@ function assertNotManagedLdpMutation(ctx, baseUrl, { checkResource = true, check
   }
 }
 
-module.exports = { protectedPath, assertNotManagedLdpMutation };
+module.exports = { protectedPath, isPodStorageAncestor, assertNotManagedLdpMutation };

@@ -21,7 +21,13 @@ describe('mandatory unified identity for each newly created account', () => {
     {atproto:{enabled:false}},
     {atproto:{didMethod:'web'}},
     {atproto:{didMethod:'did:web'}},
-    {solid:false}, {activitypub:false}, {atproto:false}
+    {solid:false}, {activitypub:false}, {atproto:false},
+    {protocols:{solid:false}},
+    {protocols:{activitypub:false}},
+    {protocols:{atproto:false}},
+    {protocols:{solid:{enabled:false}}},
+    {protocols:{activitypub:{enabled:false}}},
+    {protocols:{atproto:{enabled:false}}}
   ])('rejects unsupported optional identity configuration %o', request => {
     expect(() => assertUnifiedRequest(request)).toThrow('UNIFIED_IDENTITY_REQUIRED');
   });

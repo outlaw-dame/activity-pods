@@ -44,6 +44,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 3000, idleTimeoutMillis: 3000, allowExitOnIdle: true
 });
 let ephemeral = {};
+const workerPools = [];
 
 async function fuseki(kind, query) {
   const response = await fetch(host + '/settings/' + kind, {
@@ -125,12 +126,14 @@ function makeFactory(name, options = {}) {
   };
   return {
     params: p,
-    makeWorker: (override = {}) => createRdfProjectionRecovery({
-      ...base, pool: new Pool({
+    makeWorker: (override = {}) => {
+      const workerPool = new Pool({
         connectionString: dsn, max: 2, connectionTimeoutMillis: 3000,
         idleTimeoutMillis: 2000, allowExitOnIdle: true
-      }), ...override
-    })
+      });
+      workerPools.push(workerPool);
+      return createRdfProjectionRecovery({ ...base, pool: workerPool, ...override });
+    }
   };
 }
 async function rows(name) {
@@ -173,21 +176,16 @@ async function prepare() {
     await bootstrap(name);
   }
   await fs.writeFile(testDataPath, JSON.stringify(ephemeral), { mode: 0o600, flag: 'wx' });
-  const tracked = [];
   const make = name => {
     const f = makeFactory(name);
-    const worker = f.makeWorker();
-    tracked.push(worker);
-    return { ...f, worker };
+    return { ...f, worker: f.makeWorker() };
   };
   // All independent reconciler objects use independently created PG pools;
   // PostgreSQL arbitrates claims and Fuseki serializes RDF writer updates.
   const live = make('aclive');
   const replicaWorkers = Array.from({ length: 4 }, () => {
     const f = makeFactory('aclive');
-    const w = f.makeWorker();
-    tracked.push(w);
-    return w;
+    return f.makeWorker();
   });
   const results = await Promise.all(replicaWorkers.map(w => w.reconcile(live.params)));
   assert(results.every(x => x.ready === true || x.status === 'busy'));
@@ -206,12 +204,10 @@ async function prepare() {
 
   // A timed-out replica cannot rewrite or ACK a newer replica's RDF fence.
   const stale = makeFactory('acstale');
-  const slowWorker = stale.makeWorker();
   const fastWorker = stale.makeWorker();
   let unblock, reached;
   const entered = new Promise(resolve => { reached = resolve; });
   const gate = new Promise(resolve => { unblock = resolve; });
-  const delayed = slowWorker;
   // An independent caller's injected CAS blocks at the point where the old
   // instance is about to issue its Jena UPDATE.
   const slow = stale.makeWorker({
@@ -264,5 +260,6 @@ try {
   if (phase === 'prepare') await prepare();
   else await verify();
 } finally {
+  await Promise.allSettled(workerPools.map(p => p.end()));
   await pool.end();
 }

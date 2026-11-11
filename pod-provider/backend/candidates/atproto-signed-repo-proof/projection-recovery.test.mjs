@@ -291,6 +291,29 @@ test('PG18 cross-store recovery: atomic intent, fenced lease, CAS, replay, revoc
         e => e.code === 'PROJECTION_BLOCKED');
     });
 
+    await t.test('exhausted pending state becomes blocked rather than perpetual busy', async () => {
+      const k = makeKeys();
+      await bootstrap(store, 'pendingmax', k);
+      const fixture = aFixture(store, 'pendingmax', k, { maxAttempts: 2 });
+      // Reproduce a durable pending record left at its configured limit
+      // (e.g. after an older worker/version or manual recovery).
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET attempt_count=2," +
+        "state='pending',next_attempt_at=clock_timestamp()-INTERVAL '1 second' " +
+        "WHERE account_id=$1",
+        [account('pendingmax')]
+      );
+      await assert.rejects(
+        fixture.worker().reconcile(fixture.params),
+        e => e.code === 'PROJECTION_BLOCKED'
+      );
+      const row = await ledger('pendingmax');
+      assert.equal(row.state, 'blocked');
+      assert.equal(row.lease_owner, null);
+      assert.equal(row.last_error_code, 'PROJECTION_RETRY_EXHAUSTED');
+      assert.equal(fixture.writes(), 0);
+    });
+
     await t.test('revoked authorization and wrong signature cannot claim a repo projection', async () => {
       const k = makeKeys();
       await bootstrap(store, 'revoked', k);

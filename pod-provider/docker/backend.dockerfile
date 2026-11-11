@@ -22,6 +22,7 @@ ADD backend/scripts/patch-semapps-activitypub-local-delivery-phase9.js /app/back
 ADD backend/scripts/patch-semapps-ldp-local-registry-bootstrap.js /app/backend/scripts/patch-semapps-ldp-local-registry-bootstrap.js
 ADD backend/scripts/patch-semapps-ldp-special-endpoint-race.js /app/backend/scripts/patch-semapps-ldp-special-endpoint-race.js
 ADD backend/scripts/patch-semapps-solid-bootstrap-ordering.js /app/backend/scripts/patch-semapps-solid-bootstrap-ordering.js
+ADD backend/scripts/patch-semapps-ldp-single-resource-wait.js /app/backend/scripts/patch-semapps-ldp-single-resource-wait.js
 ADD backend/scripts/patch-semapps-jsonld-distributed-context-cache.js /app/backend/scripts/patch-semapps-jsonld-distributed-context-cache.js
 ADD backend/scripts/patch-semapps-ontologies-distributed-cache.js /app/backend/scripts/patch-semapps-ontologies-distributed-cache.js
 ADD backend/scripts/patch-semapps-jsonld-distributed-locality.js /app/backend/scripts/patch-semapps-jsonld-distributed-locality.js

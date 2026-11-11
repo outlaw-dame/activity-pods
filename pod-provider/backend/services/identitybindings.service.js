@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const urlJoin = require('url-join');
 const { ControlledContainerMixin } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
-const { sanitizeSparqlQuery } = require('@semapps/triplestore');
 const { MoleculerError } = require('moleculer').Errors;
 const { assertUnfencedIdentityBindingMutation } = require('../utils/identitybinding-fence-policy');
 const { buildIndexPageQuery, validCursor } = require('../utils/identitybinding-index-query');

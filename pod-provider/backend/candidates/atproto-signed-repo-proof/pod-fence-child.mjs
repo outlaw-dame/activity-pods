@@ -51,3 +51,8 @@ if (!response.ok) {
   throw Error('Jena rejected protected CAS with HTTP ' + response.status +
     ': ' + (await response.text()).slice(0, 350));
 }
+// Leave the process alive after dispatch so the parent can terminate it
+// regardless of whether Fuseki has already completed this transaction.
+if (mode === 'crash-after-dispatch') {
+  await new Promise(resolve => setTimeout(resolve, 15000));
+}

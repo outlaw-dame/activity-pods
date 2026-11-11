@@ -178,6 +178,17 @@ export function createRdfProjectionRecovery({
     checkJob(before, p);
     if (before.state === 'applied') return readiness({ accountId, did });
     if (before.state === 'blocked') fail('PROJECTION_BLOCKED', 'Operator review required');
+    // Exhausted *pending* rows must not remain permanently 'busy':
+    // claim() refuses attempt_count >= maxAttempts, so without this
+    // transition they would never become operator-visible blocked work.
+    // Conditional update avoids clobbering an in-flight concurrent claim.
+    await pool.query(
+      'UPDATE ' + T + " SET state='blocked',lease_owner=NULL,lease_until=NULL," +
+      "last_error_code='PROJECTION_RETRY_EXHAUSTED',updated_at=clock_timestamp() " +
+      "WHERE account_id=$1 AND did=$2 AND state='pending' " +
+      'AND attempt_count >= $3::int',
+      [accountId, did, maxAttempts]
+    );
     // Expired last-attempt leases cannot be left permanently in a busy state.
     await pool.query(
       'UPDATE ' + T + " SET state='blocked',lease_owner=NULL,lease_until=NULL," +

@@ -10,6 +10,8 @@
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+const { buildIndexPageQuery } = createRequire(import.meta.url)('../../utils/identitybinding-index-query.js');
 import { createPodOperationTicketAuthority } from './pod-operation-ticket.mjs';
 import { createPodActivityPodsProjection } from './pod-activitypods-adapter.mjs';
 
@@ -178,6 +180,30 @@ async function prepare() {
     iri(dataUri) + ' a interop:DataGrant ; interop:dataOwner ' + iri(accountId) + ' ; ' +
       'interop:grantee ' + iri(appUri) + ' ; interop:registeredShapeTree ' + iri(shape) + ' ; ' +
       'interop:accessMode <http://www.w3.org/ns/auth/acl#Write> . }');
+
+  // Query the same keyset builder on genuine Jena (rather than only string
+  // unit tests). This exercises Fuseki's SPARQL parser and stable two-page
+  // ordering without scanning every user or materializing a full index.
+  const indexSubjects = ['a', 'b', 'c'].map(name =>
+    'urn:paper:atproto:index-proof:' + name);
+  await sparql('update', prefix + 'INSERT DATA { ' +
+    indexSubjects.map((subject, n) =>
+      iri(subject) + ' a apods:AtprotoIdentityBindingIndex ; ' +
+      'apods:canonicalAccountId "' + origin + '/accounts/' + n + '" ; ' +
+      'apods:updatedAt "2026-11-11T12:00:00.000Z" . '
+    ).join('') + ' }');
+  const ordered = await sparql('query', buildIndexPageQuery({ limit: 3 }));
+  assert.deepEqual(ordered.map(row => val(row, 'canonicalAccountId')), [
+    origin + '/accounts/0', origin + '/accounts/1', origin + '/accounts/2'
+  ]);
+  const next = await sparql('query', buildIndexPageQuery({
+    cursor: { updatedAt: '2026-11-11T12:00:00.000Z',
+      canonicalAccountId: origin + '/accounts/1' },
+    limit: 3
+  }));
+  assert.deepEqual(next.map(row => val(row, 'canonicalAccountId')), [
+    origin + '/accounts/2'
+  ]);
 
   // Exact ActivityPods account/storage location, not a user-selected dataset.
   const location = await adapter.locate(accountId);

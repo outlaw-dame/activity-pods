@@ -176,6 +176,105 @@ test('provider-authorized bridge: actual PG18 signed repo, identity drift and du
       await assert.rejects(other.authority.verifyReady(other.input));
     });
 
+    await t.test('authorized Moleculer adapter signs only bound genesis and isolates capability metadata', async () => {
+      const id = 'did:plc:' + 'f'.repeat(24);
+      const webId = 'https://paper.example.org/users/bob';
+      const userHandle = 'bob.paper.example.org';
+      const keys = createKeys();
+      let binding = {
+        ...head, canonicalAccountId: webId, webId, activityPubActorId: webId,
+        atprotoDid: id, atprotoHandle: userHandle
+      };
+      let signed = 0;
+      const capability = 'capability_'.padEnd(64, 'x');
+      const bearer = 'signer_'.padEnd(64, 'y');
+      const observed = [];
+      const service = makeProviderManagedRepositoryService({
+        pool, providerCapability: capability, signingBearerToken: bearer
+      });
+      const broker = {
+        async call(name, params, options) {
+          observed.push({ name, options });
+          assert.equal(options?.meta?.providerRepoCapability, undefined,
+            'broker-internal capability must never reach downstream provider calls');
+          if (name.startsWith('signing.')) {
+            assert.equal(options?.meta?.$headers?.authorization, 'Bearer ' + bearer);
+          } else {
+            assert.equal(options, undefined, 'only the signer gets its own bearer credential');
+          }
+          if (name === 'identitybindings.getByCanonicalAccountId') {
+            assert.equal(params.canonicalAccountId, webId);
+            return { ...binding };
+          }
+          if (name === 'signing.getAtprotoPublicKey') {
+            assert.equal(params.canonicalAccountId, webId);
+            assert.equal(params.purpose, 'commit');
+            return { did: id, keyId: id + '#atproto', publicKeyMultibase: keys.publicKeyMultibase };
+          }
+          if (name === 'atproto-verification.verifyDelegatedIdentity') {
+            assert.equal(params.subjectDid, id);
+            assert.equal(params.did, id);
+            assert.equal(params.handle, userHandle);
+            assert.equal(params.pdsUrl, pds);
+            return {
+              resolvedHandleDid: id,
+              didDocument: {
+                id,
+                alsoKnownAs: ['at://' + userHandle],
+                verificationMethod: [{
+                  id: id + '#atproto', controller: id,
+                  type: 'Multikey', publicKeyMultibase: keys.publicKeyMultibase
+                }],
+                service: [{
+                  id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: pds
+                }]
+              }
+            };
+          }
+          if (name === 'signing.signAtprotoCommit') {
+            signed += 1;
+            assert.equal(params.did, id);
+            assert.equal(params.canonicalAccountId, webId);
+            const bytes = Buffer.from(params.unsignedCommitBytesBase64, 'base64');
+            const signatureBase64Url = crypto.sign('sha256', bytes, {
+              key: keys.privateKey, dsaEncoding: 'ieee-p1363'
+            }).toString('base64url');
+            return { did: id, keyId: id + '#atproto', signatureBase64Url };
+          }
+          throw new Error('Unexpected broker action: ' + name);
+        }
+      };
+      const ctx = {
+        broker, caller: 'atproto-provisioning',
+        meta: { providerRepoCapability: capability },
+        params: { canonicalAccountId: webId, did: id, handle: userHandle }
+      };
+      const result = await service.actions.bootstrapAndVerify.handler(ctx);
+      assert.equal(result.verified, true);
+      assert.equal(result.did, id);
+      assert.equal(result.outboxStatus, 'pending');
+      assert.equal(signed, 1);
+      assert(!Object.hasOwn(result, 'carBytes'));
+      const replay = await service.actions.bootstrapAndVerify.handler(ctx);
+      assert.equal(replay.commitCid, result.commitCid);
+      assert.equal(signed, 1, 'repeat bootstrap must not request second signature');
+      await assert.rejects(
+        service.actions.verifyReady.handler(ctx),
+        e => e.code === 'MANAGED_REPO_RDF_DRIFT'
+      );
+      const recovery = await service.actions.inspectRecovery.handler(ctx);
+      assert.equal(recovery.recoveryRequired, true);
+      binding = {
+        ...binding, repoInitialized: true,
+        repoRootCid: result.rootCid, repoRev: result.rev
+      };
+      const verified = await service.actions.verifyReady.handler(ctx);
+      assert.equal(verified.commitCid, result.commitCid);
+      assert.equal((await service.actions.inspectRecovery.handler(ctx)).bindingMatch, true);
+      assert(observed.some(x => x.name === 'signing.signAtprotoCommit'));
+      assert(observed.some(x => x.name === 'atproto-verification.verifyDelegatedIdentity'));
+    });
+
     await t.test('Moleculer schema is NOT enabled and rejects API / missing capability', async () => {
       const service = makeProviderManagedRepositoryService({
         pool, providerCapability: 'c'.repeat(64), signingBearerToken: 's'.repeat(64)

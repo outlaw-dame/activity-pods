@@ -98,7 +98,7 @@ export function beginRevocationQuery({ subjectUri, grantUri, revision, graphUri 
   // readiness still requires current active consent.
   return prefix() + 'DELETE { ' + graphWrap(graphUri, from) + ' } ' +
     'INSERT { ' + graphWrap(graphUri, to) + ' } WHERE { ' +
-    graphWrap(graphUri, from + consentGuard({ subjectUri, grantUri, revision })) + ' }';
+    graphWrap(graphUri, from + consentGuard({ subjectUri, grantUri, revision, graphUri })) + ' }';
 }
 export function parseConsentRows(rows, { grantUri }) {
   if (!Array.isArray(rows) || rows.length !== 1) {

@@ -27,3 +27,15 @@ Keep the recovery ledger's per-account row plus selective due-job/expired-lease 
 ## Current guarantee
 
 The helper in 'utils/identitybinding-fence-policy.js' rejects legacy writes/deletes *after a previously fenced binding is observed*. Its dedicated Node tests cover absent bindings, malformed/duplicate RDF fence values, and unknown operations. It is intentionally not a replacement for durable PostgreSQL/Jena fencing and remains unrelated to passkey authentication.
+
+
+## Scalability audit and remediation (additional to write fencing)
+
+Two preexisting request paths were unacceptable for local or remote-scale ActivityPods deployment:
+
+- 'identitybindings.getByDid'/'getByHandle' previously called '_findByBindingField', which materialized all account WebIDs and sequentially invoked 'identitybindings.getByCanonicalAccountId' for each account (including up to 10,000 account records on fallback). At scale this is unbounded cross-service N+1 and per-Pod Jena I/O. **The fallback is now removed**: an indexed absence returns no match; a query failure returns a bounded HTTP 503 with 'IDENTITY_BINDING_INDEX_UNAVAILABLE'. An operator/migration must rebuild a missing legacy index in a separately rate-limited bulk maintenance job; API reads must not silently repair by scanning.
+- 'identitybindings.list' previously requested *all* indexed binding rows, sorted and filtered them in Node, and on errors scanned account Pods. It now performs one bounded settings-index SPARQL query per page: lexicographic keyset based on 'updatedAt + canonicalAccountId', ordered and limited to at most '(page size + 1)' rows, with a maximum page size 500. A settings dataset outage fails closed without per-Pod fallback. The new cursor parser enforces canonical HTTPS account IDs, normalized UTC ISO timestamps and a 4 KiB encoded cursor maximum.
+
+The critical index must have one unique canonicalAccountId and a single updatedAt per entry; this is currently guaranteed by the whole-index-resource SPARQL replacement within '_syncBindingIndex' on the intended write path, but historical RDF corruption can produce duplicates. Read-time duplicate conflicts must be rejected or repaired offline, *never* resolved by a full account scan. Cursor pagination based on mutable updatedAt is not a transactional snapshot; a production bulk export should use a separate consistency checkpoint or immutable changelog if a strict snapshot is required.
+
+**Cost/performance guard:** zero calls to 'auth.account.find({pagination:false})' on DID/handle/page lookup, zero per-Pod LDP reads for an index miss, one bounded query for each page. Do not enable any speculative auto-rebuild in HTTP handlers. Dedicated node regression tests assert one call and bounded query shape. The next real Jena integration test should verify the keyset query parses and returns the expected ordered pages on Fuseki (not merely that the string contains LIMIT).

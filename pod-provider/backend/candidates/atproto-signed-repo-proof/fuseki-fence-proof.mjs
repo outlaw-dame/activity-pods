@@ -29,6 +29,7 @@ const subject = 'urn:paper:atproto:proof:binding';
 const namedSubject = 'urn:paper:atproto:proof:named';
 const graph = 'urn:paper:atproto:proof:graph';
 const badSubject = 'urn:paper:atproto:proof:malformed';
+const duplicateSubject = 'urn:paper:atproto:proof:duplicate-identity';
 const iri = s => '<' + s + '>';
 
 async function http(kind, query) {
@@ -80,6 +81,8 @@ async function prepare() {
     bindingTurtle(subject) +
     ' GRAPH ' + iri(graph) + ' { ' + bindingTurtle(namedSubject) + ' } ' +
     bindingTurtle(badSubject, ' ; apods:repoProjectionFence "nonnumeric"') +
+    bindingTurtle(duplicateSubject) +
+    iri(duplicateSubject) + ' apods:atprotoDid "did:plc:' + 'q'.repeat(24) + '" . ' +
     ' }');
   await Promise.all(Array.from({ length: 8 }, (_, index) => {
     return http('update', update(subject, String(index + 1)));
@@ -108,6 +111,12 @@ async function prepare() {
     'SELECT ?fence WHERE { ' + iri(badSubject) + ' apods:repoProjectionFence ?fence }');
   assert.equal(malformed.length, 1);
   assert.equal(malformed[0].fence.value, 'nonnumeric');
+  // A binding with both legitimate and attacker-controlled DID values must
+  // not pass the identity guard just because ONE triple matches.
+  await http('update', update(duplicateSubject, '1'));
+  const conflicting = await http('query', prefix +
+    'SELECT ?fence WHERE { ' + iri(duplicateSubject) + ' apods:repoProjectionFence ?fence }');
+  assert.equal(conflicting.length, 0, 'ambiguous DID must prevent all fenced writes');
   process.stdout.write('Real TDB2 CAS prepare: 8-way writer race, immutable DID/head, malformed and stale fence all checked.\n');
 }
 async function verify() {

@@ -64,6 +64,10 @@ export function createPodOperationTicketAuthority({ secret, now = Date.now } = {
       signature = Buffer.from(match[2], 'base64url');
       payload = JSON.parse(Buffer.from(match[1], 'base64url').toString('utf8'));
     } catch { deny(); }
+    // Reject noncanonical base64url spellings (including alternate unused
+    // padding bits); a single credential must not have multiple encodings.
+    if (signature.toString('base64url') !== match[2] ||
+        Buffer.from(match[1], 'base64url').toString('base64url') !== match[1]) deny();
     const calculated = hmac(key, match[1]);
     if (signature.length !== calculated.length ||
         !crypto.timingSafeEqual(signature, calculated)) deny();

@@ -184,6 +184,44 @@ function patchControlledContainerSource(source) {
   };
 }
 
+
+const REGISTERED_CONTAINERS_MARKER = 'ADSP_P2_REGISTERED_CONTAINERS_RETRY';
+function patchRegisteredContainers(source) {
+  const needle = '            } catch (error) {\n              // pass\n            }';
+  if (source.includes(REGISTERED_CONTAINERS_MARKER)) {
+    if (!source.includes('for (const pauseMs of [60, 180, 540])')) throw new Error('Incomplete registered-container patch');
+    return { source, changed: false };
+  }
+  if (source.split(needle).length !== 2 ||
+      !source.includes("this.logger.info('Trying to register container', options.path)")) {
+    throw new Error('Pinned SemApps LDP registry contract changed');
+  }
+  const replacement = [
+    '            } catch (error) {',
+    '              // ADSP_P2_REGISTERED_CONTAINERS_RETRY',
+    '              const retryable = err => [404, 429, 503, 504].includes(Number(err?.code)) || /(?:Resource not found|timeout|timed out|service unavailable)/iu.test(String(err?.message || ""));',
+    '              if (!retryable(error)) throw error;',
+    '              let lastError = error;',
+    '              for (const pauseMs of [60, 180, 540]) {',
+    '                await new Promise(resolve => setTimeout(resolve, pauseMs));',
+    '                try {',
+    "                  await ctx.call('ldp.container.createAndAttach', { containerUri: urlJoin(storageUrl, options.path), options, webId });",
+    '                  lastError = null;',
+    '                  break;',
+    '                } catch (retryError) {',
+    '                  lastError = retryError;',
+    '                  if (!retryable(retryError)) break;',
+    '                }',
+    '              }',
+    '              if (lastError) {',
+    "                this.logger.error('Pod container registration failed', { path: options.path, webId, message: String(lastError.message || lastError) });",
+    '                throw lastError;',
+    '              }',
+    '            }'
+  ].join('\n');
+  return { source: source.replace(needle, replacement), changed: true };
+}
+
 function applyPatch() {
   const packageRoot = findPackageRoot();
   const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
@@ -206,7 +244,11 @@ function applyPatch() {
     process.stdout.write(`[ADSP-P2] ${path.relative(packageRoot, controlledContainerFile)} already patched\n`);
   }
 
-  return { packageRoot, controlledContainerFile, changed: result.changed };
+  const registryFile = path.join(packageRoot, 'services/registry/index.js');
+  const registered = patchRegisteredContainers(fs.readFileSync(registryFile, 'utf8'));
+  if (registered.changed) fs.writeFileSync(registryFile, registered.source, 'utf8');
+  process.stdout.write('[ADSP-P2] Registered-container retry contract verified\n');
+  return { packageRoot, controlledContainerFile, changed: result.changed, registryFile, registeredChanged: registered.changed };
 }
 
 if (require.main === module) applyPatch();
@@ -223,5 +265,6 @@ module.exports = {
   locateControlledContainerSource,
   findMatchingCallParen,
   patchControlledContainerSource,
+  patchRegisteredContainers,
   applyPatch
 };

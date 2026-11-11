@@ -45,12 +45,14 @@ function requirePool(pool) {
 }
 
 /**
- * Only fixtureOnly=true enables this experimental writer, deliberately
- * preventing an accidental production authority cutover from an import.
+ * The proof writer only runs with explicit fixtureOnly=true AND the
+ * disposable-test environment marker, and never with NODE_ENV=production.
+ * No accidental provider authority cutover is permitted by importing it.
  */
 export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
   requirePool(pool);
-  if (fixtureOnly !== true) {
+  if (fixtureOnly !== true || process.env.NODE_ENV === 'production' ||
+      process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
     return Object.freeze({
       bootstrap: async () => fail('ATPROTO_REPO_PROOF_NOT_RELEASED', 'No production repository writer is enabled'),
       verify: async () => fail('ATPROTO_REPO_PROOF_NOT_RELEASED', 'No production repository reader is enabled')

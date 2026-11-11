@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Non-activated ActivityPods-owned ATProto signed empty-repository and PostgreSQL outbox acceptance proof",
   "engines": { "node": ">=22.12.0" },
-  "scripts": { "test": "node --test --test-concurrency=1 proof.test.mjs provider-authority.test.mjs projection-recovery.test.mjs" },
+  "scripts": { "test": "node --test --test-concurrency=1 proof.test.mjs provider-authority.test.mjs projection-recovery.test.mjs pod-operation-ticket.test.mjs" },
   "dependencies": {
     "@ipld/car": "5.4.7",
     "@ipld/dag-cbor": "10.0.2",

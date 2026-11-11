@@ -57,26 +57,13 @@ export function makeProviderManagedRepositoryService({ pool, providerCapability,
       canonicalAccountId: ctx.params?.canonicalAccountId,
       did: ctx.params?.did, handle: ctx.params?.handle
     };
-    // Independent PLC and handle resolution is delegated to the already
-    // existing provider verifier, not reimplemented or trusted from callers.
-    // It verifies subject DID, DNS/.well-known handle and PDS service origin.
-    const checkedRemote = async () => {
-      const binding = await ctx.broker.call('identitybindings.getByCanonicalAccountId', {
-        canonicalAccountId: input.canonicalAccountId
+    // Existing provider verifier does DID doc, DNS/.well-known and PDS checks
+    // in a single call. The authority has already matched the protected RDF
+    // binding and never accepts a public caller's arbitrary PDS endpoint.
+    const resolveDelegatedIdentity = ({ did, handle, pdsUrl }) =>
+      ctx.broker.call('atproto-verification.verifyDelegatedIdentity', {
+        pdsUrl, subjectDid: did, did, handle
       });
-      if (!binding || binding.atprotoDid !== input.did ||
-          binding.atprotoHandle !== input.handle || !binding.atprotoPdsUrl) {
-        const err = new Error('Provider binding mismatches requested DID/handle');
-        err.code = 'MANAGED_REPO_BINDING_INVALID';
-        throw err;
-      }
-      return ctx.broker.call('atproto-verification.verifyDelegatedIdentity', {
-        pdsUrl: binding.atprotoPdsUrl,
-        subjectDid: input.did,
-        did: input.did,
-        handle: input.handle
-      });
-    };
     const authority = createProviderManagedRepoAuthority({
       store,
       resolveBinding: accountId => ctx.broker.call('identitybindings.getByCanonicalAccountId', {
@@ -85,8 +72,7 @@ export function makeProviderManagedRepositoryService({ pool, providerCapability,
       resolveCommitKey: accountId => callSigning(ctx, 'signing.getAtprotoPublicKey', {
         canonicalAccountId: accountId, purpose: 'commit'
       }),
-      resolveHandleDid: async () => (await checkedRemote()).resolvedHandleDid,
-      resolveDidDocument: async () => (await checkedRemote()).didDocument,
+      resolveDelegatedIdentity,
       signCommit: (accountId, did, rev, unsignedCommitBytesBase64) =>
         callSigning(ctx, 'signing.signAtprotoCommit', {
           canonicalAccountId: accountId, did, rev, unsignedCommitBytesBase64

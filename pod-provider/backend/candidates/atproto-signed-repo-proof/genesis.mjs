@@ -19,6 +19,20 @@ const DID_RE = /^did:plc:[a-z2-7]{24}$/;
 const TID_RE = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;
 const SORTABLE_BASE32 = '234567abcdefghijklmnopqrstuvwxyz';
 const MAX_GENESIS_CAR_BYTES = 128 * 1024;
+const K256_ORDER = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141');
+
+/** ATProto requires canonical low-S ECDSA signatures (both P-256 and K-256). */
+export function normalizeK256LowS(input) {
+  const bytes = Buffer.from(input || []);
+  if (bytes.length !== 64) reject('Invalid K-256 signature length');
+  const r = BigInt('0x' + bytes.subarray(0, 32).toString('hex'));
+  let s = BigInt('0x' + bytes.subarray(32).toString('hex'));
+  if (r === 0n || r >= K256_ORDER || s === 0n || s >= K256_ORDER) {
+    reject('K-256 signature scalar outside curve order');
+  }
+  if (s > (K256_ORDER >> 1n)) s = K256_ORDER - s;
+  return Buffer.concat([bytes.subarray(0, 32), Buffer.from(s.toString(16).padStart(64, '0'), 'hex')]);
+}
 
 function reject(message) {
   const error = new Error(message);
@@ -119,8 +133,8 @@ export async function buildSignedEmptyRepo({ did, rev, signer, publicKeyPem }) {
   } else {
     reject('Commit signer returned an invalid signature representation');
   }
-  if (signature.length !== 64 ||
-      !crypto.verify('sha256', Buffer.from(unsignedBytes), { key, dsaEncoding: 'ieee-p1363' }, signature)) {
+  signature = normalizeK256LowS(signature);
+  if (!crypto.verify('sha256', Buffer.from(unsignedBytes), { key, dsaEncoding: 'ieee-p1363' }, signature)) {
     reject('Commit signature does not verify against the account key');
   }
 
@@ -174,6 +188,9 @@ export async function verifySignedEmptyRepo({ did, carBytes, publicKeyPem }) {
       !CID.asCID(commit?.data) || !TID_RE.test(commit?.rev || '') ||
       !(commit?.sig instanceof Uint8Array) || commit.sig.length !== 64) {
     reject('Invalid signed repository v3 commit shape');
+  }
+  if (!Buffer.from(normalizeK256LowS(commit.sig)).equals(Buffer.from(commit.sig))) {
+    reject('Non-canonical high-S signature in stored repository commit');
   }
   if (!Buffer.from(dagCbor.encode(commit)).equals(Buffer.from(commitBlock.bytes))) {
     reject('Non-canonical signed commit CBOR bytes');

@@ -62,6 +62,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-account-lookup.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-account-lookup.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-consent-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-operation-ticket.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-activitypods-adapter.mjs

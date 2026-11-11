@@ -66,6 +66,7 @@ module.exports = {
         await beforeSaiMutation(ctx, 'access-grants', ctx.params.resource);
       },
       async delete(ctx) {
+        if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
         const resource = await this.actions.get(
           { resourceUri: ctx.params.resourceUri, webId: 'system' },
           { parentCtx: ctx }

@@ -195,3 +195,58 @@ test('nonproduction metadata bootstrap is classified as fixture-only, never proo
     else process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO = prevRequire;
   }
 });
+
+test('production verifies exact signed repo head and both key references on happy path', async () => {
+  await production(async () => {
+    const caller = runtime();
+    caller._signingCallMeta = () => ({});
+    caller._resolveLocalPdsUrl = () => 'https://paper.example';
+    const actions = [];
+    const ctx = { call: async (action, params) => {
+      actions.push(action);
+      if (action === 'atproto-managed-repository.verifyReady') return validProof;
+      if (action === 'signing.getAtprotoPublicKey') {
+        assert(['commit', 'rotation'].includes(params.purpose));
+        return { publicKeyMultibase: 'test-only-key' };
+      }
+      throw new Error('Unexpected service: ' + action);
+    }};
+    const binding = {
+      webId, atprotoDid: did, atprotoHandle: 'alice.paper.example',
+      atSigningKeyRef: 'commit-key-ref', atRotationKeyRef: 'rotation-key-ref',
+      repoInitialized: true, repoRootCid: otherCid, repoRev: rev,
+      atprotoSource: 'local', atprotoManaged: true, atprotoPdsUrl: 'https://paper.example'
+    };
+    await caller.verifyProvisionedState(ctx, { canonicalAccountId: webId, binding, didMethod: 'plc' });
+    assert.deepEqual(actions, [
+      'atproto-managed-repository.verifyReady',
+      'signing.getAtprotoPublicKey',
+      'signing.getAtprotoPublicKey'
+    ]);
+  });
+});
+
+test('nonproduction explicit real-repo flag still refuses metadata-only fixture', async () => {
+  const previous = process.env.NODE_ENV;
+  const previousFlag = process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO;
+  try {
+    process.env.NODE_ENV = 'test';
+    process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO = 'true';
+    const caller = runtime();
+    let writes = 0;
+    const ctx = { call: async action => {
+      if (action === 'identitybindings.upsertRepoBootstrap') writes += 1;
+      throw new Error('Missing signed native repo verifier');
+    }};
+    await assert.rejects(
+      caller.initializeRepoState(ctx, { canonicalAccountId: webId, did, handle: 'alice.paper.example' }),
+      error => error.type === 'ATPROTO_REPO_PROOF_UNAVAILABLE'
+    );
+    assert.equal(writes, 0);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previous;
+    if (previousFlag === undefined) delete process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO;
+    else process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO = previousFlag;
+  }
+});

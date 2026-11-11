@@ -244,7 +244,7 @@ async function prepare() {
   assert.ok(!actions.includes('auth.account.find'));
   assert.ok(!actions.includes('access-grants.getForApp'));
   assert.ok(!actions.includes('data-grants.getByAccessNeed'));
-  assert.equal((await adapter.check({ ...base, rootCid, rev, oidcToken })).ready, true);
+  assert.equal((await adapter.check({ ...base, rootCid, rev, oidcToken })).projectionVerified, true);
 
   // Two independent async request sequences race a live Jena permission
   // revocation and a stale projection. Either could acquire the Jena writer

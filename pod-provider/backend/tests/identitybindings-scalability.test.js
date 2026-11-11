@@ -97,19 +97,21 @@ describe('identitybindings SPARQL/LDP scalability', () => {
     const typeCheck = query.indexOf('a apods:AtprotoIdentityBindingIndex');
     expect(selective).toBeGreaterThan(-1);
     expect(typeCheck).toBeGreaterThan(selective);
-    expect(query).toContain('LIMIT 1');
+    expect(query).toContain('LIMIT 2');
     expect(query).not.toContain('ORDER BY');
     expect(query).not.toContain('OPTIONAL');
     expect(ctx.call).toHaveBeenCalledTimes(2);
   });
 
-  test('selective query failure may fall back but authoritative LDP failure propagates', async () => {
+  test('selective index outage fails bounded instead of population scan, and LDP failure propagates', async () => {
     const canonicalAccountId = 'https://example.test/alice/profile/card#me';
     const queryFailure = Object.assign(new Error('settings index unavailable'), { code: 503 });
     const queryCtx = { call: jest.fn(async () => { throw queryFailure; }) };
     const service = serviceWithMethods();
 
-    await expect(service._findByDidWithSparql(queryCtx, 'did:plc:alice')).resolves.toBeNull();
+    await expect(service._findByDidWithSparql(queryCtx, 'did:plc:alice'))
+      .rejects.toMatchObject({ code: 503, type: 'IDENTITY_BINDING_INDEX_UNAVAILABLE' });
+    expect(queryCtx.call).toHaveBeenCalledTimes(1);
 
     const authoritativeFailure = Object.assign(new Error('authoritative LDP unavailable'), { code: 503 });
     const authoritativeCtx = {

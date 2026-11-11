@@ -111,6 +111,18 @@ test('PG18 signed v3 empty repository proof — trusted signing, atomic DB, reco
         locked.verify({ accountId: account('blocked'), did: did('blocked') }),
         error => error.code === 'ATPROTO_REPO_PROOF_NOT_RELEASED'
       );
+      const was = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        const denied = createSignedRepoProofStore({ pool, fixtureOnly: true });
+        await assert.rejects(
+          denied.bootstrap({ accountId: account('blocked'), did: did('blocked') }),
+          error => error.code === 'ATPROTO_REPO_PROOF_NOT_RELEASED'
+        );
+      } finally {
+        if (was === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = was;
+      }
     });
 
     await t.test('concurrent signups for same WebID and DID result in exactly one commit/outbox', async () => {

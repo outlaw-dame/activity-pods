@@ -22,7 +22,10 @@ function protectedPath(uri, baseUrl) {
   } catch {
     return false;
   }
-  if (base.protocol !== 'https:' || target.protocol !== 'https:' ||
+  const loopback = base.protocol === 'http:' &&
+    ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
+  if ((base.protocol !== 'https:' && !loopback) ||
+      target.protocol !== base.protocol ||
       target.origin !== base.origin ||
       target.username || target.password) return false;
 
@@ -50,7 +53,10 @@ function isPodStorageAncestor(uri, baseUrl) {
     const target = new URL(uri);
     const base = new URL(baseUrl);
     const root = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
-    if (target.origin !== base.origin || target.protocol !== 'https:' ||
+    const loopback = base.protocol === 'http:' &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
+    if (target.origin !== base.origin || target.protocol !== base.protocol ||
+        (base.protocol !== 'https:' && !loopback) ||
         !target.pathname.startsWith(root)) return false;
     const pieces = target.pathname.slice(root.length).split('/')
       .filter(Boolean).map(segment => decodeURIComponent(segment));
@@ -67,6 +73,16 @@ function assertNotManagedLdpMutation(ctx, baseUrl, {
   checkResource = true, checkContainer = true, protectAncestors = false
 } = {}) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
+  let base;
+  try { base = new URL(baseUrl); } catch { /* invalid provider URL */ }
+  if (!base || (base.protocol !== 'https:' &&
+      !(base.protocol === 'http:' &&
+        ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))) {
+    throw new MoleculerError(
+      'ATProto LDP fencing requires a canonical HTTPS or loopback provider URL',
+      503, 'ATPROTO_LDP_FENCE_CONFIG_INVALID'
+    );
+  }
   const params = ctx?.params || {};
   const candidates = [];
   if (checkResource) {

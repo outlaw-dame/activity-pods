@@ -116,8 +116,11 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
     // makes races single-writer once persistence begins.
     const signed = await buildSignedEmptyRepo({ did, rev, signer, publicKeyPem });
     const client = await pool.connect();
+    let transactionOpen = false;
+    let replay = false;
     try {
       await client.query('BEGIN');
+      transactionOpen = true;
       await client.query("SET LOCAL lock_timeout = '5s'");
       await client.query("SET LOCAL statement_timeout = '10s'");
       await client.query(
@@ -132,35 +135,39 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
         if (existing.rows[0].did !== did) {
           fail('ATPROTO_ACCOUNT_DID_CONFLICT', 'Account already owns a different DID');
         }
-        await client.query('COMMIT');
-        const proof = await verify({ accountId, did, publicKeyPem });
-        return Object.freeze({ ...proof, replay: true });
+        replay = true;
+      } else {
+        await client.query(
+          'INSERT INTO paper_atproto_repo_proof.repos (account_id,did,rev,head_cid,root_cid) VALUES ($1,$2,$3,$4,$5)',
+          [accountId, did, signed.rev, signed.commitCid, signed.rootCid]
+        );
+        await client.query(
+          'INSERT INTO paper_atproto_repo_proof.blocks (did,cid,block) VALUES ($1,$2,$3),($1,$4,$5)',
+          [did, signed.commitCid, signed.commitBytes, signed.rootCid, signed.rootBytes]
+        );
+        if (testFailAfterBlocks) fail('ATPROTO_TEST_INJECTED_FAILURE', 'Simulated crash before outbox persistence');
+        await client.query(
+          "INSERT INTO paper_atproto_repo_proof.native_event_outbox (did,commit_cid,rev,kind) VALUES ($1,$2,$3,'at.commit.v1')",
+          [did, signed.commitCid, signed.rev]
+        );
       }
-
-      await client.query(
-        'INSERT INTO paper_atproto_repo_proof.repos (account_id,did,rev,head_cid,root_cid) VALUES ($1,$2,$3,$4,$5)',
-        [accountId, did, signed.rev, signed.commitCid, signed.rootCid]
-      );
-      await client.query(
-        'INSERT INTO paper_atproto_repo_proof.blocks (did,cid,block) VALUES ($1,$2,$3),($1,$4,$5)',
-        [did, signed.commitCid, signed.commitBytes, signed.rootCid, signed.rootBytes]
-      );
-      if (testFailAfterBlocks) fail('ATPROTO_TEST_INJECTED_FAILURE', 'Simulated crash before outbox persistence');
-      await client.query(
-        "INSERT INTO paper_atproto_repo_proof.native_event_outbox (did,commit_cid,rev,kind) VALUES ($1,$2,$3,'at.commit.v1')",
-        [did, signed.commitCid, signed.rev]
-      );
       await client.query('COMMIT');
+      transactionOpen = false;
     } catch (error) {
-      try { await client.query('ROLLBACK'); } catch { /* already aborted/disconnected */ }
+      if (transactionOpen) {
+        try { await client.query('ROLLBACK'); } catch { /* transaction already aborted or disconnected */ }
+      }
       throw error;
     } finally {
+      // Critically release before any post-commit verification query:
+      // verification uses the same bounded connection pool. Holding this
+      // client across read-back deadlocks concurrent replays at max pool size.
       client.release();
     }
-    // Read back from the authoritative DB and independently revalidate
-    // signed commit, all CIDs, CAR and outbox; no "repoInitialized" flag used.
+    // Read back from authoritative DB AFTER releasing transaction client;
+    // reject missing/corrupt signature, CIDs, CAR or outbox.
     const proof = await verify({ accountId, did, publicKeyPem });
-    return Object.freeze({ ...proof, replay: false });
+    return Object.freeze({ ...proof, replay });
   }
 
   return Object.freeze({ bootstrap, verify });

@@ -29,6 +29,13 @@ function wireLocalAction(options, broker, actionName, next = jest.fn(async ctx =
 }
 
 describe('ADSP distributed local ontology registration middleware', () => {
+  test('provider baseline includes unique ActivityStreams and signature vocabularies before dynamic startup', () => {
+    const provider = require('../services/core/ontologies');
+    const prefixes = provider.settings.ontologies.map(ontology => ontology.prefix);
+    expect(prefixes.slice(0, 2)).toEqual(['as', 'sec']);
+    expect(new Set(prefixes).size).toBe(prefixes.length);
+  });
+
   test('is absent when disabled', () => {
     expect(AdspLocalOntologyRegistrationMiddleware({ enabled: false })).toBeNull();
   });

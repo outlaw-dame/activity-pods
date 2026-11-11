@@ -61,6 +61,19 @@ describe('APDM Phase 8 signup bootstrap contract', () => {
     expect(AUTH_SOURCE).toContain('attempt >= forcedBootstrapReadinessAttempts');
   });
 
+  test('forced bounded retry recognizes actual 4-cell actor timeout but not auth failures', () => {
+    const match = AUTH_SOURCE.match(/return \/([^\n]+)\/i\.test\(message\);/u);
+    expect(match).not.toBeNull();
+    const isRetryable = new RegExp(match[1], 'i');
+    expect(isRetryable.test('Waiting for resource failed. No results after 20 tries. The resource is missing the following properties: ["pim:preferencesFile"]')).toBe(true);
+    expect(isRetryable.test('Resource still had not been created after 30s')).toBe(true);
+    expect(isRetryable.test('Timed out waiting for key container')).toBe(true);
+    expect(isRetryable.test('Permission denied')).toBe(false);
+    expect(isRetryable.test('No registered ontology found')).toBe(false);
+    expect(isRetryable.test('Invalid Solid-OIDC consent grant')).toBe(false);
+    expect(AUTH_SOURCE).toContain('attempt >= forcedBootstrapReadinessAttempts');
+  });
+
   test('gateway keeps the production timeout default while allowing a benchmark override', () => {
     expect(API_SOURCE).toContain('process.env.APODS_HTTP_SERVER_TIMEOUT_MS || 300000');
   });

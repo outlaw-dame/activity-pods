@@ -22,8 +22,8 @@ module.exports = {
       post(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
       create(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
       createAndAttach(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
-      delete(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
-      clear(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
+      delete(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { protectAncestors: true }); },
+      clear(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { protectAncestors: true }); },
       patch(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
       attach(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
       detach(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); }

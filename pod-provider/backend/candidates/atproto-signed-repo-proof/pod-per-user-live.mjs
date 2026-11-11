@@ -152,8 +152,9 @@ const adapter = createPodActivityPodsProjection({
   call, operationTickets: authority, expectedIssuer: origin + '/',
   expectedRepoShapeTree: shape, fixtureOnly: true
 });
-const ticket = (operation, epoch = '1') => authority.issue({
-  accountId, did, appUri, grantUri, epoch, operation
+const ticket = (operation, epoch = '1', head = {}) => authority.issue({
+  accountId, did, appUri, grantUri, epoch, operation,
+  ...(operation === 'project' ? { rootCid, rev } : {}), ...head
 });
 const base = { accountId, did, appUri, grantUri, epoch: '1' };
 const oidcToken = 'synthetic-verified-local-jwk-fixture';

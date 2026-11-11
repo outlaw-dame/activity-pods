@@ -69,3 +69,35 @@ The non-activated 'provider-authority.mjs' and 'provider-moleculer.mjs' now conn
 3. Connect Solid-OIDC/SAI delegated grants and verify revocation cannot be bypassed. New account bootstrap also needs a carefully defined provider registration authority (as distinct from user-initiated writes).
 4. Implement outbox publish/ack/retry with at-least-once delivery and deterministic idempotency; implement non-empty MST writes, repository reads/XRPC, relay interoperability, deletion, rotation and live DID PLC acceptance.
 5. Confirm acceptable latency of repeated independent PLC/DNS verification (cache only with bounded staleness and revocation strategy), database costs, exact-head CI and disaster recovery. Do not activate this draft merely because proof tests pass.
+
+
+## Next gate — PG18 ↔ protected RDF crash recovery and fencing (stacked draft)
+
+The candidate now includes an *atomic recovery intent* in the same PostgreSQL genesis transaction as the signed v3 commit/CID blocks and pending native event outbox. A genesis that commits without the RDF intent violates the database transaction; a test injects failure immediately after outbox INSERT and proves complete rollback.
+
+### Safety and concurrency model
+
+- Table 'rdf_projection_jobs' is one row per existing canonical account, with a foreign key to the immutable genesis repo plus both actual CID-addressed blocks. Per-account 'lease_epoch' is a monotone bigint, 'lease_owner' is a random UUID, 'lease_until' uses the **database clock**, and retries are bounded. Two concurrent Moleculer replicas cannot both claim the same current lease because the claim uses one conditional PostgreSQL UPDATE. No PG locks or connections are held across RDF I/O.
+- All attempted RDF updates carry the PG epoch and must be implemented by a **provider-owned, atomic conditional Jena writer that persists the fence with repoRootCid/repoRev in the same RDF transaction**. It must reject older leases even if an old worker wakes after the new worker finishes. An ordinary GET/PUT or unchecked upsert is NOT sufficient. The tests model this property with a protected atomic in-memory RDF CAS. **Real Fuseki CAS integration has not yet been implemented or tested**.
+- Before writing and before ACK, the reconciler checks current provider authorization, the canonical WebID = AP actor and bound DID, and signed durable PG evidence (commit CID, MST CID, TID, checked CAR, outbox). It compares the protected RDF record after writing. An exhausted or conflicting job transitions to 'blocked' for manual review; transient failures are retried with bounded exponential full jitter.
+- After RDF is applied, PostgreSQL requires the *same epoch, owner, nonexpired lease and exact head CIDs/revision* to mark applied. A crashed worker leaves a leased row; after expiry the next worker increments epoch and replays the **same signed head** without creating another DID or genesis commit.
+- The 'readiness' API requires **all three**: cryptographically verified PG repo/outbox, an applied recovery record, and a newly read protected RDF projection matching the exact PG head and current epoch. A PG-only or RDF-only success must fail closed. Completed-state drift triggers a read-only diagnostic, never silent rewriting.
+- Unreleased by construction: no production service import, no background scanner, no API route, no automatic backfill. The proof only runs with 'fixtureOnly: true' and an explicit disposable PG18 test marker; NODE_ENV=production disables the reconciler.
+
+### Acceptance / limitations
+
+The dedicated test suite covers atomic rollback, successful projection and durable ACK, eight competing replica objects, a simulated crash after RDF before PG ACK, a stale worker prevented from overwriting a newer fence, bounded transient retry, exhausted retries, missing grants, false-ready drift and identity collisions. These are **disposable PG18 + a simulated RDF CAS**, not proof of actual Jena's atomicity or production-level federation.
+
+Remaining blockers before live deployment:
+
+1. Implement and test actual Fuseki/TDB2 per-resource RDF conditional UPDATE with a persistent numeric fence, authorization and subject-scoped resource access. Invalidate or synchronize any LDP/JSON-LD indexed projections and eliminate unfenced 'upsertRepoBootstrap' writes on the new path.
+2. Wire the candidate through the reviewed mandatory unified signup and verified-repo branches (#134/#140), with provider-only capability minted inside trusted ActivityPods code and no public signing bypass.
+3. Add a multi-process/four-replica crash/kill/restart acceptance runner against real Jena and PG, per-dataset resource ownership, Solid-OIDC/SAI grants and revocation tests. Test long pauses, provider partition, lease renewal and live DID/key rotation.
+4. Add a production PG schema migration with least-privilege roles, replication/backup/restore, observability, paginated claim queue, rate/connection budgets and zero-downtime rollback. Test actual duplicate delivery and immutable native outbox publishing.
+5. Only after the above and protocol writes/XRPC/relay acceptance pass, authorize a separate production activation PR. Never equate a green disposable CI proof with a live PDS.
+
+### Cost and performance constraints
+
+- Keep a **single** recoverable row per account per genesis, not a per-request history or duplicated identity graph. One partial pending index and one partial expired-lease index are sufficient for the initial bounded worker; watch their write amplification in production. Do not scan an entire account population on each restart.
+- Use a bounded PG connection pool across Moleculer replicas, short DB transactions and per-account leases. No network, crypto signing or Jena writes inside PG locks. Prefer at-least-once idempotent replay to two-phase distributed blocking transactions.
+- Cap retry attempts and use jitter; avoid tight failure loops and unbounded in-memory queues. Metrics should summarize lease contention, stale-fence rejections, job age and blocked jobs **without logging identity keys, private data or raw CAR bytes**.

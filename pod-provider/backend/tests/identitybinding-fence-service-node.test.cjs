@@ -12,6 +12,7 @@ const { test } = require('node:test');
 
 const servicePath = path.join(__dirname, '..', 'services', 'identitybindings.service.js');
 const policy = require('../utils/identitybinding-fence-policy');
+const indexQueries = require('../utils/identitybinding-index-query');
 class MoleculerError extends Error {
   constructor(message, code, type) {
     super(message);
@@ -34,6 +35,7 @@ function loadService() {
     require: name => {
       if (name === 'crypto') return require('node:crypto');
       if (name === '../utils/identitybinding-fence-policy') return policy;
+      if (name === '../utils/identitybinding-index-query') return indexQueries;
       if (Object.hasOwn(modules, name)) return modules[name];
       throw new Error('Unexpected runtime dependency: ' + name);
     }

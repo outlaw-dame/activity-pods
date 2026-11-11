@@ -115,7 +115,7 @@ module.exports = {
   hooks: {
     before: {
       async post(ctx) {
-        await beforeSaiMutation(ctx, 'data-authorizations', ctx.params.resource);
+        await beforeSaiMutation(ctx, 'data-authorizations', ctx.params.resource, 'post');
         // For migration, we don't want to handle the following side-effects
         if (ctx.meta.isMigration === true) return;
 
@@ -175,7 +175,7 @@ module.exports = {
           { resourceUri: ctx.params.resourceUri, webId: 'system' },
           { parentCtx: ctx }
         );
-        await beforeSaiMutation(ctx, 'data-authorizations', resource);
+        await beforeSaiMutation(ctx, 'data-authorizations', resource, 'delete');
       }
     },
     after: {

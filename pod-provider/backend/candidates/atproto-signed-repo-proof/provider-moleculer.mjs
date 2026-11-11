@@ -38,7 +38,9 @@ export function makeProviderManagedRepositoryService({ pool, providerCapability,
     throw configurationError();
   }
   const store = createSignedRepoProofStore({ pool, fixtureOnly: true });
-  const callSigning = (ctx, action, params) => ctx.call(action, params, {
+  // A fresh top-level broker call deliberately does not inherit the caller's
+  // providerRepoCapability through Moleculer's nested Context.meta merging.
+  const callSigning = (ctx, action, params) => ctx.broker.call(action, params, {
     meta: { $headers: { authorization: 'Bearer ' + signingBearerToken } }
   });
   const authorized = ctx => {
@@ -59,7 +61,7 @@ export function makeProviderManagedRepositoryService({ pool, providerCapability,
     // existing provider verifier, not reimplemented or trusted from callers.
     // It verifies subject DID, DNS/.well-known handle and PDS service origin.
     const checkedRemote = async () => {
-      const binding = await ctx.call('identitybindings.getByCanonicalAccountId', {
+      const binding = await ctx.broker.call('identitybindings.getByCanonicalAccountId', {
         canonicalAccountId: input.canonicalAccountId
       });
       if (!binding || binding.atprotoDid !== input.did ||
@@ -68,7 +70,7 @@ export function makeProviderManagedRepositoryService({ pool, providerCapability,
         err.code = 'MANAGED_REPO_BINDING_INVALID';
         throw err;
       }
-      return ctx.call('atproto-verification.verifyDelegatedIdentity', {
+      return ctx.broker.call('atproto-verification.verifyDelegatedIdentity', {
         pdsUrl: binding.atprotoPdsUrl,
         subjectDid: input.did,
         did: input.did,
@@ -77,7 +79,7 @@ export function makeProviderManagedRepositoryService({ pool, providerCapability,
     };
     const authority = createProviderManagedRepoAuthority({
       store,
-      resolveBinding: accountId => ctx.call('identitybindings.getByCanonicalAccountId', {
+      resolveBinding: accountId => ctx.broker.call('identitybindings.getByCanonicalAccountId', {
         canonicalAccountId: accountId
       }),
       resolveCommitKey: accountId => callSigning(ctx, 'signing.getAtprotoPublicKey', {

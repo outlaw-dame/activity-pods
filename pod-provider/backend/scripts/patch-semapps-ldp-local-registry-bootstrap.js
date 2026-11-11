@@ -190,7 +190,7 @@ function patchRegisteredContainers(source) {
   // npm package builds may remove comment text or normalize whitespace.
   // Identify the one handler-local catch, never a generic catch elsewhere.
   const anchor = source.indexOf('Trying to register container');
-  const pattern = /}\s*catch\s*\(\s*error\s*\)\s*{\s*(?:\/\/\s*pass\s*)?}/gu;
+  const pattern = /\}\s*catch\s*\(\s*error\s*\)\s*\{\s*(?:\/\/\s*pass\s*)?\}/gu;
   const matches = anchor < 0 ? [] : [...source.slice(anchor).matchAll(pattern)];
   if (source.includes(REGISTERED_CONTAINERS_MARKER)) {
     if (!source.includes('for (const pauseMs of [60, 180, 540])')) throw new Error('Incomplete registered-container patch');

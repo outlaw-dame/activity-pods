@@ -47,7 +47,7 @@ describe('distributed Solid type-index bootstrap ordering', () => {
     const second = patchTypeIndexes(first.source);
     expect(second.changed).toBe(false);
     expect(second.source).toEqual(first.source);
-    expect(second.source.match(/auth\.registered/g)).toHaveLength(1);
+    expect(second.source.match(/'auth\.registered'\s*:/g)).toHaveLength(1);
     expect(second.source).not.toContain('ctx.emit(');
     expect(second.source).not.toContain('ldp.resource.create');
   });

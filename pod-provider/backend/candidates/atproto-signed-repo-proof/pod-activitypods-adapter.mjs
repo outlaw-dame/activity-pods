@@ -8,6 +8,7 @@
  * enumeration, no unbounded fan-out, no DB connections held across I/O.
  */
 import crypto from 'node:crypto';
+import { buildCanonicalPodAccountLookup, parseCanonicalPodAccount } from './pod-account-lookup.mjs';
 import { buildFencedRepoProjectionSparql } from './fuseki-fence.mjs';
 import {
   safeIri, consentSubject, readConsentQuery, bootstrapConsentQuery,
@@ -16,7 +17,6 @@ import {
 
 const APODS = 'http://activitypods.org/ns/core#';
 const INTEROP = 'http://www.w3.org/ns/solid/interop#';
-const USERNAME = /^[a-z0-9][a-z0-9_-]{0,62}$/u;
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const CID = /^bafyre[a-z2-7]{53}$/u;
 const TID = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/u;
@@ -136,12 +136,15 @@ export function createPodActivityPodsProjection({
 
   async function locate(accountId) {
     canonicalUrl(accountId);
-    // The auth account is looked up by its indexed WebID, never via a
-    // population scan. Solid storage creates the dataset as username.
-    const account = await invoke('auth.account.findByWebId', { webId: accountId });
-    if (!account || account.webId !== accountId || !USERNAME.test(account.username || '')) {
-      deny('POD_PROJECTION_OWNER_UNKNOWN', 'Unverified canonical Pod dataset owner');
-    }
+    // Upstream SemApps auth.account.findByWebId wraps an unbounded
+    // CONSTRUCT+JSON-LD framing query. Use one selective, LIMIT 2 SPARQL
+    // query instead, with collision rejection and a strict owner URI.
+    // Solid storage creates the per-user dataset as username.
+    const accountRows = await invoke('triplestore.query', {
+      dataset: 'settings', webId: 'system',
+      query: buildCanonicalPodAccountLookup(accountId)
+    });
+    const account = parseCanonicalPodAccount(accountRows, accountId);
     const dataset = account.username;
     const [storageRoot, containerUri] = await Promise.all([
       invoke('solid-storage.getUrl', { webId: accountId }),

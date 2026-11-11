@@ -246,7 +246,15 @@ async function prepare() {
   assert.ok(!actions.includes('data-grants.getByAccessNeed'));
   assert.equal((await adapter.check({ ...base, rootCid, rev, oidcToken })).ready, true);
 
-  assert.equal((await adapter.revoke({ ...base, ticket: ticket('revoke') })).epoch, '2');
+  // Two independent async request sequences race a live Jena permission
+  // revocation and a stale projection. Either could acquire the Jena writer
+  // first, but the FINAL state must always be denied, never false-ready.
+  const contested = await Promise.allSettled([
+    adapter.project({ ...base, rootCid, rev, oidcToken, ticket: ticket('project') }),
+    adapter.revoke({ ...base, ticket: ticket('revoke') })
+  ]);
+  assert.equal(contested[1].status, 'fulfilled', 'Revocation must durably win eventual access state');
+  assert.equal(contested[1].value.epoch, '2');
   await assert.rejects(
     adapter.project({ ...base, rootCid, rev, oidcToken, ticket: ticket('project') }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'

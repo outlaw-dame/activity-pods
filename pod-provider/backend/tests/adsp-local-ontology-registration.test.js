@@ -1,5 +1,10 @@
 'use strict';
 
+// The provider schema imports runtime configuration solely for its settings
+// dataset; this unit test verifies the local ontology declaration without
+// requiring an unrelated deployed server's environment variables.
+jest.mock('../config/config', () => ({ AUTH_ACCOUNTS_DATASET: 'settings' }));
+
 const AdspLocalOntologyRegistrationMiddleware = require('../middlewares/adsp-local-ontology-registration');
 const {
   DEFAULT_READINESS_ACTIONS,

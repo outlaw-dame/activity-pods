@@ -299,6 +299,13 @@ module.exports = {
         // projected, fenced repository identity. Deletion needs coordinated
         // PG native-repo state transition and protected Jena CAS.
         const protectedBinding = await this._getBindingResourceOrNull(resourceUri, ctx);
+        if (!protectedBinding) {
+          throw new MoleculerError(
+            'Identity binding disappeared between existence and guarded deletion checks',
+            409,
+            'IDENTITY_BINDING_MUTATION_RACE'
+          );
+        }
         this._assertUnfencedMutation(protectedBinding, 'remove');
         await this.actions.delete({ resourceUri, webId: 'system' }, { parentCtx: ctx });
         await this._removeBindingIndex(ctx, canonicalAccountId).catch(err => {

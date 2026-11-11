@@ -115,7 +115,7 @@ module.exports = {
         // Legacy full-resource PUT would discard the atomic RDF fence or
         // overwrite a newer signed repo projection. Do not mutate fenced
         // bindings through an unfenced method.
-        assertUnfencedIdentityBindingMutation(existing, 'upsert');
+        this._assertUnfencedMutation(existing, 'upsert');
 
         const existingValue = key => (existing ? this._readField(existing, key) : null);
         const existingBoolean = key => this._coerceBoolean(existingValue(key));
@@ -299,7 +299,7 @@ module.exports = {
         // projected, fenced repository identity. Deletion needs coordinated
         // PG native-repo state transition and protected Jena CAS.
         const protectedBinding = await this._getBindingResourceOrNull(resourceUri, ctx);
-        assertUnfencedIdentityBindingMutation(protectedBinding, 'remove');
+        this._assertUnfencedMutation(protectedBinding, 'remove');
         await this.actions.delete({ resourceUri, webId: 'system' }, { parentCtx: ctx });
         await this._removeBindingIndex(ctx, canonicalAccountId).catch(err => {
           // Index cleanup is best-effort; LDP resource is the source of truth.
@@ -310,6 +310,18 @@ module.exports = {
     }
   },
   methods: {
+    _assertUnfencedMutation(resource, operation) {
+      try {
+        assertUnfencedIdentityBindingMutation(resource, operation);
+      } catch (error) {
+        throw new MoleculerError(
+          error.message,
+          Number(error.status) || 409,
+          error.code || 'IDENTITY_BINDING_MUTATION_INVALID'
+        );
+      }
+    },
+
     async _resolveBindingLocation(canonicalAccountId, ctx) {
       const bindingWebId = canonicalAccountId;
       const containerUri = await this.actions.getContainerUri({ webId: bindingWebId }, { parentCtx: ctx });

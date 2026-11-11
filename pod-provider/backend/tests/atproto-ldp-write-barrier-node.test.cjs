@@ -101,6 +101,20 @@ test('other Pod resources and remote namespaces keep their normal LDP behavior',
   assert.equal(guard.protectedPath(elsewhere, root), false);
 });
 
+test('bulk clear/delete cannot start deleting Pod ancestors before reaching a protected resource', () => {
+  on();
+  for (const operation of ['clear', 'delete']) {
+    for (const containerUri of [root + 'alice/', root + 'alice/data/']) {
+      assert.throws(() => ldp.hooksContainer.before[operation]({
+        params: { containerUri }
+      }), e => e.code === 409);
+    }
+  }
+  assert.doesNotThrow(() => ldp.hooksContainer.before.clear({
+    params: { containerUri: prefix + 'ordinary-posts/' }
+  }));
+});
+
 test('percent-encoded segments cannot bypass the protected container match', () => {
   on();
   const encoded = prefix + '%69dentity-bindings/atproto-abc';

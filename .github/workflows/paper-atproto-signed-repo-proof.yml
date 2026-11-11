@@ -51,6 +51,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-authority.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-moleculer.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-authority.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/projection-recovery.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/projection-recovery.test.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash

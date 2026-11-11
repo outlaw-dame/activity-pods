@@ -57,7 +57,7 @@ module.exports = {
   hooks: {
     before: {
       async post(ctx) {
-        await beforeSaiMutation(ctx, 'data-grants', ctx.params.resource);
+        await beforeSaiMutation(ctx, 'data-grants', ctx.params.resource, 'post');
       },
       async delete(ctx) {
         if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
@@ -65,7 +65,7 @@ module.exports = {
           { resourceUri: ctx.params.resourceUri, webId: 'system' },
           { parentCtx: ctx }
         );
-        await beforeSaiMutation(ctx, 'data-grants', resource);
+        await beforeSaiMutation(ctx, 'data-grants', resource, 'delete');
       }
     }
   }

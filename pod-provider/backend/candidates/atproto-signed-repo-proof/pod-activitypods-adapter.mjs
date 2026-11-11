@@ -16,7 +16,6 @@ import {
 
 const APODS = 'http://activitypods.org/ns/core#';
 const INTEROP = 'http://www.w3.org/ns/solid/interop#';
-const ACL_WRITE = new Set(['acl:Write', 'http://www.w3.org/ns/auth/acl#Write']);
 const USERNAME = /^[a-z0-9][a-z0-9_-]{0,62}$/u;
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const CID = /^bafyre[a-z2-7]{53}$/u;
@@ -62,7 +61,7 @@ function containsExactly(values, requested) {
   return entries.length > 0 && entries.length <= 32 &&
     entries.some(x => scalar(x) === requested);
 }
-function scope({ accountId, did, appUri, grantUri, epoch, operation }) {
+function scope({ accountId, did, appUri, grantUri, epoch, operation, rootCid = null, rev = null }) {
   canonicalUrl(accountId);
   canonicalUrl(appUri);
   canonicalUrl(grantUri);
@@ -71,7 +70,10 @@ function scope({ accountId, did, appUri, grantUri, epoch, operation }) {
       !['bootstrap', 'project', 'revoke'].includes(operation)) {
     deny('POD_PROJECTION_SCOPE_INVALID', 'Invalid protected repository scope');
   }
-  return Object.freeze({ accountId, did, appUri, grantUri, epoch, operation });
+  if (operation === 'project' && (!CID.test(rootCid || '') || !TID.test(rev || ''))) {
+    deny('POD_PROJECTION_SCOPE_INVALID', 'Project ticket must bind the verified signed repository root and revision');
+  }
+  return Object.freeze({ accountId, did, appUri, grantUri, epoch, operation, rootCid, rev });
 }
 function checkBinding(binding, location, did) {
   if (!binding || binding.id !== location.resourceUri ||
@@ -179,7 +181,7 @@ export function createPodActivityPodsProjection({
         verified.azp !== appUri || verified.webid !== accountId ||
         !Number.isInteger(verified.iat) || !Number.isInteger(verified.exp) ||
         verified.iat > time + 5 || verified.iat < time - 300 ||
-        verified.exp <= time || verified.exp > time + 3600) {
+        verified.exp <= time) {
       deny('POD_PROJECTION_OIDC_INVALID', 'Solid-OIDC application/subject/audience mismatch');
     }
     return true;
@@ -266,10 +268,7 @@ export function createPodActivityPodsProjection({
   async function project({
     accountId, did, appUri, grantUri, epoch, ticket, oidcToken, rootCid, rev
   }) {
-    const s = scope({ accountId, did, appUri, grantUri, epoch, operation: 'project' });
-    if (!CID.test(rootCid || '') || !TID.test(rev || '')) {
-      deny('POD_PROJECTION_SCOPE_INVALID', 'Invalid signed repository root/revision');
-    }
+    const s = scope({ accountId, did, appUri, grantUri, epoch, operation: 'project', rootCid, rev });
     authorize(ticket, s);
     const location = await locate(accountId);
     await oidc(oidcToken, accountId, appUri);
@@ -322,7 +321,7 @@ export function createPodActivityPodsProjection({
     return Object.freeze({ revoked: true, accountId, epoch: after.revision });
   }
   async function check({ accountId, did, appUri, grantUri, epoch, oidcToken, rootCid, rev }) {
-    scope({ accountId, did, appUri, grantUri, epoch, operation: 'project' });
+    scope({ accountId, did, appUri, grantUri, epoch, operation: 'project', rootCid, rev });
     const location = await locate(accountId);
     await oidc(oidcToken, accountId, appUri);
     await sai(location, appUri, grantUri);

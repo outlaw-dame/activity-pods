@@ -124,6 +124,18 @@ test('percent-encoded segments cannot bypass the protected container match', () 
   }), e => e.code === 409);
 });
 
+test('loopback development URLs are fenced and invalid provider origins fail closed', () => {
+  on();
+  assert.equal(guard.protectedPath(
+    'http://127.0.0.1:3000/alice/data/identity-bindings/x',
+    'http://127.0.0.1:3000/'
+  ), true);
+  assert.throws(() => guard.assertNotManagedLdpMutation(
+    { params: { resourceUri: binding } },
+    'http://untrusted.example.org/'
+  ), e => e.code === 503 && e.type === 'ATPROTO_LDP_FENCE_CONFIG_INVALID');
+});
+
 test('barriers are installed at the LdpService subservice hooks, not only ControlledContainerMixin', () => {
   assert.equal(typeof ldp.hooksResource.before.delete, 'function');
   assert.equal(typeof ldp.hooksResource.before.patch, 'function');

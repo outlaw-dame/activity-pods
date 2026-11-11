@@ -48,20 +48,12 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/store.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/proof.test.mjs
 
-      - name: Install scoped pinned proof dependencies (no lifecycle scripts)
+      - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
         run: |
           set -euo pipefail
-          npm install --prefix pod-provider/backend/candidates/atproto-signed-repo-proof \
-            --ignore-scripts --no-audit --no-fund --save-exact
-
-      - name: Persist generated lockfile for reviewed reproducibility
-        uses: actions/upload-artifact@v4
-        with:
-          name: atproto-signed-repo-proof-package-lock
-          path: pod-provider/backend/candidates/atproto-signed-repo-proof/package-lock.json
-          if-no-files-found: error
-          retention-days: 7
+          npm ci --prefix pod-provider/backend/candidates/atproto-signed-repo-proof \
+            --ignore-scripts --no-audit --no-fund
 
       - name: Check for high/critical dependency advisories
         shell: bash

@@ -11,6 +11,8 @@ import crypto from 'node:crypto';
 const PURPOSE = 'paper.atproto.pod-projection.v1';
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const FENCE = /^[1-9][0-9]{0,18}$/u;
+const CID = /^bafyre[a-z2-7]{53}$/u;
+const TID = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/u;
 function deny() {
   const e = new Error('Missing or invalid provider RDF operation authority');
   e.code = 'POD_PROJECTION_PROVIDER_UNAUTHORIZED';
@@ -30,14 +32,17 @@ function hmac(secret, body) {
 export function createPodOperationTicketAuthority({ secret, now = Date.now } = {}) {
   const key = Buffer.isBuffer(secret) ? secret : Buffer.from(secret || '', 'utf8');
   if (key.byteLength < 32) deny();
-  function normalizeScope({ accountId, did, appUri, grantUri, epoch, operation }) {
+  function normalizeScope({ accountId, did, appUri, grantUri, epoch, operation, rootCid = null, rev = null }) {
     safeUrl(accountId);
     safeUrl(appUri);
     safeUrl(grantUri);
     if (!['bootstrap', 'project', 'revoke'].includes(operation) ||
         !DID.test(did || '') || typeof epoch !== 'string' ||
         !FENCE.test(epoch) || BigInt(epoch) > 9223372036854775807n) deny();
-    return { accountId, did, appUri, grantUri, epoch, operation };
+    if (operation === 'project') {
+      if (!CID.test(rootCid || '') || !TID.test(rev || '')) deny();
+    } else if (rootCid !== null || rev !== null) deny();
+    return { accountId, did, appUri, grantUri, epoch, operation, rootCid, rev };
   }
   function issue(scope) {
     const fields = normalizeScope(scope);

@@ -64,8 +64,9 @@ function harness({ store, keys = createKeys() } = {}) {
     resolveCommitKey: async () => ({
       did, keyId: did + '#atproto', publicKeyMultibase: keys.publicKeyMultibase
     }),
-    resolveHandleDid: async () => resolvedDid,
-    resolveDidDocument: async () => doc(),
+    resolveDelegatedIdentity: async () => ({
+      resolvedHandleDid: resolvedDid, didDocument: doc()
+    }),
     signCommit: async (_accountId, _did, _rev, encoded) => {
       signCount += 1;
       if (!signEnabled) throw new Error('Provider signer unavailable');

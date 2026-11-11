@@ -1,0 +1,33 @@
+name: ATProto production repository readiness — fail closed
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/atproto-repo-ready-gate.yml'
+      - 'pod-provider/backend/services/core/atproto-provisioning.js'
+      - 'pod-provider/backend/utils/atproto-repo-proof-policy.js'
+      - 'pod-provider/backend/tests/atproto-repo-proof-gate-node.test.cjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate production readiness boundary without external dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/services/core/atproto-provisioning.js
+          node --check pod-provider/backend/utils/atproto-repo-proof-policy.js
+          node --check pod-provider/backend/tests/atproto-repo-proof-gate-node.test.cjs
+          node --test pod-provider/backend/tests/atproto-repo-proof-gate-node.test.cjs

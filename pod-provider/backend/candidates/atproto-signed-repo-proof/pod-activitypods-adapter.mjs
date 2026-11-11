@@ -330,7 +330,11 @@ export function createPodActivityPodsProjection({
     if (active.status !== 'active' || active.revision !== epoch) {
       deny('POD_CONSENT_NOT_ACTIVE', 'Revoked grant cannot imply repository readiness');
     }
-    return Object.freeze({ ready: true, accountId, did, epoch });
+    // RDF+SAI acceptance is not repository readiness: the PG18 saga must
+    // also independently verify the signed CAR/MST/DID key, native outbox
+    // and durable recovered lease at the exact head. Do not expose a
+    // misleading ready:true result from this independent adapter.
+    return Object.freeze({ projectionVerified: true, accountId, did, epoch });
   }
   return Object.freeze({ locate, bootstrapConsent, project, revoke, check });
 }

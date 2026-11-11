@@ -11,8 +11,13 @@ const IDENTITY_PROTOCOLS = Object.freeze({
   atproto: true
 });
 function hasExplicitDisable(input) {
-  return ['solid','activitypub','atproto'].some(
-    kind => input?.[kind] === false || input?.[kind]?.enabled === false
+  // The internal service may be called directly, bypassing the HTTP adapter's
+  // normalization. Enforce the same opt-out restriction on either shape.
+  return ['solid', 'activitypub', 'atproto'].some(kind =>
+    input?.[kind] === false ||
+    input?.[kind]?.enabled === false ||
+    input?.protocols?.[kind] === false ||
+    input?.protocols?.[kind]?.enabled === false
   );
 }
 function assertUnifiedRequest(input) {

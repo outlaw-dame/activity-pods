@@ -67,7 +67,9 @@ async function sparql(kind, query, dataset = 'alice') {
 const val = (row, key) => row?.[key]?.value || null;
 const iri = value => '<' + value + '>';
 const validCredentials = {
-  iss: origin + '/', aud: appUri, azp: appUri, webid: accountId,
+  iss: origin + '/', sub: 'fixture-owner-account',
+  aud: [appUri, 'solid'], azp: appUri, webid: accountId,
+  cnf: { jkt: 'A'.repeat(43) },
   iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000) + 600
 };
 let failOidc = false, failGrant = false, forgedLocation = false;

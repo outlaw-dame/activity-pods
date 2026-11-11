@@ -53,6 +53,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-authority.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/projection-recovery.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/projection-recovery.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
@@ -87,3 +89,63 @@ jobs:
           export ATPROTO_REFERENCE_REPO_ENTRY="$RUNNER_TEMP/atproto-reference/node_modules/@atproto/repo/dist/index.js"
           test -f "$ATPROTO_REFERENCE_REPO_ENTRY"
           node pod-provider/backend/candidates/atproto-signed-repo-proof/reference-interop.mjs
+
+
+  real-fuseki-rdf-projection-fence:
+    name: Real Jena TDB2 fenced RDF CAS + durable restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - name: Checkout candidate proof
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run disposable Fuseki TDB2
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test
+          mkdir -p data/fuseki_test
+          docker compose -f docker-compose-test.yml up -d fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Prove real Jena conditional write, stale-fence rejection and contention
+        env:
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs prepare
+
+      - name: Restart persistent Fuseki TDB2
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml restart fuseki_test
+          FUSEKI_URL=http://127.0.0.1:3040 WAIT_SECONDS=120 ./scripts/fuseki-bootstrap.sh
+
+      - name: Verify fenced RDF projection persisted over restart
+        env:
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs verify
+
+      - name: Fuseki diagnostics
+        if: failure()
+        run: docker compose -f docker-compose-test.yml logs --no-color --tail=160 fuseki_test
+
+      - name: Destroy disposable RDF dataset
+        if: always()
+        run: |
+          docker compose -f docker-compose-test.yml down -v || true
+          sudo rm -rf data/fuseki_test

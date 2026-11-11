@@ -502,7 +502,7 @@ module.exports = {
                        a ${INDEX_TYPE} ;
                        apods:canonicalAccountId ?canonicalAccountId .
             }
-            LIMIT 1
+            LIMIT 2
           `,
           dataset: 'settings',
           webId: 'system'
@@ -517,7 +517,21 @@ module.exports = {
         throw new MoleculerError('Identity binding index unavailable', 503, 'IDENTITY_BINDING_INDEX_UNAVAILABLE');
       }
 
-      const canonicalAccountId = this._readQueryBinding(rows?.[0], 'canonicalAccountId');
+      if (!Array.isArray(rows) || rows.length > 2) {
+        throw new MoleculerError('Malformed identity lookup index result', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
+      // DID and handle must be globally unique. LIMIT 1 silently selected an
+      // arbitrary person if two stale/malicious index entries claimed it.
+      if (rows.length > 1) {
+        throw new MoleculerError('Ambiguous identity index ownership', 409,
+          'IDENTITY_BINDING_INDEX_COLLISION');
+      }
+      const canonicalAccountId = this._readQueryBinding(rows[0], 'canonicalAccountId');
+      if (rows.length === 1 && !canonicalAccountId) {
+        throw new MoleculerError('Malformed identity lookup index identity', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
       if (!canonicalAccountId) return null;
 
       // The LDP binding is authoritative. Do not downgrade an infrastructure or

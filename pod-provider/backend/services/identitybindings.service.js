@@ -702,16 +702,18 @@ ${insertBody}
       // An index corruption or duplicate optional values must NOT silently
       // expand an unbounded fallback over every user's Pod.
       if (!Array.isArray(rows) || rows.length > safeLimit + 1 ||
-          rows.some(b => !b.canonicalAccountId || !b.updatedAt)) {
+          rows.some(b => !b.canonicalAccountId || !b.updatedAt) ||
+          new Set(rows.map(b => b.canonicalAccountId)).size !== rows.length) {
         throw new MoleculerError('Identity binding index contains inconsistent results', 503,
           'IDENTITY_BINDING_INDEX_INCONSISTENT');
       }
+      const hasNextPage = rows.length > safeLimit;
       const items = rows.slice(0, safeLimit);
       const last = items[items.length - 1];
 
       return {
         items,
-        nextCursor: last ? this._encodeCursor(last) : since || null
+        nextCursor: hasNextPage && last ? this._encodeCursor(last) : null
       };
     }
   }

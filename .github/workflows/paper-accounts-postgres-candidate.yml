@@ -1,0 +1,56 @@
+name: Paper Accounts — PostgreSQL Lifecycle Candidate
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
+      - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
+      - 'pod-provider/backend/scripts/proof-postgres-account-lifecycle.js'
+      - '.github/workflows/paper-accounts-postgres-candidate.yml'
+      - 'docs/activitypods-postgres-account-lifecycle-candidate.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  account-postgres-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - name: Check implementation and proof syntax
+        run: |
+          node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
+          node --check pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
+      - name: Install isolated PostgreSQL client for disposable proof
+        run: |
+          mkdir -p /tmp/paper-accounts-pg
+          npm install --prefix /tmp/paper-accounts-pg --ignore-scripts --no-audit --no-fund --no-save pg@8.16.3
+      - name: Start disposable PostgreSQL 18
+        run: |
+          docker run -d --rm --name paper-accounts-pg18 \
+            -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=bench \
+            -e POSTGRES_DB=paper_accounts_test \
+            -p 127.0.0.1:5547:5432 postgres:18
+          for i in $(seq 1 60); do
+            if docker exec paper-accounts-pg18 pg_isready -U postgres -d paper_accounts_test >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs paper-accounts-pg18
+          exit 1
+      - name: Run real PostgreSQL 18 account lifecycle acceptance
+        env:
+          NODE_PATH: /tmp/paper-accounts-pg/node_modules
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
+          PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
+        run: node pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
+      - name: Print bounded database diagnostics on failure
+        if: failure()
+        run: docker logs --tail 60 paper-accounts-pg18 || true
+      - name: Remove disposable database
+        if: always()
+        run: docker rm -f paper-accounts-pg18 || true

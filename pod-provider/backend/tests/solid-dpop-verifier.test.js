@@ -1,6 +1,12 @@
 const crypto = require('node:crypto');
 const { generateKeyPair, exportJWK, calculateJwkThumbprint, SignJWT } = require('jose');
 const { verifySolidDpop } = require('../utils/solid-dpop-verifier');
+// The token middleware is tested directly, outside a running provider.
+jest.mock('../config/config', () => ({
+  BASE_URL: 'https://paper.example.org/',
+  FRONTEND_URL: 'https://paper.example.org',
+  REDIS_OIDC_PROVIDER_URL: 'redis://127.0.0.1:6379'
+}));
 const solidOidcService = require('../services/solid/solid-oidc');
 
 const issuer = 'https://paper.example.org/';

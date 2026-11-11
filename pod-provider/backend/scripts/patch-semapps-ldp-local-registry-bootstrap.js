@@ -187,13 +187,16 @@ function patchControlledContainerSource(source) {
 
 const REGISTERED_CONTAINERS_MARKER = 'ADSP_P2_REGISTERED_CONTAINERS_RETRY';
 function patchRegisteredContainers(source) {
-  const needle = '            } catch (error) {\n              // pass\n            }';
+  // npm package builds may remove comment text or normalize whitespace.
+  // Identify the one handler-local catch, never a generic catch elsewhere.
+  const anchor = source.indexOf('Trying to register container');
+  const pattern = /}\s*catch\s*\(\s*error\s*\)\s*{\s*(?:\/\/\s*pass\s*)?}/gu;
+  const matches = anchor < 0 ? [] : [...source.slice(anchor).matchAll(pattern)];
   if (source.includes(REGISTERED_CONTAINERS_MARKER)) {
     if (!source.includes('for (const pauseMs of [60, 180, 540])')) throw new Error('Incomplete registered-container patch');
     return { source, changed: false };
   }
-  if (source.split(needle).length !== 2 ||
-      !source.includes("this.logger.info('Trying to register container', options.path)")) {
+  if (matches.length !== 1 || !source.includes("ctx.call('ldp.container.createAndAttach'")) {
     throw new Error('Pinned SemApps LDP registry contract changed');
   }
   const replacement = [
@@ -219,7 +222,10 @@ function patchRegisteredContainers(source) {
     '              }',
     '            }'
   ].join('\n');
-  return { source: source.replace(needle, replacement), changed: true };
+  const match = matches[0];
+  const pos = anchor + match.index;
+  const patchSource = source.slice(0, pos) + replacement + source.slice(pos + match[0].length);
+  return { source: patchSource, changed: true };
 }
 
 function applyPatch() {

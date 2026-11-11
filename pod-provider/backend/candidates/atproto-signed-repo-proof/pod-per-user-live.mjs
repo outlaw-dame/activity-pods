@@ -86,6 +86,9 @@ async function call(name, params) {
   if (name === 'data-grants.getContainerUri') return storageRoot + 'data-grants/';
   if (name === 'jwk.verifyToken') {
     assert.equal(params.token, 'synthetic-verified-local-jwk-fixture');
+    if (failOidc === 'app-only') return { ...validCredentials, aud: appUri };
+    if (failOidc === 'missing-solid') return { ...validCredentials, aud: [appUri, 'unrelated'] };
+    if (failOidc === 'missing-dpop') return { ...validCredentials, cnf: undefined };
     return failOidc ? { ...validCredentials, aud: origin + '/evil' } : validCredentials;
   }
   if (name === 'access-grants.get') {
@@ -238,6 +241,13 @@ async function prepare() {
     adapter.bootstrapConsent({ ...base, ticket: ticket('bootstrap'), oidcToken }),
     e => e.code === 'POD_PROJECTION_OIDC_INVALID'
   );
+  for (const invalidTokenShape of ['app-only', 'missing-solid', 'missing-dpop']) {
+    failOidc = invalidTokenShape;
+    await assert.rejects(
+      adapter.bootstrapConsent({ ...base, ticket: ticket('bootstrap'), oidcToken }),
+      e => e.code === 'POD_PROJECTION_OIDC_INVALID'
+    );
+  }
   failOidc = false;
   failGrant = true;
   await assert.rejects(

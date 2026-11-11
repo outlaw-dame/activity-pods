@@ -122,13 +122,6 @@ test('provider-authorized bridge: actual PG18 signed repo, identity drift and du
       h.setHandleDid(did);
       h.setPlcKey(createKeys().publicKeyMultibase);
       await assert.rejects(h.authority.bootstrapAndVerify(h.input), e => e.code === 'MANAGED_REPO_PLC_KEY_MISMATCH');
-      h.setPlcKey((await (async () => {
-        // Correct fixture key is recovered from our trusted signing public key,
-        // NOT from the rejected attacker document.
-        const k = await h.authority.inspectRecovery(h.input).catch(() => null);
-        return k;
-      })())?.publicKeyMultibase || 'INVALID');
-      // Restore clean fixture by using a fresh harness sharing the store.
       assert.equal(h.signatures(), 0);
       const rows = await pool.query('SELECT count(*)::int AS n FROM paper_atproto_repo_proof.repos');
       assert.equal(rows.rows[0].n, 0);

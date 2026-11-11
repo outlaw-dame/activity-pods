@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { Pool } from 'pg';
 import * as dagCbor from '@ipld/dag-cbor';
 import {
-  assertManagedDid, assertTid, makeTid,
+  assertManagedDid, assertTid, makeTid, normalizeK256LowS,
   buildSignedEmptyRepo, verifySignedEmptyRepo
 } from './genesis.mjs';
 import { createSignedRepoProofStore } from './store.mjs';
@@ -54,6 +54,21 @@ test('PG18 signed v3 empty repository proof — trusted signing, atomic DB, reco
       assert.equal(prev.length, 13);
       assert.equal(next.length, 13);
       assert(prev < next, 'monotonic TID ordering');
+    });
+
+    await t.test('mandatory canonical low-S on all signed commits', async () => {
+      const n = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141');
+      const highS = n - 1n;
+      const signature = Buffer.concat([
+        Buffer.from('01'.padStart(64, '0'), 'hex'),
+        Buffer.from(highS.toString(16).padStart(64, '0'), 'hex')
+      ]);
+      const normalized = normalizeK256LowS(signature);
+      assert.equal(normalized.length, 64);
+      assert.equal(normalized.subarray(32).toString('hex'), '01'.padStart(64, '0'));
+      assert.deepEqual(normalizeK256LowS(normalized), normalized);
+      assert.throws(() => normalizeK256LowS(Buffer.alloc(64)));
+      assert.throws(() => normalizeK256LowS(Buffer.alloc(63)));
     });
 
     await t.test('actual signed CAR has 2 complete CID-verifiable blocks', async () => {

@@ -1,5 +1,9 @@
 const { TripleStoreService } = require('@semapps/triplestore');
 const CONFIG = require('../../config/config');
+const { assertNativeProtectedStorageReleased } = require('../utils/atproto-production-release-gate');
+
+// Verify the release boundary before the generic RDF update service exists.
+assertNativeProtectedStorageReleased();
 
 module.exports = {
   // Don't specify name/dependencies - the mixin provides them

@@ -125,6 +125,10 @@ async function main(){
   applied=true;
   try{
     await ledger.verifySchema();
+    // Capture exact WAL LSN progression for this short isolated test.
+    // It includes server housekeeping, so it is a measured upper-bound
+    // context, not a pure per-notification WAL byte count.
+    const walStart = await pool.query('SELECT pg_current_wal_lsn()::text AS lsn');
     const start=now();
     for(let wave=0;wave<WAVES;wave++){
       let next=wave*INTENTS_PER_WAVE;
@@ -159,6 +163,12 @@ async function main(){
     await drainRemaining();
     const drainMs=now()-drainStart;
     const final=await stateCounts();
+    const walFinish=await pool.query(
+      'SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),$1::pg_lsn)::text AS bytes',
+      [walStart.rows[0].lsn]
+    );
+    const observedWalBytes=Number(walFinish.rows[0].bytes);
+    assert(Number.isFinite(observedWalBytes) && observedWalBytes >= 0);
     assert.equal(final.delivered,TOTAL);
     assert.equal(final.pending||0,0);
     assert.equal(final.leased||0,0);
@@ -207,10 +217,12 @@ async function main(){
       measuredPostGcRssDeltaBytes:rss.at(-1).rssBytes-rss[0].rssBytes,
       measuredPostGcHeapDeltaBytes:rss.at(-1).heapUsedBytes-rss[0].heapUsedBytes,
       relationBytes:bytes,totalRelationBytes:totalDbBytes,
+      observedWalLsnBytes:observedWalBytes,
+      observedWalBytesPerRecipient:Number((observedWalBytes/TOTAL).toFixed(2)),
       illustrativeBytesPerRecipient:Number((totalDbBytes/TOTAL).toFixed(2)),
       illustrativeDecimalGbAtMillionRecipients:Number(
         (totalDbBytes/TOTAL*1e6/1e9).toFixed(4)),
-      costScope:'relation-size extrapolation only: excludes WAL, replicas, backups, CPU, egress, vacuum and provider prices',
+      costScope:'Measured primary relation/index size plus observed WAL-LSN growth, not retained WAL size; excludes replicas, backups, CPU, egress, vacuum, provider prices',
       limits:'Single GitHub Actions runner and PG18 container; no deployed end-to-end webhooks, push/WebSocket latency, memory-leak proof or production costs'
     };
     console.log(JSON.stringify(report));

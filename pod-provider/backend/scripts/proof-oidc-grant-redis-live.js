@@ -57,8 +57,21 @@ async function main() {
   assert.equal(await redis.llen('grant:' + grantId), MAX_GRANT_TOKENS);
   assert((await redis.ttl('grant:' + grantId)) > 0);
 
+  // oidc-provider can upsert an existing token when its metadata changes.
+  // Reusing the same ID must not add another revocation pointer or use up
+  // more of the fixed per-grant quota.
+  await adapter.upsert('token-1', { ...basePayload, serial: 1234 }, 1800);
+  assert.equal(await redis.llen('grant:' + grantId), MAX_GRANT_TOKENS);
+  await assert.rejects(
+    adapter.upsert('token-1', {
+      ...basePayload, grantId: 'different-grant', serial: 99
+    }, 1800),
+    e => e.code === 'OIDC_GRANT_TOKEN_ID_CONFLICT'
+  );
+  assert.equal(await redis.llen('grant:' + grantId), MAX_GRANT_TOKENS);
   const active = await adapter.find('token-1');
   assert.equal(active.grantId, grantId);
+  assert.equal(active.serial, 1234);
   await adapter.revokeByGrantId(grantId);
   assert.equal(await redis.llen('grant:' + grantId), 0);
   assert.equal(await adapter.find('token-1'), undefined);

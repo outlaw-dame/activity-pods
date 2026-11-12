@@ -127,3 +127,40 @@ Further safety concerns:
 - A bounded lease and monotone RDF epoch protect *completed* projections against stale writers; a lease expiry cannot interrupt an already in-flight RDF request. The PG ACK must therefore remain fenced and readiness must recheck current evidence. Before activation, evaluate cancellation and stale-grant protection at the **RDF mutation boundary**, not only before issuing it.
 - Pending jobs whose attempt count has already reached the policy limit are now transitioned to a terminal 'blocked' status. An attempt-exhausted pending row must never produce an infinite 'busy' response.
 - The failure history must be distinguished from current CI: earlier intermediate work had a missing 'resolveDelegatedIdentity' injection and an isolated PG connection exhaustion; their later exact-head workflows passed. Only cite the current head's checks as an acceptance result.
+
+
+## Per-user ActivityPods Solid-OIDC/SAI atomic projection acceptance (stacked draft #144)
+
+This candidate does NOT register a production repository writer. It requires fixtureOnly:true, ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE=confirmed and nonproduction context. It establishes an integration boundary, NOT live Solid-OIDC/SAI approval.
+
+### Actual ActivityPods routing (not settings-index authority)
+
+pod-activitypods-adapter.mjs resolves a canonical account using a bounded SELECT from the SemApps settings AuthAccount type (LIMIT 2, rejecting duplicate WebID owners), then uses solid-storage.getUrl and identitybindings.getContainerUri; verifies the existing per-user Jena dataset matches the account username and constructs the existing per-WebID binding URI (atproto- + first 24 lowercase SHA256 hex digits of canonical WebID). User-selected datasets, cross-Pod URLs and unrelated origins are rejected. The global settings index is only lookup data, never canonical identity authority.
+
+pod-per-user-live.mjs creates an actual persistent username-named TDB2 dataset, inserts LDP-shaped binding and exact SAI AccessGrant/DataGrant RDF, tests atomically guarded projection, monotone deny-first revocation, durable read-back after Fuseki restart, and real Jena parsing of the bounded keyset pagination query. The real Moleculer action names are dispatched through test doubles, and the OIDC verification action returns a synthetic test claim. This is NOT yet an end-to-end deployed SemApps / Solid-OIDC test.
+
+### Authorization chain
+
+1. Provider-only 30-second SHA256 HMAC operation tickets bind the canonical WebID, DID, app URI, access grant URI, consent epoch and operation; project tickets also bind signed root CID and repo revision. The issuer remains private trusted provider code. No generic API action, inherited ctx.meta or caller-supplied provisioning grant can mint it.
+2. Existing jwk.verifyToken validates JWT cryptographic authenticity and expiry; the adapter additionally enforces exact issuer, subject, audience, authorized party, recent issuance and nonexpiry. The current provider issues long-lived ID tokens: an unexpired token alone is not proof of current consent. Real session revocation and client-ID-to-SAI-app mapping remain release blockers.
+3. Exact owner-scoped access-grants.get and data-grants.get reads compare WebID, app, configured managed-repository SAI shape and write rights. No grants list, auth.account population, account-wide scan or per-Pod fanout is permitted on the hot path.
+4. The repository SPARQL CAS and active same-epoch consent condition share a single per-Pod Jena update transaction. Deny-first revocation atomically changes status to blocked and increments the consent epoch in the same dataset. A stale epoch cannot create a newly accepted projection after the revoke transaction.
+5. A SPARQL HTTP 2xx does not imply that the guarded WHERE matched: post-write projection verification re-reads the protected LDP binding (including strict canonical positive integer fence), active consent, current SAI grant and verified OIDC claims. A revoked grant must cause projection verification to fail even if previously committed CID triples remain in RDF. The adapter never returns ready:true: repository readiness additionally requires the separately proven PG18 signed CAR/MST/DID key, outbox and durable ACK at the identical head.
+
+### Unreleased, critical acceptance blockers
+
+- Full SAI pre-mutation hook coverage is NOT wired. access-authorizations, data-authorizations, access-grants, data-grants and app-registrations delete/upgrade/rollback paths can change rights. Before deploying, every relevant mutation must persist deny-first blocked consent BEFORE changing the SAI authorization; account for crashes and idempotent retries. The isolated adapter revoke() is an atomic primitive, not full provider lifecycle integration.
+- The signer/PG issuance side is not yet linked end-to-end: privileged provider code must verify the canonical DID key, CAR/MST signature, CID blocks, immutable PostgreSQL native outbox and recovery lease and then issue the exact root/revision operation ticket. The current CI exercises these components in separate fixtures.
+- Graph selection, real JSON-LD serialization/context, SemApps LDP caching/registry and per-Pod resource targeting must be verified against the installed provider versions. Test four real process replicas with SIGKILL/partition, lease expiration, grant revocation and real signed Solid-OIDC tokens. The real Fuseki fixture uses synthetic Moleculer dispatch, not a deployed SemApps runtime.
+- OIDC OAuth client IDs may differ from SAI app agent URIs. The candidate requires equality and fails closed until a trusted, auditable mapping is provided. Never relax this using arbitrary caller parameters.
+- Atomic consent gating only prevents grant-race writes if ALL grant mutations fence the permission ledger first. Post-write rechecking can withhold readiness but cannot make unauthorized earlier writes disappear.
+- A separate reviewed production migration, least-privilege PG/Jena roles, outbox delivery, signature/key rotation, metrics and zero-downtime rollback must precede activation.
+
+### Scaling contract
+
+Each repository operation is restricted to one max-two-row canonical account SELECT, a fixed number of exact SAI grant reads, one Pod-specific Jena CAS, and bounded readbacks (each Moleculer call has a 5-second budget). No unbounded Pod enumeration, auth.account.find population sweep, all-graph scan, N+1 cross-Pod calls or PostgreSQL lease held during network I/O is permitted. Measure P50/P95/P99, Jena/PG connection budgets and latency under multi-replica workloads before enabling an API. The settings binding index now uses server-side keyset pagination, but bulk exports still need an explicit snapshot-consistency plan.
+
+
+### Upstream SemApps/Moleculer scaling risk avoided
+
+Source inspection of SemApps auth account (src/middleware/packages/auth/services/account.ts) and TripleStoreAdapter (src/middleware/packages/triplestore/adapter.ts) found auth.account.findByWebId invokes an unbounded CONSTRUCT query and frames the result as JSON-LD without SPARQL LIMIT. Work can expand under duplicate WebID claims, account schema growth or settings corruption. This candidate instead issues exactly one predicate-constrained SELECT ?account ?username LIMIT 2 against the real semapps:AuthAccount, semapps:webId and semapps:username settings model, and rejects zero/two owners, malformed account URNs and invalid dataset usernames. Production must verify this exact RDF serialization against the installed SemApps dependency version. An ontology change must fail closed rather than trigger account enumeration; existing public account APIs are unchanged.

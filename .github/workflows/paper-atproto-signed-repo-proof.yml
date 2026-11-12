@@ -7,6 +7,12 @@ on:
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
   workflow_dispatch:
 
+# Never accumulate an unbounded queue of expensive PG/Jena and backend builds
+# for superseded commits on the same PR. Other PRs stay isolated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -56,6 +62,12 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-fence-proof.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-account-lookup.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-account-lookup.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-consent-fence.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-operation-ticket.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-activitypods-adapter.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
@@ -156,6 +168,14 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs prepare
 
+      - name: Prove real per-user Pod Jena consent and grant-fenced write
+        env:
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs prepare
+
       - name: Restart persistent Fuseki TDB2
         run: |
           set -euo pipefail
@@ -179,6 +199,14 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/cross-store-live.mjs verify
+
+      - name: Verify per-user grant/revocation durability after Fuseki restart
+        env:
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs verify
 
       - name: Fuseki diagnostics
         if: failure()

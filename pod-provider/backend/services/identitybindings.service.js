@@ -26,6 +26,7 @@ const PREDICATES = {
   repoInitialized: `${APODS}repoInitialized`,
   repoRootCid: `${APODS}repoRootCid`,
   repoRev: `${APODS}repoRev`,
+  repoProjectionFence: `${APODS}repoProjectionFence`,
   createdAt: `${APODS}createdAt`,
   updatedAt: `${APODS}updatedAt`
 };
@@ -386,9 +387,54 @@ module.exports = {
         repoInitialized: this._coerceBoolean(get('repoInitialized')) ?? false,
         repoRootCid: get('repoRootCid') || null,
         repoRev: get('repoRev') || null,
+        repoProjectionFence: this._readCanonicalRepoFence(resource),
         createdAt: get('createdAt') || null,
         updatedAt: get('updatedAt') || null
       };
+    },
+
+    /**
+     * Reject duplicate, noncanonical or malformed RDF fence terms. Returning
+     * an arbitrary first array member would let a stale/hostile graph appear
+     * ready. The canonical LDP resource, never the settings index, is read.
+     */
+    _readCanonicalRepoFence(resource) {
+      if (!resource || typeof resource !== 'object') return null;
+      const keys = [
+        'repoProjectionFence',
+        'apods:repoProjectionFence',
+        PREDICATES.repoProjectionFence
+      ].filter(key => Object.prototype.hasOwnProperty.call(resource, key));
+      if (keys.length === 0) return null;
+      if (keys.length !== 1) {
+        throw new MoleculerError('Ambiguous RDF repository projection epoch', 409,
+          'IDENTITY_BINDING_FENCE_INCONSISTENT');
+      }
+      let value = resource[keys[0]];
+      if (Array.isArray(value)) {
+        if (value.length !== 1) {
+          throw new MoleculerError('Duplicate RDF projection epochs', 409,
+            'IDENTITY_BINDING_FENCE_INCONSISTENT');
+        }
+        value = value[0];
+      }
+      if (value && typeof value === 'object') {
+        const declaredType = value['@type'] || value.type;
+        if (declaredType && !['http://www.w3.org/2001/XMLSchema#integer',
+          'http://www.w3.org/2001/XMLSchema#long', 'xsd:integer', 'xsd:long'].includes(declaredType)) {
+          throw new MoleculerError('Unsupported RDF projection epoch datatype', 409,
+            'IDENTITY_BINDING_FENCE_INCONSISTENT');
+        }
+        value = value['@value'] ?? value.value;
+      }
+      const epoch = typeof value === 'number' && Number.isSafeInteger(value)
+        ? String(value) : value;
+      if (typeof epoch !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(epoch) ||
+          BigInt(epoch) > 9223372036854775807n) {
+        throw new MoleculerError('Invalid RDF repository projection epoch', 409,
+          'IDENTITY_BINDING_FENCE_INCONSISTENT');
+      }
+      return epoch;
     },
 
     _readField(resource, key) {
@@ -456,7 +502,7 @@ module.exports = {
                        a ${INDEX_TYPE} ;
                        apods:canonicalAccountId ?canonicalAccountId .
             }
-            LIMIT 1
+            LIMIT 2
           `,
           dataset: 'settings',
           webId: 'system'
@@ -471,7 +517,21 @@ module.exports = {
         throw new MoleculerError('Identity binding index unavailable', 503, 'IDENTITY_BINDING_INDEX_UNAVAILABLE');
       }
 
-      const canonicalAccountId = this._readQueryBinding(rows?.[0], 'canonicalAccountId');
+      if (!Array.isArray(rows) || rows.length > 2) {
+        throw new MoleculerError('Malformed identity lookup index result', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
+      // DID and handle must be globally unique. LIMIT 1 silently selected an
+      // arbitrary person if two stale/malicious index entries claimed it.
+      if (rows.length > 1) {
+        throw new MoleculerError('Ambiguous identity index ownership', 409,
+          'IDENTITY_BINDING_INDEX_COLLISION');
+      }
+      const canonicalAccountId = this._readQueryBinding(rows[0], 'canonicalAccountId');
+      if (rows.length === 1 && !canonicalAccountId) {
+        throw new MoleculerError('Malformed identity lookup index identity', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
       if (!canonicalAccountId) return null;
 
       // The LDP binding is authoritative. Do not downgrade an infrastructure or
@@ -656,16 +716,18 @@ ${insertBody}
       // An index corruption or duplicate optional values must NOT silently
       // expand an unbounded fallback over every user's Pod.
       if (!Array.isArray(rows) || rows.length > safeLimit + 1 ||
-          rows.some(b => !b.canonicalAccountId || !b.updatedAt)) {
+          rows.some(b => !b.canonicalAccountId || !b.updatedAt) ||
+          new Set(rows.map(b => b.canonicalAccountId)).size !== rows.length) {
         throw new MoleculerError('Identity binding index contains inconsistent results', 503,
           'IDENTITY_BINDING_INDEX_INCONSISTENT');
       }
+      const hasNextPage = rows.length > safeLimit;
       const items = rows.slice(0, safeLimit);
       const last = items[items.length - 1];
 
       return {
         items,
-        nextCursor: last ? this._encodeCursor(last) : since || null
+        nextCursor: hasNextPage && last ? this._encodeCursor(last) : null
       };
     }
   }

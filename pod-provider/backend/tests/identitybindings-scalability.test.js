@@ -97,7 +97,7 @@ describe('identitybindings SPARQL/LDP scalability', () => {
     const typeCheck = query.indexOf('a apods:AtprotoIdentityBindingIndex');
     expect(selective).toBeGreaterThan(-1);
     expect(typeCheck).toBeGreaterThan(selective);
-    expect(query).toContain('LIMIT 1');
+    expect(query).toContain('LIMIT 2');
     expect(query).not.toContain('ORDER BY');
     expect(query).not.toContain('OPTIONAL');
     expect(ctx.call).toHaveBeenCalledTimes(2);

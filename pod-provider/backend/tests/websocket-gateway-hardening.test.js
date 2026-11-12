@@ -121,6 +121,26 @@ test('stops buffering outgoing events for stalled WebSocket clients',async()=>{
   expect(gateway.connections.size).toBe(0);
   gateway.wss.close();
 });
+test('rejects a single oversized outgoing frame before allocating the send buffer',async()=>{
+  const gateway=setup();
+  const ws=fakeWs();
+  const {connection}=await connect(gateway,ws);
+  connection.send(Buffer.alloc(256*1024+1));
+  expect(ws.send).not.toHaveBeenCalled();
+  expect(ws.close).toHaveBeenCalledWith(1009,'Message too large');
+  expect(gateway.connections.size).toBe(0);
+  gateway.wss.close();
+});
+test('rejects a send that would push an otherwise healthy socket over its queue cap',async()=>{
+  const gateway=setup();
+  const ws=fakeWs();
+  const {connection}=await connect(gateway,ws);
+  ws.bufferedAmount=1024*1024-100;
+  connection.send(Buffer.alloc(101));
+  expect(ws.send).not.toHaveBeenCalled();
+  expect(ws.close).toHaveBeenCalledWith(1013,'Slow client');
+  gateway.wss.close();
+});
 test('caps async inbound message processing instead of accumulating unbounded work',async()=>{
   const gateway=setup();
   const ws=fakeWs();

@@ -59,3 +59,23 @@ test('new canonical PostgreSQL authority cannot bypass the release fuse or nativ
     APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'true'
   })).not.toThrow();
 });
+
+test('distributed SAI owner authorization requires native gate and disposable test provider', () => {
+  const { assertNativeProtectedStorageReleased } =
+    require('../services/utils/atproto-production-release-gate');
+  expect(() => assertNativeProtectedStorageReleased({
+    NODE_ENV:'production',
+    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'true',
+    APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED:'true'
+  })).toThrow(/not released/);
+  expect(() => assertNativeProtectedStorageReleased({
+    NODE_ENV:'test',APODS_ATPROTO_TEST_STORAGE_DISPOSABLE:'confirmed',
+    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'false',
+    APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED:'true'
+  })).toThrow(/requires native SAI authorization/);
+  expect(() => assertNativeProtectedStorageReleased({
+    NODE_ENV:'test',APODS_ATPROTO_TEST_STORAGE_DISPOSABLE:'confirmed',
+    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'true',
+    APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED:'true'
+  })).not.toThrow();
+});

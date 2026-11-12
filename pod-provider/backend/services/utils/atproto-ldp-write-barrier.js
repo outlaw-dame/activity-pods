@@ -2,100 +2,109 @@
 
 const { MoleculerError } = require('moleculer').Errors;
 
-/**
- * This is a deliberate compatibility gate, not the final repository writer.
- * Once native consent enforcement is enabled, generic SemApps LDP actions
- * may no longer replace or delete managed identity bindings. The signed
- * repository writer uses an exact conditional Jena update instead.
- *
- * Generic triplestore.update/insert and privileged Fuseki credentials remain
- * separate bypass paths. Production cutover requires a storage-level policy
- * that covers those paths too.
- */
-function protectedPath(uri, baseUrl) {
-  if (typeof uri !== 'string' || typeof baseUrl !== 'string' ||
-      uri.length > 4096 || baseUrl.length > 2048) return false;
-  let target, base;
-  try {
-    target = new URL(uri);
-    base = new URL(baseUrl);
-  } catch {
-    return false;
-  }
-  const loopback = base.protocol === 'http:' &&
-    ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
-  if ((base.protocol !== 'https:' && !loopback) ||
-      target.protocol !== base.protocol ||
-      target.origin !== base.origin ||
-      target.username || target.password) return false;
+// Only one parsed provider origin is retained per process. Normal LDP writes
+// return before reaching this cache when repository fencing is disabled.
+let cachedBaseUrl;
+let cachedBase;
 
-  const root = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
-  if (!target.pathname.startsWith(root)) return false;
-  // URL parsing normalizes ./ and ../. Decode each segment so percent
-  // encoding cannot disguise the protected container name.
-  let segments;
+function providerBase(baseUrl) {
+  if (baseUrl === cachedBaseUrl) return cachedBase;
+  let parsed;
   try {
-    segments = target.pathname.slice(root.length)
-      .split('/').map(segment => decodeURIComponent(segment));
+    if (typeof baseUrl === 'string' && baseUrl.length <= 2048) {
+      const u = new URL(baseUrl);
+      const loopback = u.protocol === 'http:' &&
+        ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+      if ((u.protocol === 'https:' || loopback) &&
+          !u.username && !u.password && !u.search && !u.hash) {
+        parsed = Object.freeze({
+          origin: u.origin,
+          protocol: u.protocol,
+          path: u.pathname.endsWith('/') ? u.pathname : u.pathname + '/'
+        });
+      }
+    }
   } catch {
-    // Malformed escapes on a local resource are rejected conservatively.
-    return /identity[-%]/iu.test(target.pathname);
+    // Invalid provider configuration is reported by the enabled write gate.
   }
-  // A local Pod has /<username>/data/identity-bindings/<resource>.
-  // Matching the path segment rather than a substring avoids blocking
-  // similarly named, unrelated user data.
-  return segments.includes('identity-bindings');
+  cachedBaseUrl = baseUrl;
+  cachedBase = parsed || null;
+  return cachedBase;
+}
+
+function localPath(uri, base) {
+  if (typeof uri !== 'string') return null;
+  // Never interpret overlong, malformed paths as safe under enforcement.
+  if (uri.length > 4096) return { invalid: true };
+  let target;
+  try { target = new URL(uri); } catch { return null; }
+  if (target.origin !== base.origin || target.protocol !== base.protocol) return null;
+  if (target.username || target.password ||
+      !target.pathname.startsWith(base.path)) return null;
+  if (target.search || target.hash) return { invalid: true };
+
+  let tail = target.pathname.slice(base.path.length);
+  // SemApps, HTTP routing, and reverse proxies need not decode the same
+  // number of times. Recognize encoded container names and separators before
+  // any of those layers can reinterpret them.
+  for (let i = 0; i < 4; i++) {
+    let decoded;
+    try { decoded = decodeURIComponent(tail); }
+    catch { return { invalid: true }; }
+    if (decoded === tail) return { segments: tail.split('/').filter(Boolean) };
+    tail = decoded;
+  }
+  // Further encodings are ambiguous. Reject instead of guessing.
+  return { invalid: /%[0-9a-f]{2}/iu.test(tail), segments: tail.split('/').filter(Boolean) };
+}
+
+function protectedPath(uri, baseUrl) {
+  const base = providerBase(baseUrl);
+  if (!base) return false;
+  const path = localPath(uri, base);
+  if (!path) return false;
+  return Boolean(path.invalid || path.segments?.includes('identity-bindings'));
 }
 
 function isPodStorageAncestor(uri, baseUrl) {
-  if (typeof uri !== 'string' || typeof baseUrl !== 'string') return false;
-  try {
-    const target = new URL(uri);
-    const base = new URL(baseUrl);
-    const root = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
-    const loopback = base.protocol === 'http:' &&
-      ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname);
-    if (target.origin !== base.origin || target.protocol !== base.protocol ||
-        (base.protocol !== 'https:' && !loopback) ||
-        !target.pathname.startsWith(root)) return false;
-    const pieces = target.pathname.slice(root.length).split('/')
-      .filter(Boolean).map(segment => decodeURIComponent(segment));
-    // Clearing or deleting a Pod root or its storage root can remove the
-    // protected container indirectly, before per-resource hooks run.
-    return pieces.length === 1 ||
-      (pieces.length === 2 && pieces[1] === 'data');
-  } catch {
-    return false;
-  }
+  const base = providerBase(baseUrl);
+  if (!base) return false;
+  const path = localPath(uri, base);
+  if (!path) return false;
+  if (path.invalid) return true;
+  const segments = path.segments;
+  // The provider root, Pod root and Pod data root can contain the protected
+  // container. Guard bulk deletion before it enumerates any resources.
+  return segments.length === 0 || segments.length === 1 ||
+    (segments.length === 2 && segments[1] === 'data');
 }
 
 function assertNotManagedLdpMutation(ctx, baseUrl, {
   checkResource = true, checkContainer = true, protectAncestors = false
 } = {}) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
-  let base;
-  try { base = new URL(baseUrl); } catch { /* invalid provider URL */ }
-  if (!base || (base.protocol !== 'https:' &&
-      !(base.protocol === 'http:' &&
-        ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))) {
+  if (!providerBase(baseUrl)) {
     throw new MoleculerError(
       'ATProto LDP fencing requires a canonical HTTPS or loopback provider URL',
       503, 'ATPROTO_LDP_FENCE_CONFIG_INVALID'
     );
   }
   const params = ctx?.params || {};
-  const candidates = [];
-  if (checkResource) {
-    candidates.push(params.resourceUri, params.resource?.['@id'], params.resource?.id,
-      params.forcedResourceUri);
-  }
-  if (checkContainer) candidates.push(params.containerUri);
-  if (candidates.some(uri => protectedPath(uri, baseUrl)) ||
-      (protectAncestors && isPodStorageAncestor(params.containerUri, baseUrl))) {
+  // O(1) URI checks: no account listing, graph traversal, network call,
+  // database query, or persistent per-user state in the hot path.
+  if (
+    (checkResource && (
+      protectedPath(params.resourceUri, baseUrl) ||
+      protectedPath(params.resource?.['@id'], baseUrl) ||
+      protectedPath(params.resource?.id, baseUrl) ||
+      protectedPath(params.forcedResourceUri, baseUrl)
+    )) ||
+    (checkContainer && protectedPath(params.containerUri, baseUrl)) ||
+    (protectAncestors && isPodStorageAncestor(params.containerUri, baseUrl))
+  ) {
     throw new MoleculerError(
       'Managed repository identity bindings cannot be changed through the general LDP API',
-      409,
-      'ATPROTO_MANAGED_BINDING_WRITE_FENCED'
+      409, 'ATPROTO_MANAGED_BINDING_WRITE_FENCED'
     );
   }
 }

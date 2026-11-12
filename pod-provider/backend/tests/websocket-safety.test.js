@@ -38,6 +38,24 @@ test('malformed and wildcard WebSocket origin configurations fail startup', () =
   expect(() => allowedOrigins('', '')).toThrow();
 });
 
+test('production browser origins require HTTPS except explicit loopback', () => {
+  const before = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    expect(() => allowedOrigins('http://paper.example.test', null)).toThrow();
+    expect(() => allowedOrigins('https://paper.example.test',
+      null, 'http://external.example.test')).toThrow();
+    expect(isAllowedCapabilityOrigin('http://reader.example.test',
+      '/.notifications/WebSocketChannel2023/socket/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')).toBe(false);
+    expect(isAllowedCapabilityOrigin('https://reader.example.test',
+      '/.notifications/WebSocketChannel2023/socket/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')).toBe(true);
+    expect(allowedOrigins('http://127.0.0.1:3000', null).has('http://127.0.0.1:3000')).toBe(true);
+  } finally {
+    if (before === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = before;
+  }
+});
+
 test('connection count includes concurrent in-flight upgrade handshakes', () => {
   expect(canAcceptConnection(0, 0)).toBe(true);
   expect(canAcceptConnection(MAX_CONNECTIONS - 1, 0)).toBe(true);

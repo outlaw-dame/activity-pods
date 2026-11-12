@@ -231,3 +231,23 @@ resource handlers, and automatic OIDC scope grant remain separate security
 and compatibility decisions. These need a migration plan and real client
 acceptance before shortening lifetimes or changing scope issuance; no
 silent authentication cutover is included in this branch.
+
+## PostgreSQL canonical permission check in protected projection tickets
+
+The disposable signed-repository operation-ticket issuer now requires a
+separate canonical PostgreSQL permission verifier whenever
+`APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED=true`. The verifier must
+confirm the exact owner WebID, managed DID, application, installed grant URI,
+and consent revision are **active in the protected PostgreSQL schema**.
+A matching Jena/SAI RDF claim alone is insufficient: the generic Fuseki writer
+can manipulate RDF. A missing PG verifier rejects issuer construction; a
+revoked/stale PG consent rejects issuance. An active, unique PG record is
+checked with one indexed query; no user-directory scan is permitted.
+
+This is additional authorization, not a new ticket-minting HTTP endpoint.
+The production fuse remains disabled. A future release must wire a trusted
+provider callback to `createCanonicalAtprotoPgAuthority(...).verifyActiveGrant`,
+migrate verified existing consent in bounded per-account batches, and test
+the exact Solid-OIDC/SAI live owner authorization path. The tests here
+exercise the injectible candidate issuer and isolated PostgreSQL auth, not
+a production cutover.

@@ -67,6 +67,30 @@ function createCanonicalAtprotoPgAuthority({pool}={}) {
         did:r.rows[0].did
       });
     },
+    async verifyActiveGrant({owner,app,grantUri,did,consentRevision}) {
+      canonicalHttps(owner);canonicalHttps(app);canonicalHttps(grantUri);
+      if (typeof did !== 'string' || !/^did:plc:[a-z2-7]{24}$/u.test(did)) {
+        refused('ATPROTO_PG_PERMISSION_SCOPE_INVALID');
+      }
+      const expected = revision(consentRevision);
+      // One indexed point lookup, no pod scan or mutable RDF permission
+      // fallback. An active permission requires BOTH canonical PG records.
+      const result = await pool.query(
+        'SELECT i.did,i.state AS identity_state,c.state AS consent_state, ' +
+        'c.grant_uri,c.revision::text AS consent_revision FROM '+SCHEMA+'.consents c ' +
+        'JOIN '+SCHEMA+'.identities i ON i.owner_webid=c.owner_webid ' +
+        'WHERE c.owner_webid=$1 AND c.app_uri=$2 LIMIT 2',
+        [owner,app]
+      );
+      if (result.rowCount !== 1 || result.rows[0]?.did !== did ||
+          result.rows[0]?.identity_state !== 'active' ||
+          result.rows[0]?.consent_state !== 'active' ||
+          result.rows[0]?.grant_uri !== grantUri ||
+          result.rows[0]?.consent_revision !== expected) {
+        refused('ATPROTO_PG_PERMISSION_DENIED');
+      }
+      return true;
+    },
     async revoke({owner,app,grantUri,expectedRevision}) {
       canonicalHttps(owner);canonicalHttps(app);canonicalHttps(grantUri);
       const before=revision(expectedRevision);

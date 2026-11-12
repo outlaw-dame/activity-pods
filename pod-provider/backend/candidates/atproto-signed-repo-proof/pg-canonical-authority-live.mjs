@@ -183,6 +183,16 @@ async function run() {
     const another=createCanonicalAtprotoPgAuthority({pool:revoker2});
     assert.equal((await api.getIdentity({owner})).state,'active');
     assert.equal((await api.getConsent({owner,app})).state,'active');
+    assert.equal(await api.verifyActiveGrant({
+      owner,app,grantUri:grant,
+      did:'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',
+      consentRevision:'1'
+    }),true);
+    await assert.rejects(api.verifyActiveGrant({
+      owner,app,grantUri:grant,
+      did:'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',
+      consentRevision:'2'
+    }),e=>e?.code==='ATPROTO_PG_PERMISSION_DENIED');
     await assert.rejects(api.revoke({
       owner,app,grantUri:other+'/data/grants/forged',expectedRevision:'1'
     }),e=>e?.code==='ATPROTO_PG_AUTHORITY_STALE');
@@ -192,6 +202,11 @@ async function run() {
     const wroteRdf=await probeFuseki(owner);
     // A forged *active* Jena triple cannot change canonical PG authorization.
     assert.equal((await api.getConsent({owner,app})).state,'blocked');
+    await assert.rejects(api.verifyActiveGrant({
+      owner,app,grantUri:grant,
+      did:'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',
+      consentRevision:'1'
+    }),e=>e?.code==='ATPROTO_PG_PERMISSION_DENIED');
     await assert.rejects(api.revoke({
       owner,app,grantUri:grant,expectedRevision:'1'
     }),e=>e?.code==='ATPROTO_PG_AUTHORITY_STALE');

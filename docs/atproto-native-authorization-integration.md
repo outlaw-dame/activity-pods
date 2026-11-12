@@ -142,8 +142,10 @@ write privileges at individual RDF subjects.
 Therefore this branch has an explicit source-controlled release gate.
 Enabling native ATProto SAI fencing in production rejects provider
 startup until the canonical consent and signed-repository authority is
-stored behind distinct, limited write privileges. There is no
-operator-set environment bypass.
+stored behind distinct, limited write privileges. The startup assertion assumes the process is correctly identified as
+production; deployment policy must enforce NODE_ENV and prevent unsafe
+privilege escalation. An operator with process configuration or database
+administration privileges cannot be constrained by this check alone.
 
 A viable design keeps Jena as the Solid RDF projection and moves
 canonical repo/consent state either to an isolated protected Jena
@@ -160,3 +162,46 @@ broker credential isolation, concurrent revocation/projector crash
 recovery, sustained heap/RSS and pool profiles, and a costed
 deployment configuration. No SPARQL text filter can replace a
 storage-level permission boundary.
+
+
+### Follow-up acceptance and hardening
+
+The next live-provider pass exposed an important difference between direct
+SAI resource actions and an authenticated app-upgrade ceremony. Moleculer
+child actions can use system WebID to perform a provider-owned LDP write,
+even when the original HTTP request was from the Pod owner. Allowing any
+system WebID would be unsafe; checking only the child WebID also breaks
+legitimate upgrades.
+
+A reviewed interim fix associates the authenticated owner action with a
+256-bit random proof, the exact app identity and Moleculer's request ID.
+Nested SAI grant writes must carry the matching proof. The entry is removed
+when register, upgrade or uninstall completes and is accepted for no more
+than 120 seconds. The map has an absolute maximum of 4,096 in-flight
+authorizations. A forged nonce, mismatched app or a different request ID
+cannot revoke consent. Tests model Moleculer 0.14's actual metadata and
+request-ID inheritance, rather than depending on a parentCtx property that
+is not stored on child contexts.
+
+This interim proof is process-local. Calls routed to a different provider
+process correctly fail closed, but distributed operation is therefore not
+ready for deployment. The final design must carry a verifiable,
+request-scoped, least-privilege permission across nodes without accepting
+caller-supplied metadata as an authority. Authorization and revocation
+must still commit before the native grant mutation.
+
+The disposable Redis concurrency test now uses an unpredictable per-run
+key prefix and a bounded SCAN/UNLINK cleanup. It no longer calls FLUSHDB,
+which could destroy unrelated keys in database 15. Its four worker
+processes use exactly the same test namespace; no test process can choose
+the production Redis database or omit the disposable proof flags. The
+independent worker and interrupted-revocation checks are part of the
+test and must be accepted by exact-head CI.
+
+Two earlier CI failures must be interpreted separately: a native HTTP
+signup stalled waiting for SemApps key-container readiness, while a
+distributed node-loss proof reported a successful fault run but exited
+nonzero before the acceptance assertion. Neither should be dismissed as
+an application error without a repeatable diagnosis. The latest commit
+and workflow runs, not those historical results, determine the pass/fail
+status of the current candidate.

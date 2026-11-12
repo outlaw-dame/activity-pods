@@ -4881,7 +4881,7 @@ object.getownpropertydescriptors@^2.1.6:
     gopd "^1.0.1"
     safe-array-concat "^1.1.2"
 
-oidc-provider@^8.4.1:
+oidc-provider@8.5.1:
   version "8.5.1"
   resolved "https://registry.npmjs.org/oidc-provider/-/oidc-provider-8.5.1.tgz"
   integrity sha512-Bm3EyxN68/KS76IlciJ3+4pnVtfdRWL+NghWpIF0XQbiRT1gzc6Qf/cyFmpL9yieko/jXYZ/uLHUv77jD00qww==

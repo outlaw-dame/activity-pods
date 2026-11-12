@@ -62,3 +62,13 @@ Upgrade headers, consistent routing, token expiry and per-user quotas.
 Sources: [ws documentation](https://github.com/websockets/ws#readme),
 [ws server API](https://github.com/websockets/ws/blob/master/doc/ws.md)
 and [OWASP WebSocket Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/WebSocket_Security_Cheat_Sheet.html).
+
+## Integration staging
+
+This change is targeted at the gated ActivityPods integration branch rather
+than being pushed straight to production. The merged test base includes
+canonical PostgreSQL authorization and the native SAI release fuse; neither
+is activated by this WebSocket work. Before a production deployment, validate
+the exact configured provider/frontend origins and real Solid-OIDC websocket
+upgrade authorization through the reverse proxy. A previously accepted
+untrusted origin will now be refused by design.

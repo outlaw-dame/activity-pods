@@ -8,6 +8,7 @@ const baseConfig = require('../../config/oidc');
 const fetch = require('node-fetch');
 const CONFIG = require('../../config/config');
 const { verifySolidDpop } = require('../../utils/solid-dpop-verifier');
+const { allowedOrigin } = require('../../config/oidc-cors-policy');
 
 const validatedRequests = new WeakMap();
 
@@ -40,11 +41,13 @@ module.exports = {
     this.dpopRedis = redisClient;
 
     try {
-      // See https://github.com/panva/node-oidc-provider/blob/main/recipes/client_based_origins.md
-      config.clientBasedCORS = (ctx, origin, client) => {
-        // TODO validate CORS based on client
-        return true;
-      };
+      // Browser access is scoped to the resolved client's registered
+      // redirect origin. Discovery remains publicly readable, but a client
+      // cannot use CORS to authorize arbitrary websites.
+      config.clientBasedCORS = (_ctx, origin, client) =>
+        allowedOrigin(origin, client, {
+          allowLocalhost: process.env.NODE_ENV !== 'production'
+        });
 
       this.oidc = new Provider(this.settings.baseUrl, config);
 

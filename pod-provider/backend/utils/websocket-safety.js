@@ -16,6 +16,8 @@ function canonicalOrigin(value) {
     const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== value ||
         url.username || url.password || url.hash || url.search) return null;
+    if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:' &&
+        !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return null;
     return url.origin;
   } catch { return null; }
 }

@@ -215,7 +215,8 @@ function createCanonicalNotificationLedger({ pool } = {}) {
           [key(intentKey),key(recipientKey),workerToken,count,dead?'dead':'pending',delay]
         );
         if (dead) await client.query(
-          'INSERT INTO '+SCHEMA+'.quarantine (intent_key,recipient_key,reason_code,attempts) VALUES ($1,$2,$3,$4)',
+          'INSERT INTO '+SCHEMA+'.quarantine (intent_key,recipient_key,reason_code,attempts) ' +
+          'VALUES ($1,$2,$3,$4) ON CONFLICT (intent_key,recipient_key) DO NOTHING',
           [key(intentKey),key(recipientKey),reasonCode,count]
         );
         return { dead, attempts: count, retryDelayMs: dead?null:delay };

@@ -73,6 +73,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-revocation-gate.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-ledger-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-replay-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-capacity-live.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
@@ -144,6 +145,16 @@ jobs:
           path: ${{ runner.temp }}/paper-notification-pg-steady-capacity.json
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Prove restricted operator quarantine replay and immutable audit in real PostgreSQL 18
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-replay-live.mjs
 
       - name: Independently verify against Bluesky reference repository implementation
         shell: bash

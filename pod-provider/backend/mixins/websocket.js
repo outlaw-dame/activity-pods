@@ -32,6 +32,7 @@ module.exports = {
     this.connections = [];
     this.connectionIndexes = new Map();
     this.pendingWsUpgrades = 0;
+    this.wsUpgradeReservations = new Map();
     this.wsSendBudget = createSendBudget();
     this.wsPendingSends = new Map();
     this.wsAllowedOrigins = null;
@@ -76,6 +77,14 @@ module.exports = {
     if (this.wsHeartbeat) clearInterval(this.wsHeartbeat);
     this.wsHeartbeat = null;
     this.server?.off('upgrade', this.upgradeHandler);
+    // Shutdown must also release HTTP upgrades that have not yet reached
+    // handleWsRequest. Otherwise delayed close callbacks can underflow the
+    // counter or hold old sockets after a restart.
+    for (const [socket, release] of this.wsUpgradeReservations) {
+      release();
+      socket.destroy();
+    }
+    this.wsUpgradeReservations.clear();
     if (this.wss) {
       for (const client of this.wss.clients) client.terminate();
       this.wss.close();
@@ -322,9 +331,11 @@ module.exports = {
         if (!pending) return;
         pending = false;
         this.pendingWsUpgrades--;
+        this.wsUpgradeReservations.delete(socket);
         clearTimeout(upgradeTimeout);
         socket.off('close', releasePending);
       };
+      this.wsUpgradeReservations.set(socket, releasePending);
       upgradeTimeout = setTimeout(() => {
         // A hung middleware, client or WebSocket handshake is not allowed to
         // reserve capacity indefinitely. Closing the socket releases it.

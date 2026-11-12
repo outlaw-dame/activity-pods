@@ -30,8 +30,10 @@ function load(file, deps) {
 }
 const account = require('../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs');
 const consent = require('../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs');
+const ownerScope = require('../services/utils/atproto-sai-owner-context');
 const native = load(path.join(backend, 'services/utils/atproto-sai-native-fence.js'), {
   moleculer: { Errors: { MoleculerError } },
+  './atproto-sai-owner-context': ownerScope,
   '../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs': account,
   '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs': consent
 });

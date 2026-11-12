@@ -1,4 +1,5 @@
 const path = require('path');
+const crypto = require('node:crypto');
 const Redis = require('ioredis');
 const { delay } = require('@semapps/ldp');
 const { Errors: E } = require('moleculer-web');
@@ -19,6 +20,13 @@ module.exports = {
     cookieSecret: CONFIG.COOKIE_SECRET
   },
   dependencies: ['jwk', 'api'],
+  stopped() {
+    // The OIDC adapter and the replay check share this connection. Close it
+    // when Moleculer stops the service; otherwise restarts leak Redis sockets.
+    const client = this.dpopRedis;
+    this.dpopRedis = null;
+    if (client) client.disconnect();
+  },
   async started() {
     // Dynamically import Provider since it's an ESM module
     const { default: Provider } = await import('oidc-provider');
@@ -31,54 +39,63 @@ module.exports = {
     config.adapter = name => new RedisAdapter(name, redisClient);
     this.dpopRedis = redisClient;
 
-    // See https://github.com/panva/node-oidc-provider/blob/main/recipes/client_based_origins.md
-    config.clientBasedCORS = (ctx, origin, client) => {
-      // TODO validate CORS based on client
-      return true;
-    };
+    try {
+      // See https://github.com/panva/node-oidc-provider/blob/main/recipes/client_based_origins.md
+      config.clientBasedCORS = (ctx, origin, client) => {
+        // TODO validate CORS based on client
+        return true;
+      };
 
-    this.oidc = new Provider(this.settings.baseUrl, config);
+      this.oidc = new Provider(this.settings.baseUrl, config);
 
-    // Allow provider to interpret reverse proxy headers.
-    this.oidc.proxy = true;
+      // Allow provider to interpret reverse proxy headers.
+      this.oidc.proxy = true;
 
-    await this.broker.call('api.addRoute', {
-      route: {
-        name: 'oidc-config',
-        path: '/.well-known/openid-configuration',
-        aliases: {
-          'GET /': 'solid-oidc.proxyConfig'
+      await this.broker.call('api.addRoute', {
+        route: {
+          name: 'oidc-config',
+          path: '/.well-known/openid-configuration',
+          aliases: {
+            'GET /': 'solid-oidc.proxyConfig'
+          }
         }
-      }
-    });
+      });
 
-    const { pathname: basePath } = new URL(this.settings.baseUrl);
+      const { pathname: basePath } = new URL(this.settings.baseUrl);
 
-    await this.broker.call('api.addRoute', {
-      route: {
-        name: 'oidc-login-completed',
-        path: path.join(basePath, '/.oidc/login-completed'),
-        authentication: true,
-        bodyParsers: {
-          json: true
-        },
-        aliases: {
-          'POST /': 'solid-oidc.loginCompleted'
+      await this.broker.call('api.addRoute', {
+        route: {
+          name: 'oidc-login-completed',
+          path: path.join(basePath, '/.oidc/login-completed'),
+          authentication: true,
+          bodyParsers: {
+            json: true
+          },
+          aliases: {
+            'POST /': 'solid-oidc.loginCompleted'
+          }
         }
-      }
-    });
+      });
 
-    // The OIDC provider route must be added after all other routes, otherwise it gets overwritten
-    // TODO find out why ! Probably due to the fact it is only a middleware (adding dummy aliases doesn't help)
-    await delay(10000);
+      // The OIDC provider route must be added after all other routes, otherwise it gets overwritten
+      // TODO find out why ! Probably due to the fact it is only a middleware (adding dummy aliases doesn't help)
+      await delay(10000);
 
-    await this.broker.call('api.addRoute', {
-      route: {
-        name: 'solid-oidc',
-        path: path.join(basePath, '/.oidc/auth'),
-        use: [this.oidc.callback()]
-      }
-    });
+      await this.broker.call('api.addRoute', {
+        route: {
+          name: 'solid-oidc',
+          path: path.join(basePath, '/.oidc/auth'),
+          use: [this.oidc.callback()]
+        }
+      });
+    } catch (error) {
+      // A failed OIDC route registration must not leave an orphan Redis
+      // socket or provider reference across service restart attempts.
+      this.oidc = null;
+      if (this.dpopRedis === redisClient) this.dpopRedis = null;
+      redisClient.disconnect();
+      throw error;
+    }
   },
   actions: {
     // See https://moleculer.services/docs/0.13/moleculer-web.html#Authentication
@@ -161,16 +178,29 @@ module.exports = {
           !req.headers || typeof req.headers.dpop !== 'string' ||
           !this.dpopRedis) throw new Error('DPoP request proof is required');
 
-      const target = new URL(
-        req.originalUrl || req.url || '/',
-        this.settings.baseUrl
-      ).toString();
+      // A proxy must supply a relative request target. Never let an
+      // attacker-supplied absolute or scheme-relative URL choose the DPoP
+      // audience through req.originalUrl.
+      const requestPath = req.originalUrl || req.url;
+      if (typeof requestPath !== 'string' ||
+          requestPath.length > 4096 || !requestPath.startsWith('/') ||
+          requestPath.startsWith('//') || requestPath.includes('\\')) {
+        throw new Error('Invalid DPoP request target');
+      }
+      const base = new URL(this.settings.baseUrl);
+      const targetUrl = new URL(requestPath, base);
+      if (base.protocol !== 'https:' || targetUrl.origin !== base.origin) {
+        throw new Error('Invalid external DPoP origin');
+      }
+      const target = targetUrl.toString();
       // The same request may go through both middleware functions.
       // Don't treat its second authorization check as a replay.
-      const cached = validatedRequests.get(req);
-      if (cached && cached.token === token &&
-          cached.proof === req.headers.dpop &&
-          cached.method === req.method && cached.target === target) return;
+      const fingerprint = crypto.createHash('sha256')
+        .update(token).update('\0')
+        .update(req.headers.dpop).update('\0')
+        .update(req.method).update('\0')
+        .update(target).digest('hex');
+      if (validatedRequests.get(req) === fingerprint) return;
 
       await verifySolidDpop({
         proof: req.headers.dpop, idToken: token, verifiedToken: payload,
@@ -185,9 +215,9 @@ module.exports = {
           return result === 'OK';
         }
       });
-      validatedRequests.set(req, {
-        token, proof: req.headers.dpop, method: req.method, target
-      });
+      // Keep only a fixed-size fingerprint on the short-lived request.
+      // Raw bearer tokens and signed proofs must not remain in a cache.
+      validatedRequests.set(req, fingerprint);
     },
     async interactionFinished(interactionId, result) {
       const interaction = await this.oidc.Interaction.find(interactionId);

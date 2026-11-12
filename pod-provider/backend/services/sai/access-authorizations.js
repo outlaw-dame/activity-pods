@@ -352,7 +352,7 @@ module.exports = {
       // regrant until all SAI and account mutation paths are serialized.
       async post(ctx) {
         const resource = ctx.params.resource || {};
-        await beforeSaiMutation(ctx, 'access-authorizations', resource);
+        await beforeSaiMutation(ctx, 'access-authorizations', resource, 'post');
         if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
         const rights = arrayOf(resource['apods:hasSpecialRights']);
         if (!rights.some(isGroupRight)) return;
@@ -369,7 +369,7 @@ module.exports = {
           resourceUri: ctx.params.resourceUri, webId: 'system'
         });
         if (repoFenceEnabled) {
-          await beforeSaiMutation(ctx, 'access-authorizations', resource);
+          await beforeSaiMutation(ctx, 'access-authorizations', resource, 'delete');
         }
         if (groupFenceEnabled &&
             arrayOf(resource?.['apods:hasSpecialRights']).some(isGroupRight)) {

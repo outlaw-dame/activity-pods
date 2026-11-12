@@ -64,6 +64,31 @@ function approvedApps() {
   return verified;
 }
 
+// ActivityPods stores LDP resources outside the container URI when
+// resourcesWithContainerPath is false. Verify the authoritative ldp:contains
+// triple rather than relying on a URI prefix or listing the whole container.
+function resourceMembershipQuery(containerUri, resourceUri) {
+  safeIri(containerUri, { httpsOnly: true });
+  safeIri(resourceUri, { httpsOnly: true });
+  const container = containerUri.replace(/\\/+$/u, '');
+  const resource = resourceUri.replace(/\\/+$/u, '');
+  return 'ASK WHERE { VALUES ?container { <' + container + '> <' + container +
+    '/> } VALUES ?child { <' + resource + '> <' + resource +
+    '/> } ?container <http://www.w3.org/ns/ldp#contains> ?child . }';
+}
+
+function isOwnedStorageUri(uri, owner) {
+  if (typeof uri !== 'string' || uri.length > 4096) return false;
+  try {
+    const parsed = new URL(uri);
+    const storageRoot = owner.replace(/\\/+$/u, '') + '/data/';
+    return parsed.href === uri && !parsed.username && !parsed.password &&
+      !parsed.search && !parsed.hash && uri.startsWith(storageRoot);
+  } catch {
+    return false;
+  }
+}
+
 function bindingIdentity(kind, resource) {
   if (!ALLOWED_KINDS.has(kind)) deny('ATPROTO_SAI_FENCE_KIND_INVALID');
   const ownerKey = kind.startsWith('access-') ? 'grantedBy' : 'dataOwner';
@@ -135,20 +160,18 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   try {
     const nativeContainer = await call(kind + '.getContainerUri', { webId: owner });
     safeIri(nativeContainer, { httpsOnly: true });
-    const prefix = nativeContainer.endsWith('/') ? nativeContainer : nativeContainer + '/';
     const target = operation === 'post' ? nativeContainer : ctx.params?.resourceUri;
+    if (!isOwnedStorageUri(nativeContainer, owner) ||
+        (operation === 'delete' && !isOwnedStorageUri(target, owner))) {
+      throw new MoleculerError(
+        'The authorization is outside the owner’s Pod storage',
+        403, 'ATPROTO_SAI_TARGET_INVALID'
+      );
+    }
     if (operation === 'post' && ctx.params?.containerUri &&
         ctx.params.containerUri !== nativeContainer) {
       throw new MoleculerError(
         'The authorization must be stored in the owner’s SAI container',
-        403, 'ATPROTO_SAI_TARGET_INVALID'
-      );
-    }
-    if (operation === 'delete' &&
-        (typeof target !== 'string' || !target.startsWith(prefix) ||
-         target.length > 4096)) {
-      throw new MoleculerError(
-        'The authorization does not belong to the owner’s SAI container',
         403, 'ATPROTO_SAI_TARGET_INVALID'
       );
     }
@@ -171,6 +194,18 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     });
     const account = parseCanonicalPodAccount(accountRows, owner);
     const dataset = account.username;
+    if (operation === 'delete') {
+      const belongsToContainer = await call('triplestore.query', {
+        dataset, webId: 'system',
+        query: resourceMembershipQuery(nativeContainer, target)
+      });
+      if (belongsToContainer !== true) {
+        throw new MoleculerError(
+          'The authorization is not contained by the owner’s SAI container',
+          403, 'ATPROTO_SAI_TARGET_INVALID'
+        );
+      }
+    }
     const subjectUri = consentSubject(owner, app);
     const getRows = () => call('triplestore.query', {
       dataset, webId: 'system',
@@ -193,10 +228,15 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     // consent pointer. Do not trust the mutation's submitted grant URI.
     const grantContainer = await call('access-grants.getContainerUri', { webId: owner });
     safeIri(grantContainer, { httpsOnly: true });
-    if (!grantUri.startsWith(grantContainer.endsWith('/') ? grantContainer : grantContainer + '/') ||
-        !grantUri.startsWith(new URL(owner).origin + '/')) {
+    if (!isOwnedStorageUri(grantContainer, owner) ||
+        !isOwnedStorageUri(grantUri, owner)) {
       deny('ATPROTO_SAI_FENCE_GRANT_INVALID');
     }
+    const grantIsAttached = await call('triplestore.query', {
+      dataset, webId: 'system',
+      query: resourceMembershipQuery(grantContainer, grantUri)
+    });
+    if (grantIsAttached !== true) deny('ATPROTO_SAI_FENCE_GRANT_INVALID');
     safeEpoch(state.revision);
     if (BigInt(state.revision) === 9223372036854775807n) {
       deny('ATPROTO_SAI_FENCE_EPOCH_EXHAUSTED');
@@ -225,4 +265,4 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   }
 }
 
-module.exports = { beforeSaiMutation, bindingIdentity, claim };
+module.exports = { beforeSaiMutation, bindingIdentity, claim, resourceMembershipQuery, isOwnedStorageUri };

@@ -73,6 +73,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-revocation-gate.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-ledger-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-atproto-canonical-live.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
@@ -135,6 +136,16 @@ jobs:
         run: |
           set -euo pipefail
           node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-atproto-canonical-live.mjs
+
+      - name: Prove canonical identity and SAI rights cannot be altered by general SQL writers
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
 
       - name: Independently verify against Bluesky reference repository implementation
         shell: bash
@@ -231,6 +242,17 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/pg-atproto-canonical-live.mjs
+
+      - name: Prove privileged Fuseki SPARQL changes cannot resurrect PostgreSQL SAI authority
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
 
       - name: Restart persistent Fuseki TDB2
         run: |

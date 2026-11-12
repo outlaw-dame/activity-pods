@@ -89,9 +89,10 @@ async function signup() {
   }
   throw new Error('Moderation rejected all bounded username candidates');
 }
-async function proof(keyPair, method, uri, nonce) {
+async function proof(keyPair, method, uri, nonce, idToken = null) {
   const claims = { htm: method, htu: uri, jti: crypto.randomUUID() };
   if (nonce) claims.nonce = nonce;
+  if (idToken) claims.ath = challenge(idToken);
   return new SignJWT(claims)
     .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: keyPair.publicJwk })
     .setIssuedAt(Math.floor(Date.now() / 1000))
@@ -244,6 +245,39 @@ async function main() {
     'OIDC signed subject does not match authenticated user');
   assert.equal(verified.payload.azp, canonicalClientId,
     'OIDC authorized app does not match its registered client identifier');
+  if (process.env.ATPROTO_DPOP_LIVE_PROOF_ENABLED === 'confirmed') {
+    // This is a real provider-issued ID token, not a test-signed fixture.
+    // It must pass resource-server validation with DPoP enforced.
+    const audiences = verified.payload.aud;
+    assert(Array.isArray(audiences) &&
+      audiences.includes(canonicalClientId) && audiences.includes('solid'),
+    'Native Solid-OIDC token did not include the required client and solid audiences');
+    assert(typeof verified.payload.cnf?.jkt === 'string' &&
+      /^[A-Za-z0-9_-]{43}$/u.test(verified.payload.cnf.jkt),
+    'Native Solid-OIDC token did not bind the DPoP signing key');
+    const resource = person.webId;
+    const authHeader = { authorization: 'Bearer ' + tokens.id_token };
+    const noProof = await response(resource, { headers: authHeader });
+    assert.equal(noProof.status, 401,
+      'A resource request without DPoP must be unauthorized with enforcement enabled');
+    const signedProof = await proof(keyPair, 'GET', resource, null, tokens.id_token);
+    const authorized = await response(resource, {
+      headers: { ...authHeader, DPoP: signedProof }
+    });
+    assert.notEqual(authorized.status, 401,
+      'A signed, correctly bound DPoP resource request must not fail authentication');
+    const replay = await response(resource, {
+      headers: { ...authHeader, DPoP: signedProof }
+    });
+    assert.equal(replay.status, 401,
+      'Replay of the same DPoP proof across HTTP requests must be rejected');
+    const wrongMethod = await response(resource, {
+      headers: { ...authHeader,
+        DPoP: await proof(keyPair, 'POST', resource, null, tokens.id_token) }
+    });
+    assert.equal(wrongMethod.status, 401, 'A signed proof for another HTTP method must fail');
+  }
+
   assert.equal(canonicalClientId, app + '/app',
     'Solid-OIDC and SAI must share one exact app URI');
   // Do not accept disjoint success from two unrelated test users: the very

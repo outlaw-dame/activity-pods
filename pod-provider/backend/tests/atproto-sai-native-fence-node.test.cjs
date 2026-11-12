@@ -57,6 +57,7 @@ function setup() {
   let status = 'active';
   let revision = '1';
   let skipUpdate = false;
+  let resourceAttached = true;
   const ctx = {
     params: { resource, resourceUri: grant },
     meta: { webId: owner },
@@ -64,6 +65,7 @@ function setup() {
       calls.push({ name, params, options });
       if (name === 'triplestore.query' && params.dataset === 'settings') return datasetRow;
       if (name === 'triplestore.query' && params.dataset === 'alice') {
+        if (params.query.trimStart().startsWith('ASK WHERE')) return resourceAttached;
         return [{
           status: { value: status },
           revision: { value: revision },
@@ -91,6 +93,7 @@ function setup() {
   return {
     calls, ctx,
     setSkipUpdate(value) { skipUpdate = value; },
+    setResourceAttached(value) { resourceAttached = value; },
     current() { return { status, revision }; }
   };
 }
@@ -139,6 +142,7 @@ test('native grant mutation first durably blocks the exact per-user consent revi
     'triplestore.query',
     'triplestore.query',
     'access-grants.getContainerUri',
+    'triplestore.query',
     'triplestore.update',
     'triplestore.query'
   ]);
@@ -277,6 +281,20 @@ test('cross-Pod and incorrectly scoped SAI resource URIs cannot revoke a grant',
   assert.equal(calls.some(x => x.name === 'triplestore.update'), false);
 });
 
+
+test('unrelated resource in the same Pod cannot be deleted as a protected SAI authorization', async () => {
+  env(true);
+  const { ctx, calls, setResourceAttached } = setup();
+  ctx.params.resourceUri = owner + '/data/unrelated-resource';
+  setResourceAttached(false);
+  await assert.rejects(
+    native.beforeSaiMutation(ctx, 'access-authorizations', resource, 'delete'),
+    e => e.code === 403 && e.type === 'ATPROTO_SAI_TARGET_INVALID'
+  );
+  assert.equal(calls.filter(x => x.name === 'triplestore.update').length, 0);
+  assert.ok(calls.some(x => x.name === 'triplestore.query' &&
+    x.params.query.startsWith('ASK WHERE')));
+});
 
 test('approved app changes are recognized without restarting or retaining old grants', async () => {
   env(true);

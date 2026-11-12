@@ -13,7 +13,8 @@ const restrictedRole = {
   rolsuper:false,rolcreatedb:false,rolcreaterole:false,
   rolreplication:false,rolbypassrls:false,rolcanlogin:true,
   schema_create:false,identity_read:true,consent_read:true,
-  identity_insert:false,consent_insert:false,consent_update:false,
+  identity_insert:false,identity_update:false,identity_delete:false,
+  identity_truncate:false,consent_insert:false,consent_update:false,
   consent_delete:false,consent_truncate:false,revoke_execute:true
 };
 
@@ -77,7 +78,8 @@ test('production mode cannot create a runtime authority client',async()=>{
 test('role validation rejects privileged importer or schema-owner credentials',async()=>{
   const {assertRestrictedPgAuthorityLogin}=require('../utils/atproto-canonical-pg-authority');
   for(const violation of [
-    {rolsuper:true},{identity_insert:true},{consent_update:true},
+    {rolsuper:true},{identity_insert:true},{identity_update:true},
+    {identity_delete:true},{identity_truncate:true},{consent_update:true},
     {schema_create:true},{revoke_execute:false},{identity_read:false}
   ]){
     await expect(assertRestrictedPgAuthorityLogin({

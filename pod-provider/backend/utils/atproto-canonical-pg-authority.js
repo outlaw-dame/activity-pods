@@ -125,6 +125,9 @@ async function assertRestrictedPgAuthorityLogin(pool) {
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','SELECT') AS identity_read, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','SELECT') AS consent_read, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','INSERT') AS identity_insert, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','UPDATE') AS identity_update, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','DELETE') AS identity_delete, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','TRUNCATE') AS identity_truncate, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','INSERT') AS consent_insert, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','UPDATE') AS consent_update, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','DELETE') AS consent_delete, " +
@@ -140,7 +143,8 @@ async function assertRestrictedPgAuthorityLogin(pool) {
   }
   const row = result.rows?.[0];
   const blocked = ['rolsuper','rolcreatedb','rolcreaterole','rolreplication',
-    'rolbypassrls','schema_create','identity_insert','consent_insert',
+    'rolbypassrls','schema_create','identity_insert','identity_update',
+    'identity_delete','identity_truncate','consent_insert',
     'consent_update','consent_delete','consent_truncate'];
   if(result.rowCount!==1 || !row || row.rolcanlogin!==true ||
       row.identity_read!==true || row.consent_read!==true ||

@@ -57,6 +57,57 @@ test('no additional work or rejection when repository protection is disabled', (
   }));
 });
 
+test('the real signup registry can create only the empty managed container', () => {
+  on();
+  const owner = root + 'alice';
+  const containerUri = prefix + 'identity-bindings';
+  const options = {
+    name: 'identitybindings',
+    path: '/identity-bindings',
+    acceptedTypes: ['http://activitypods.org/ns/core#AtprotoIdentityBinding'],
+    excludeFromMirror: true,
+    activateTombstones: false,
+    readOnly: false,
+    newResourcesPermissions: {
+      anon: { read: false },
+      user: { read: false, write: false }
+    }
+  };
+  const create = { params: { containerUri, webId: owner, options } };
+  for (const action of ['createAndAttach','create']) {
+    assert.doesNotThrow(() => ldp.hooksContainer.before[action](create));
+  }
+  const attach = { params: {
+    containerUri: prefix.slice(0, -1),
+    resourceUri: containerUri,
+    webId: 'system'
+  }};
+  assert.doesNotThrow(() => ldp.hooksContainer.before.attach(attach));
+
+  // Only this container's metadata is bootstrapped, never a managed
+  // resource, permissive options, a foreign Pod or an arbitrary path.
+  assert.throws(() => ldp.hooksContainer.before.create({
+    params: { containerUri, webId: owner,
+      options: { ...options, acceptedTypes: ['http://example.org/Arbitrary'] } }
+  }), e => e.code === 409);
+  assert.throws(() => ldp.hooksContainer.before.createAndAttach({
+    params: { containerUri, webId: root + 'mallory', options }
+  }), e => e.code === 409);
+  assert.throws(() => ldp.hooksContainer.before.createAndAttach({
+    params: { containerUri, webId: owner, options: {
+      ...options, newResourcesPermissions: {
+        anon: { read: true }, user: { read: true, write: true }
+      }
+    } }
+  }), e => e.code === 409);
+  assert.throws(() => ldp.hooksContainer.before.attach({
+    params: { ...attach.params, resourceUri: binding }
+  }), e => e.code === 409);
+  assert.throws(() => ldp.hooksContainer.before.detach(attach), e => e.code === 409);
+  assert.throws(() => ldp.hooksContainer.before.delete(create), e => e.code === 409);
+  assert.throws(() => ldp.hooksContainer.before.post(create), e => e.code === 409);
+});
+
 test('all direct SemApps resource write entry points reject protected bindings', () => {
   on();
   for (const operation of ['put', 'patch', 'delete', 'create', 'upload']) {

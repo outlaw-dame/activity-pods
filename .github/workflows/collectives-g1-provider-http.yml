@@ -122,6 +122,13 @@ jobs:
             exec -T -e ATPROTO_CAPACITY_PROOF_DISPOSABLE=confirmed backend \
             node scripts/proof-oidc-grant-redis-live.js
 
+      - name: Prove two independent provider Node processes agree on scoped Redis owner capability
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e NODE_ENV=test -e ATPROTO_SAI_OWNER_REDIS_PROOF_DISPOSABLE=confirmed \
+              backend node scripts/proof-sai-owner-redis-live.js
+
       - name: Verify native Solid-OIDC interactive PKCE login and signed user token
         run: |
           set -euo pipefail

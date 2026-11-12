@@ -67,7 +67,9 @@ async function sparql(kind, query, dataset = 'alice') {
 const val = (row, key) => row?.[key]?.value || null;
 const iri = value => '<' + value + '>';
 const validCredentials = {
-  iss: origin + '/', aud: appUri, azp: appUri, webid: accountId,
+  iss: origin + '/', sub: 'fixture-owner-account',
+  aud: [appUri, 'solid'], azp: appUri, webid: accountId,
+  cnf: { jkt: 'A'.repeat(43) },
   iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000) + 600
 };
 let failOidc = false, failGrant = false, forgedLocation = false;
@@ -84,6 +86,9 @@ async function call(name, params) {
   if (name === 'data-grants.getContainerUri') return storageRoot + 'data-grants/';
   if (name === 'jwk.verifyToken') {
     assert.equal(params.token, 'synthetic-verified-local-jwk-fixture');
+    if (failOidc === 'app-only') return { ...validCredentials, aud: appUri };
+    if (failOidc === 'missing-solid') return { ...validCredentials, aud: [appUri, 'unrelated'] };
+    if (failOidc === 'missing-dpop') return { ...validCredentials, cnf: undefined };
     return failOidc ? { ...validCredentials, aud: origin + '/evil' } : validCredentials;
   }
   if (name === 'access-grants.get') {
@@ -154,7 +159,7 @@ const adapter = createPodActivityPodsProjection({
 });
 const ticket = (operation, epoch = '1', head = {}) => authority.issue({
   accountId, did, appUri, grantUri, epoch, operation,
-  ...(operation === 'project' ? { rootCid, rev } : {}), ...head
+  ...(operation === 'project' ? { rootCid, rev, projectionFence: '1' } : {}), ...head
 });
 const base = { accountId, did, appUri, grantUri, epoch: '1' };
 const oidcToken = 'synthetic-verified-local-jwk-fixture';
@@ -236,6 +241,13 @@ async function prepare() {
     adapter.bootstrapConsent({ ...base, ticket: ticket('bootstrap'), oidcToken }),
     e => e.code === 'POD_PROJECTION_OIDC_INVALID'
   );
+  for (const invalidTokenShape of ['app-only', 'missing-solid', 'missing-dpop']) {
+    failOidc = invalidTokenShape;
+    await assert.rejects(
+      adapter.bootstrapConsent({ ...base, ticket: ticket('bootstrap'), oidcToken }),
+      e => e.code === 'POD_PROJECTION_OIDC_INVALID'
+    );
+  }
   failOidc = false;
   failGrant = true;
   await assert.rejects(
@@ -249,30 +261,53 @@ async function prepare() {
   assert.equal((await adapter.bootstrapConsent({ ...base, ticket: ticket('bootstrap'), oidcToken })).epoch, '1');
 
   const projected = await adapter.project({
-    ...base, rootCid, rev, oidcToken, ticket: ticket('project')
+    ...base, rootCid, rev, projectionFence: '1', oidcToken, ticket: ticket('project')
   });
   assert.equal(projected.projected, true);
   assert.ok(!actions.includes('auth.account.findByWebId'), 'Avoid SemApps unbounded CONSTRUCT');
   assert.ok(!actions.includes('auth.account.find'), 'No account population/fan-out lookup');
   assert.ok(!actions.includes('access-grants.getForApp'));
   assert.ok(!actions.includes('data-grants.getByAccessNeed'));
-  assert.equal((await adapter.check({ ...base, rootCid, rev, oidcToken })).projectionVerified, true);
+  assert.equal((await adapter.check({ ...base, rootCid, rev,
+    projectionFence: '1', oidcToken })).projectionVerified, true);
+
+  // Simulate a PostgreSQL recovery worker crash AFTER RDF mutation and before
+  // durable PG ACK. Its lease_epoch advances from 1 to 2, while the same
+  // SAI grant remains active at consent revision 1. The older candidate
+  // incorrectly conflated these epochs and could never recover.
+  const replay = await adapter.project({
+    ...base, projectionFence: '2', rootCid, rev, oidcToken,
+    ticket: ticket('project', '1', { projectionFence: '2' })
+  });
+  assert.equal(replay.projected, true);
+  assert.equal(replay.consentRevision, '1');
+  assert.equal(replay.projectionFence, '2');
+  assert.equal((await adapter.check({
+    ...base, rootCid, rev, projectionFence: '2', oidcToken
+  })).projectionVerified, true);
+  await assert.rejects(
+    adapter.project({ ...base, rootCid, rev, projectionFence: '1',
+      oidcToken, ticket: ticket('project') }),
+    e => e.code === 'POD_PROJECTION_READBACK_MISMATCH'
+  );
 
   // Two independent async request sequences race a live Jena permission
   // revocation and a stale projection. Either could acquire the Jena writer
   // first, but the FINAL state must always be denied, never false-ready.
   const contested = await Promise.allSettled([
-    adapter.project({ ...base, rootCid, rev, oidcToken, ticket: ticket('project') }),
+    adapter.project({ ...base, rootCid, rev, projectionFence: '2', oidcToken,
+      ticket: ticket('project', '1', { projectionFence: '2' }) }),
     adapter.revoke({ ...base, ticket: ticket('revoke') })
   ]);
   assert.equal(contested[1].status, 'fulfilled', 'Revocation must durably win eventual access state');
   assert.equal(contested[1].value.epoch, '2');
   await assert.rejects(
-    adapter.project({ ...base, rootCid, rev, oidcToken, ticket: ticket('project') }),
+    adapter.project({ ...base, rootCid, rev, projectionFence: '3', oidcToken,
+      ticket: ticket('project', '1', { projectionFence: '3' }) }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await assert.rejects(
-    adapter.check({ ...base, rootCid, rev, oidcToken }),
+    adapter.check({ ...base, rootCid, rev, projectionFence: '2', oidcToken }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await assert.rejects(
@@ -287,10 +322,10 @@ async function verify() {
   assert.equal(rows.length, 1);
   assert.equal(val(rows[0], 'root'), rootCid);
   assert.equal(val(rows[0], 'rev'), rev);
-  assert.equal(val(rows[0], 'epoch'), '1');
+  assert.equal(val(rows[0], 'epoch'), '2');
   // Persistent consent is blocked even after Fuseki restart.
   await assert.rejects(
-    adapter.check({ ...base, rootCid, rev, oidcToken }),
+    adapter.check({ ...base, rootCid, rev, projectionFence: '2', oidcToken }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await http(host + '/$/datasets/alice', { method: 'DELETE' });

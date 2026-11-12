@@ -51,18 +51,29 @@ async function cleanupOwnKeys() {
     } while (cursor !== '0');
   }
 }
+async function waitReady(client) {
+  if (client.status === 'ready') return;
+  await new Promise((resolve, reject) => {
+    const done = (error) => {
+      clearTimeout(timer);
+      client.removeListener('ready', onReady);
+      client.removeListener('error', onError);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onReady = () => done();
+    const onError = error => done(error);
+    const timer = setTimeout(
+      () => done(Error('Disposable Redis did not become ready in time')), 5000
+    );
+    timer.unref?.();
+    client.once('ready', onReady);
+    client.once('error', onError);
+    if (client.status === 'ready') done();
+  });
+}
 async function main() {
-  if (redis.status !== 'ready') {
-    await Promise.race([
-      new Promise((resolve, reject) => {
-        redis.once('ready', resolve);
-        redis.once('error', reject);
-      }),
-      new Promise((_, reject) => setTimeout(
-        () => reject(Error('Disposable Redis did not become ready in time')), 5000
-      ))
-    ]);
-  }
+  await Promise.all([waitReady(redis), waitReady(cleanupRedis)]);
   await Promise.all([redis.ping(), cleanupRedis.ping()]);
   const adapter = new RedisAdapter('AccessToken', redis);
   const grantId = 'grant-' + crypto.randomUUID();

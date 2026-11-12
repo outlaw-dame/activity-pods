@@ -169,10 +169,21 @@ module.exports = {
           !req.headers || typeof req.headers.dpop !== 'string' ||
           !this.dpopRedis) throw new Error('DPoP request proof is required');
 
-      const target = new URL(
-        req.originalUrl || req.url || '/',
-        this.settings.baseUrl
-      ).toString();
+      // A proxy must supply a relative request target. Never let an
+      // attacker-supplied absolute or scheme-relative URL choose the DPoP
+      // audience through req.originalUrl.
+      const requestPath = req.originalUrl || req.url;
+      if (typeof requestPath !== 'string' ||
+          requestPath.length > 4096 || !requestPath.startsWith('/') ||
+          requestPath.startsWith('//') || requestPath.includes('\\')) {
+        throw new Error('Invalid DPoP request target');
+      }
+      const base = new URL(this.settings.baseUrl);
+      const targetUrl = new URL(requestPath, base);
+      if (base.protocol !== 'https:' || targetUrl.origin !== base.origin) {
+        throw new Error('Invalid external DPoP origin');
+      }
+      const target = targetUrl.toString();
       // The same request may go through both middleware functions.
       // Don't treat its second authorization check as a replay.
       const fingerprint = crypto.createHash('sha256')

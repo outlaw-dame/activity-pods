@@ -11,6 +11,11 @@ on:
       - 'pod-provider/backend/services/sai/app-registrations.js'
       - 'pod-provider/backend/services/sai/auth-agent.js'
       - 'pod-provider/backend/services/solid/solid-oidc.js'
+      - 'pod-provider/backend/config/oidc-cors-policy.js'
+      - 'pod-provider/backend/config/oidc-adapter.js'
+      - 'pod-provider/backend/config/oidc-grant-index-policy.js'
+      - 'pod-provider/backend/scripts/proof-oidc-grant-redis-live.js'
+      - 'pod-provider/backend/tests/oidc-cors-policy.test.js'
       - 'pod-provider/backend/services/collective-consent-fence.service.js'
       - 'pod-provider/backend/services/utils/collective-access-policy.js'
       - '.github/workflows/collectives-g1-provider-http.yml'
@@ -114,6 +119,13 @@ jobs:
           set -euo pipefail
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
             exec -T backend node scripts/proof-collective-provider-oidc.js
+
+      - name: Verify bounded grant tracking and revocation against real Redis
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e ATPROTO_CAPACITY_PROOF_DISPOSABLE=confirmed backend \
+            node scripts/proof-oidc-grant-redis-live.js
 
       - name: Diagnostics on failure
         if: failure()

@@ -55,10 +55,11 @@ class RedisAdapter {
         isHash ? 'hash' : 'string', serialized, String(expiresIn),
         String(MAX_GRANT_TOKENS), key,
         payload.userCode ? 'yes' : '', id,
-        payload.uid ? 'yes' : ''
+        payload.uid ? 'yes' : '', payload.grantId
       );
       if (result === -1) throw cappedError('OIDC_GRANT_TOKEN_LIMIT');
       if (result === -2) throw cappedError('OIDC_GRANT_ALREADY_REVOKED');
+      if (result === -3) throw cappedError('OIDC_GRANT_TOKEN_ID_CONFLICT');
       if (result !== 1) throw cappedError('OIDC_GRANT_WRITE_UNKNOWN');
       return;
     }

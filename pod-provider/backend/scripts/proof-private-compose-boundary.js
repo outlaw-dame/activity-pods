@@ -20,6 +20,12 @@ function assertLocal(name) {
 for (const service of ['fuseki', 'redis', 'mailcatcher', 'arena', 'tripleadmin']) {
   assertLocal(service);
 }
+assert.equal(services.redis.image, 'redis:8.2.11-alpine',
+  'First-party queue/cache Redis must use the tested version pin');
+const redisCommand = services.redis.command;
+assert(Array.isArray(redisCommand) && redisCommand.includes('noeviction') &&
+       redisCommand.includes('--appendonly') && redisCommand.includes('yes'),
+  'Redis persistence and work-queue non-eviction defaults must be explicit');
 const secret = services.fuseki.environment.ADMIN_PASSWORD;
 assert(secret && secret === process.env.SEMAPPS_JENA_PASSWORD &&
        secret !== 'admin' && Buffer.byteLength(secret, 'utf8') >= 24,

@@ -101,7 +101,10 @@ module.exports = {
               this.logger.info(
                 `Deleting access authorization ${accessAuthorization.id} before recreating one as it does not grant the same rights`
               );
-              await this.actions.delete({ resourceUri: accessAuthorization.id, webId: podOwner });
+              await this.actions.delete(
+              { resourceUri: accessAuthorization.id, webId: podOwner },
+              { parentCtx: ctx }
+            );
             }
             accessAuthorizationsUris.push(
               await this.actions.post(
@@ -126,7 +129,10 @@ module.exports = {
           this.logger.info(
             `Deleting access authorization ${accessAuthorization.id} as no related access needs were granted`
           );
-          await this.actions.delete({ resourceUri: accessAuthorization.id, webId: podOwner });
+          await this.actions.delete(
+              { resourceUri: accessAuthorization.id, webId: podOwner },
+              { parentCtx: ctx }
+            );
         }
       }
     },
@@ -336,7 +342,10 @@ module.exports = {
             this.logger.info(
               `Deleting access authorization ${accessAuthorization.id} as it is not linked anymore with an existing access need group...`
             );
-            await this.actions.delete({ resourceUri: accessAuthorization.id, webId: podOwner });
+            await this.actions.delete(
+              { resourceUri: accessAuthorization.id, webId: podOwner },
+              { parentCtx: ctx }
+            );
           } else {
             throw e;
           }

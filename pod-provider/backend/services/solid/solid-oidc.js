@@ -1,4 +1,5 @@
 const path = require('path');
+const crypto = require('node:crypto');
 const Redis = require('ioredis');
 const { delay } = require('@semapps/ldp');
 const { Errors: E } = require('moleculer-web');
@@ -19,6 +20,13 @@ module.exports = {
     cookieSecret: CONFIG.COOKIE_SECRET
   },
   dependencies: ['jwk', 'api'],
+  stopped() {
+    // The OIDC adapter and the replay check share this connection. Close it
+    // when Moleculer stops the service; otherwise restarts leak Redis sockets.
+    const client = this.dpopRedis;
+    this.dpopRedis = null;
+    if (client) client.disconnect();
+  },
   async started() {
     // Dynamically import Provider since it's an ESM module
     const { default: Provider } = await import('oidc-provider');
@@ -167,9 +175,11 @@ module.exports = {
       ).toString();
       // The same request may go through both middleware functions.
       // Don't treat its second authorization check as a replay.
+      const fingerprint = crypto.createHash('sha256')
+        .update(token).update('\0')
+        .update(req.headers.dpop).digest('hex');
       const cached = validatedRequests.get(req);
-      if (cached && cached.token === token &&
-          cached.proof === req.headers.dpop &&
+      if (cached && cached.fingerprint === fingerprint &&
           cached.method === req.method && cached.target === target) return;
 
       await verifySolidDpop({
@@ -185,8 +195,10 @@ module.exports = {
           return result === 'OK';
         }
       });
+      // Keep only a fixed-size fingerprint on the short-lived request.
+      // Raw bearer tokens and signed proofs must not remain in a cache.
       validatedRequests.set(req, {
-        token, proof: req.headers.dpop, method: req.method, target
+        fingerprint, method: req.method, target
       });
     },
     async interactionFinished(interactionId, result) {

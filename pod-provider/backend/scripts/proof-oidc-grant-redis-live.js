@@ -180,7 +180,12 @@ async function main() {
   for (const key of sampleKeys) {
     assert.equal(await redis.set(key, '1', 'EX', 130, 'NX'), 'OK');
   }
-  const used = await Promise.all(sampleKeys.map(k => redis.memory('USAGE', k)));
+  // MEMORY USAGE is a Redis subcommand whose key argument is not
+  // rewritten by ioredis keyPrefix. Inspect the fully qualified key on
+  // the unprefixed cleanup connection; do not query the wrong namespace.
+  const used = await Promise.all(sampleKeys.map(k =>
+    cleanupRedis.memory('USAGE', testKeyPrefix + k)
+  ));
   assert(used.every(bytes => Number.isSafeInteger(bytes) && bytes > 0));
   const replaySampleBytesPerKey = Math.round(
     used.reduce((sum, n) => sum + n, 0) / used.length

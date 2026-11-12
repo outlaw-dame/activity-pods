@@ -1,0 +1,41 @@
+name: ATProto protected identity-binding legacy mutation guard
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/atproto-fenced-identitybinding-guard.yml'
+      - 'pod-provider/backend/services/identitybindings.service.js'
+      - 'pod-provider/backend/utils/identitybinding-fence-policy.js'
+      - 'pod-provider/backend/tests/identitybinding-fence-policy-node.test.cjs'
+      - 'pod-provider/backend/tests/identitybinding-fence-service-node.test.cjs'
+      - 'pod-provider/backend/tests/identitybinding-index-query-node.test.cjs'
+      - 'pod-provider/backend/utils/identitybinding-index-query.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fenced-binding-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax and deterministic policy regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/services/identitybindings.service.js
+          node --check pod-provider/backend/utils/identitybinding-fence-policy.js
+          node --check pod-provider/backend/tests/identitybinding-fence-policy-node.test.cjs
+          node --check pod-provider/backend/tests/identitybinding-fence-service-node.test.cjs
+          node --check pod-provider/backend/tests/identitybinding-index-query-node.test.cjs
+          node --check pod-provider/backend/utils/identitybinding-index-query.js
+          node --test pod-provider/backend/tests/identitybinding-fence-policy-node.test.cjs pod-provider/backend/tests/identitybinding-fence-service-node.test.cjs pod-provider/backend/tests/identitybinding-index-query-node.test.cjs

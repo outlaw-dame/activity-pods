@@ -1,5 +1,6 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
+const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
 
 module.exports = {
   name: 'data-authorizations',
@@ -114,6 +115,7 @@ module.exports = {
   hooks: {
     before: {
       async post(ctx) {
+        await beforeSaiMutation(ctx, 'data-authorizations', ctx.params.resource);
         // For migration, we don't want to handle the following side-effects
         if (ctx.meta.isMigration === true) return;
 
@@ -166,6 +168,14 @@ module.exports = {
           },
           contentType: MIME_TYPES.JSON
         });
+      },
+      async delete(ctx) {
+        if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
+        const resource = await this.actions.get(
+          { resourceUri: ctx.params.resourceUri, webId: 'system' },
+          { parentCtx: ctx }
+        );
+        await beforeSaiMutation(ctx, 'data-authorizations', resource);
       }
     },
     after: {

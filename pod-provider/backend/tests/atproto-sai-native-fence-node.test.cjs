@@ -1,0 +1,211 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { test } = require('node:test');
+
+class MoleculerError extends Error {
+  constructor(message, code, type, data) {
+    super(message);
+    this.code = code;
+    this.type = type;
+    this.data = data;
+  }
+}
+
+const backend = path.join(__dirname, '..');
+function load(file, deps) {
+  const module = { exports: {} };
+  const source = readFileSync(file, 'utf8');
+  vm.runInNewContext(source, {
+    module, exports: module.exports, process, Buffer, URL, BigInt, Set,
+    require(name) {
+      if (Object.hasOwn(deps, name)) return deps[name];
+      throw new Error('Unexpected dependency ' + name + ' in ' + file);
+    }
+  }, { filename: file, timeout: 3000 });
+  return module.exports;
+}
+const account = require('../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs');
+const consent = require('../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs');
+const native = load(path.join(backend, 'services/utils/atproto-sai-native-fence.js'), {
+  moleculer: { Errors: { MoleculerError } },
+  '../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs': account,
+  '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs': consent
+});
+
+const origin = 'https://paper.example.org';
+const owner = origin + '/alice';
+const app = origin + '/clients/paper';
+const grant = owner + '/data/access-grants/ag1';
+const resource = {
+  'interop:grantedBy': owner,
+  'interop:dataOwner': owner,
+  'interop:grantee': app
+};
+const datasetRow = [{
+  account: { value: 'urn:AuthAccount:alice' },
+  username: { value: 'alice' }
+}];
+
+function setup() {
+  const calls = [];
+  let status = 'active';
+  let revision = '1';
+  let skipUpdate = false;
+  const ctx = {
+    params: { resource, resourceUri: grant },
+    meta: {},
+    call: async (name, params) => {
+      calls.push({ name, params });
+      if (name === 'triplestore.query' && params.dataset === 'settings') return datasetRow;
+      if (name === 'triplestore.query' && params.dataset === 'alice') {
+        return [{
+          status: { value: status },
+          revision: { value: revision },
+          grant: { value: grant }
+        }];
+      }
+      if (name === 'triplestore.update') {
+        assert.equal(params.dataset, 'alice');
+        assert.match(params.query, /repoConsentRevision/);
+        if (!skipUpdate && status === 'active') {
+          status = 'blocked'; revision = '2';
+        }
+        return undefined;
+      }
+      if (name === 'access-grants.getContainerUri') {
+        return owner + '/data/access-grants/';
+      }
+      throw Error('Unexpected native service action: ' + name);
+    }
+  };
+  return {
+    calls, ctx,
+    setSkipUpdate(value) { skipUpdate = value; },
+    current() { return { status, revision }; }
+  };
+}
+
+const oldEnabled = process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED;
+const oldApps = process.env.APODS_ATPROTO_SAI_FENCED_APPS;
+function env(enabled, apps = app) {
+  if (enabled) {
+    process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED = 'true';
+    process.env.APODS_ATPROTO_SAI_FENCED_APPS = apps;
+  } else {
+    delete process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED;
+    delete process.env.APODS_ATPROTO_SAI_FENCED_APPS;
+  }
+}
+process.on('exit', () => {
+  if (oldEnabled === undefined) delete process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED;
+  else process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED = oldEnabled;
+  if (oldApps === undefined) delete process.env.APODS_ATPROTO_SAI_FENCED_APPS;
+  else process.env.APODS_ATPROTO_SAI_FENCED_APPS = oldApps;
+});
+
+test('feature-disabled SAI traffic adds no Moleculer or Jena calls', async () => {
+  env(false);
+  const { ctx, calls } = setup();
+  assert.equal((await native.beforeSaiMutation(ctx, 'access-grants', resource)).checked, false);
+  assert.equal(calls.length, 0);
+});
+
+test('unrelated application does not touch the repository consent dataset', async () => {
+  env(true, origin + '/clients/another');
+  const { ctx, calls } = setup();
+  assert.equal((await native.beforeSaiMutation(ctx, 'data-authorizations', resource)).checked, false);
+  assert.equal(calls.length, 0);
+});
+
+test('native grant mutation first durably blocks the exact per-user consent revision', async () => {
+  env(true);
+  const { ctx, calls, current } = setup();
+  const result = await native.beforeSaiMutation(ctx, 'access-grants', resource);
+  assert.equal(result.blocked, true);
+  assert.deepEqual(current(), { status: 'blocked', revision: '2' });
+  assert.deepEqual(calls.map(x => x.name), [
+    'triplestore.query',
+    'triplestore.query',
+    'access-grants.getContainerUri',
+    'triplestore.update',
+    'triplestore.query'
+  ]);
+  assert.match(calls[0].params.query, /LIMIT 2/);
+  assert.ok(!calls.some(x => x.name.startsWith('auth.account') || x.name.includes('.list')));
+  assert.ok(calls.filter(x => x.name === 'triplestore.update')
+    .every(x => x.params.dataset === 'alice' && x.params.webId === 'system'));
+});
+
+test('ambiguous update success must not permit a native LDP mutation', async () => {
+  env(true);
+  const { ctx, calls, setSkipUpdate } = setup();
+  setSkipUpdate(true);
+  await assert.rejects(
+    native.beforeSaiMutation(ctx, 'data-grants', resource),
+    e => e.code === 503 && e.type === 'ATPROTO_SAI_FENCE_NOT_DURABLE'
+  );
+  assert.equal(calls.filter(x => x.name === 'triplestore.update').length, 1);
+});
+
+test('blocked permissions remain blocked when a second native mutation arrives', async () => {
+  env(true);
+  const { ctx, calls } = setup();
+  await native.beforeSaiMutation(ctx, 'access-authorizations', resource);
+  const priorUpdates = calls.filter(x => x.name === 'triplestore.update').length;
+  assert.equal((await native.beforeSaiMutation(ctx, 'data-authorizations', resource)).blocked, true);
+  assert.equal(calls.filter(x => x.name === 'triplestore.update').length, priorUpdates);
+});
+
+test('missing owner, malformed app config and unauthorized grant-kind fail without write', async () => {
+  env(true);
+  const { ctx, calls } = setup();
+  await assert.rejects(native.beforeSaiMutation(ctx, 'access-grants', {
+    'interop:grantee': app
+  }), e => e.type === 'ATPROTO_SAI_FENCE_IDENTITY_INVALID');
+  await assert.rejects(native.beforeSaiMutation(ctx, 'unknown', resource),
+    e => e.type === 'ATPROTO_SAI_FENCE_KIND_INVALID');
+  env(true, 'not a URI');
+  await assert.rejects(native.beforeSaiMutation(ctx, 'access-grants', resource));
+  assert.equal(calls.length, 0);
+});
+
+test('actual AccessGrant and DataGrant hooks use persisted pre-delete identity', async () => {
+  env(true);
+  const stubLdp = { ControlledContainerMixin: {} };
+  for (const serviceName of ['access-grants', 'data-grants']) {
+    const s = load(path.join(backend, 'services/sai/' + serviceName + '.js'), {
+      '../utils/atproto-sai-native-fence': native,
+      '@semapps/ldp': stubLdp
+    });
+    const { ctx, calls } = setup();
+    ctx.params.resource = {
+      'interop:grantedBy': origin + '/attacker',
+      'interop:dataOwner': origin + '/attacker',
+      'interop:grantee': origin + '/attacker'
+    };
+    const instance = { actions: {
+      get: async () => ({ ...resource, '@id': grant })
+    }};
+    const result = await s.hooks.before.delete.call(instance, ctx);
+    assert.equal(result, undefined);
+    assert.ok(calls.some(x => x.name === 'triplestore.update'));
+  }
+});
+
+test('native AccessAuthorization post honors the ATProto fence even when Group bridge is off', async () => {
+  env(true);
+  const s = load(path.join(backend, 'services/sai/access-authorizations.js'), {
+    '../utils/atproto-sai-native-fence': native,
+    '../utils/collective-special-rights': { isGroupRight: () => false, onlyGroupRights: () => false },
+    '@semapps/ldp': { ControlledContainerMixin: {}, arrayOf: x => Array.isArray(x) ? x : x ? [x] : [] },
+    '@semapps/mime-types': { MIME_TYPES: { JSON: 'application/json' } }
+  });
+  const { ctx, calls } = setup();
+  delete process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED;
+  await s.hooks.before.post(ctx);
+  assert.ok(calls.some(x => x.name === 'triplestore.update'));
+});

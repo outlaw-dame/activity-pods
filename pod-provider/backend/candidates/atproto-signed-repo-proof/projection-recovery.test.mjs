@@ -6,6 +6,8 @@ import { test } from 'node:test';
 import { Pool } from 'pg';
 import { createSignedRepoProofStore } from './store.mjs';
 import { createRdfProjectionRecovery } from './projection-recovery.mjs';
+import { createPgLeaseTicketIssuer } from './pg-lease-ticket.mjs';
+import { createPodOperationTicketAuthority } from './pod-operation-ticket.mjs';
 
 const DSN = process.env.ATPROTO_REPO_PROOF_DSN || '';
 if (process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed' ||
@@ -150,6 +152,65 @@ test('PG18 cross-store recovery: atomic intent, fenced lease, CAS, replay, revoc
         'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.rdf_projection_jobs WHERE account_id=$1',
         [account('atomic')]
       )).rows[0].n, 1);
+    });
+
+    await t.test('projection tickets come from the current PG lease, signed head and SAI grant', async () => {
+      const name = 'ticket';
+      const k = makeKeys();
+      await bootstrap(store, name, k);
+      const accountId = account(name);
+      const signedDid = did(name);
+      const owner = crypto.randomUUID();
+      const leased = await pool.query(
+        "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET " +
+        "state='leased',lease_owner=$2::uuid,lease_epoch=1," +
+        "lease_until=clock_timestamp()+INTERVAL '60 seconds',attempt_count=1 " +
+        "WHERE account_id=$1 RETURNING root_cid,rev,head_cid",
+        [accountId, owner]
+      );
+      assert.equal(leased.rowCount, 1);
+      const appUri = 'https://paper.example.org/apps/writer';
+      const grantUri = accountId + '/data/access-grants/approved';
+      const authority = createPodOperationTicketAuthority({ secret: crypto.randomBytes(32) });
+      let granted = true;
+      const issuer = createPgLeaseTicketIssuer({
+        pool, tickets: authority, fixtureOnly: true,
+        verifySignedHead: params => store.verify({ ...params, publicKeyPem: k.publicKeyPem }),
+        verifyCurrentSaiConsent: async params =>
+          granted && params.accountId === accountId &&
+          params.appUri === appUri && params.grantUri === grantUri &&
+          params.consentRevision === '1'
+      });
+      const claim = { accountId, did: signedDid, leaseOwner: owner, leaseEpoch: '1' };
+      const issuance = await issuer.issueForLease({
+        claim, appUri, grantUri, consentRevision: '1'
+      });
+      const expectedScope = {
+        accountId, did: signedDid, appUri, grantUri,
+        operation: 'project', epoch: '1', projectionFence: '1',
+        rootCid: leased.rows[0].root_cid, rev: leased.rows[0].rev
+      };
+      assert.equal(authority.verify(issuance.ticket, expectedScope).projectionFence, '1');
+      await assert.rejects(issuer.issueForLease({
+        claim: { ...claim, leaseEpoch: '2' }, appUri, grantUri, consentRevision: '1'
+      }), e => e.code === 'PG_TICKET_LEASE_STALE');
+
+      granted = false;
+      await assert.rejects(issuer.issueForLease({
+        claim, appUri, grantUri, consentRevision: '1'
+      }), e => e.code === 'PG_TICKET_SAI_NOT_CURRENT');
+      granted = true;
+
+      // A superseded replica cannot mint a new operation ticket, even if it
+      // can still present an old claim and the user's SAI grant did not change.
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET " +
+        "lease_epoch=2,lease_owner=$2::uuid WHERE account_id=$1",
+        [accountId, crypto.randomUUID()]
+      );
+      await assert.rejects(issuer.issueForLease({
+        claim, appUri, grantUri, consentRevision: '1'
+      }), e => e.code === 'PG_TICKET_LEASE_STALE');
     });
 
     await t.test('readiness fails closed before projection and turns true only after verified RDF CAS + PG ACK', async () => {

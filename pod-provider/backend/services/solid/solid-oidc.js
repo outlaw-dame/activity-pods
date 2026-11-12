@@ -6,6 +6,9 @@ const RedisAdapter = require('../../config/oidc-adapter');
 const baseConfig = require('../../config/oidc');
 const fetch = require('node-fetch');
 const CONFIG = require('../../config/config');
+const { verifySolidDpop } = require('../../utils/solid-dpop-verifier');
+
+const validatedRequests = new WeakMap();
 
 module.exports = {
   name: 'solid-oidc',
@@ -26,6 +29,7 @@ module.exports = {
 
     const redisClient = new Redis(this.settings.redisUrl, { keyPrefix: 'oidc:' });
     config.adapter = name => new RedisAdapter(name, redisClient);
+    this.dpopRedis = redisClient;
 
     // See https://github.com/panva/node-oidc-provider/blob/main/recipes/client_based_origins.md
     config.clientBasedCORS = (ctx, origin, client) => {
@@ -85,6 +89,14 @@ module.exports = {
       if (token) {
         const payload = await ctx.call('jwk.verifyToken', { token });
         if (payload) {
+          if (process.env.APODS_SOLID_OIDC_DPOP_ENFORCE_ENABLED === 'true') {
+            try {
+              await this.verifyDpopRequest(req, token, payload);
+            } catch (_error) {
+              ctx.meta.webId = 'anon';
+              return Promise.reject(new E.UnAuthorizedError(E.ERR_INVALID_TOKEN));
+            }
+          }
           ctx.meta.tokenPayload = payload;
           ctx.meta.webId = payload.azp; // Use the WebID of the application requesting access
           ctx.meta.impersonatedUser = payload.webid; // Used by some services which need to know the real user (Attention: webid with a i)
@@ -106,6 +118,14 @@ module.exports = {
       if (token) {
         const payload = await ctx.call('jwk.verifyToken', { token });
         if (payload) {
+          if (process.env.APODS_SOLID_OIDC_DPOP_ENFORCE_ENABLED === 'true') {
+            try {
+              await this.verifyDpopRequest(req, token, payload);
+            } catch (_error) {
+              ctx.meta.webId = 'anon';
+              return Promise.reject(new E.UnAuthorizedError(E.ERR_INVALID_TOKEN));
+            }
+          }
           ctx.meta.tokenPayload = payload;
           ctx.meta.webId = payload.azp; // Use the WebID of the application requesting access
           ctx.meta.impersonatedUser = payload.webid; // Used by some services which need to know the real user (Attention: webid with a i)
@@ -136,6 +156,39 @@ module.exports = {
     }
   },
   methods: {
+    async verifyDpopRequest(req, token, payload) {
+      if (!req || typeof req !== 'object' || typeof req.method !== 'string' ||
+          !req.headers || typeof req.headers.dpop !== 'string' ||
+          !this.dpopRedis) throw new Error('DPoP request proof is required');
+
+      const target = new URL(
+        req.originalUrl || req.url || '/',
+        this.settings.baseUrl
+      ).toString();
+      // The same request may go through both middleware functions.
+      // Don't treat its second authorization check as a replay.
+      const cached = validatedRequests.get(req);
+      if (cached && cached.token === token &&
+          cached.proof === req.headers.dpop &&
+          cached.method === req.method && cached.target === target) return;
+
+      await verifySolidDpop({
+        proof: req.headers.dpop, idToken: token, verifiedToken: payload,
+        method: req.method, targetUrl: target,
+        expectedIssuer: this.settings.baseUrl,
+        reserveReplay: async (key, ttl) => {
+          // Share the OIDC provider's Redis connection and use an atomic
+          // SET NX so every Moleculer replica sees the same replay ledger.
+          const result = await this.dpopRedis.set(
+            'atproto:dpop:replay:' + key, '1', 'EX', ttl, 'NX'
+          );
+          return result === 'OK';
+        }
+      });
+      validatedRequests.set(req, {
+        token, proof: req.headers.dpop, method: req.method, target
+      });
+    },
     async interactionFinished(interactionId, result) {
       const interaction = await this.oidc.Interaction.find(interactionId);
       if (interaction) {

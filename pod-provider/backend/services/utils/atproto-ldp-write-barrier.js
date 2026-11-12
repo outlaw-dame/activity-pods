@@ -77,8 +77,67 @@ function isPodStorageAncestor(uri, baseUrl) {
     (segments.length === 2 && segments[1] === 'data');
 }
 
+/**
+ * Initial creation of the empty managed container is part of the native Pod
+ * signup registry. Denying it blocks every later registered container and
+ * leaves an incompletely provisioned account. Only the exact empty container
+ * can be created or attached: its child resources still require the fenced
+ * writer, and its contents cannot be modified by generic LDP operations.
+ */
+function exactIdentityContainer(uri, baseUrl) {
+  const base = providerBase(baseUrl);
+  if (!base) return null;
+  const value = localPath(uri, base);
+  if (!value || value.invalid || value.segments?.length !== 3) return null;
+  const [username, storage, container] = value.segments;
+  if (storage !== 'data' || container !== 'identity-bindings' ||
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(username)) return null;
+  return {
+    owner: base.origin + base.path + username,
+    storage: base.origin + base.path + username + '/data'
+  };
+}
+
+function safeBootstrapOptions(options) {
+  const perms = options?.newResourcesPermissions;
+  const accepted = options?.acceptedTypes;
+  return Boolean(options && typeof options === 'object' &&
+    options.name === 'identitybindings' &&
+    options.path === '/identity-bindings' &&
+    options.excludeFromMirror === true &&
+    options.activateTombstones === false &&
+    options.readOnly === false &&
+    Array.isArray(accepted) && accepted.length === 1 &&
+    accepted[0] === 'http://activitypods.org/ns/core#AtprotoIdentityBinding' &&
+    perms?.anon?.read === false &&
+    perms?.user?.read === false &&
+    perms?.user?.write === false);
+}
+
+function isAllowedEmptyContainerBootstrap(ctx, baseUrl, kind) {
+  const params = ctx?.params || {};
+  if (kind === 'create') {
+    const exact = exactIdentityContainer(params.containerUri, baseUrl);
+    return Boolean(exact && params.webId === exact.owner &&
+      safeBootstrapOptions(params.options));
+  }
+  if (kind === 'attach') {
+    const exact = exactIdentityContainer(params.resourceUri, baseUrl);
+    if (!exact || params.webId !== 'system') return false;
+    const target = localPath(params.containerUri, providerBase(baseUrl));
+    const base = providerBase(baseUrl);
+    if (!target || target.invalid ||
+        target.segments?.length !== 2) return false;
+    const [username, storage] = target.segments;
+    return username && storage === 'data' &&
+      exact.storage === base.origin + base.path + username + '/data';
+  }
+  return false;
+}
+
 function assertNotManagedLdpMutation(ctx, baseUrl, {
-  checkResource = true, checkContainer = true, protectAncestors = false
+  checkResource = true, checkContainer = true, protectAncestors = false,
+  allowEmptyBootstrap = null
 } = {}) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
   if (!providerBase(baseUrl)) {
@@ -88,6 +147,8 @@ function assertNotManagedLdpMutation(ctx, baseUrl, {
     );
   }
   const params = ctx?.params || {};
+  if (allowEmptyBootstrap &&
+      isAllowedEmptyContainerBootstrap(ctx, baseUrl, allowEmptyBootstrap)) return;
   // O(1) URI checks: no account listing, graph traversal, network call,
   // database query, or persistent per-user state in the hot path.
   if (
@@ -107,4 +168,7 @@ function assertNotManagedLdpMutation(ctx, baseUrl, {
   }
 }
 
-module.exports = { protectedPath, isPodStorageAncestor, assertNotManagedLdpMutation };
+module.exports = {
+  protectedPath, isPodStorageAncestor, exactIdentityContainer,
+  isAllowedEmptyContainerBootstrap, assertNotManagedLdpMutation
+};

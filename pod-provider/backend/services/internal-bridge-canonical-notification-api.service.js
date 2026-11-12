@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { Errors: WebErrors } = require('moleculer-web');
 const CONFIG = require('../config/config');
+const { mapWithConcurrency } = require('../utils/activitypub-delivery-planner');
+const { assertNotificationPgCanRun } = require('../utils/notification-pg-release-gate');
+const { createCanonicalNotificationLedger } = require('../utils/canonical-notification-pg-ledger');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -26,7 +29,7 @@ const VALID_KINDS = new Set([
 
 const NOTIFICATION_KINDS = new Set(['ReactionAdd', 'ShareAdd', 'FollowAdd', 'PostCreate', 'DirectMessage']);
 
-const VALID_PROTOCOLS = new Set(['activitypub', 'atproto']);
+const VALID_PROTOCOLS = new Set(['activitypub', 'atproto', 'activitypods']);
 
 const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams';
 
@@ -48,15 +51,43 @@ module.exports = {
     },
     routePath: '/api/internal/bridge',
     dedupeMaxEntries: Number(process.env.CANONICAL_NOTIFICATION_DEDUPE_MAX || 10000),
+    pgLedgerEnabled: process.env.APODS_NOTIFICATION_LEDGER_ENABLED === 'true',
     baseUrl: (CONFIG.BASE_URL || process.env.SEMAPPS_HOME_URL || '').replace(/\/$/, '')
   },
 
   created() {
     // In-memory idempotency set. Capped at dedupeMaxEntries to prevent unbounded growth.
     this.processedIds = new Set();
+    this.inFlightIds = new Set();
+    this.notificationPool = null;
+    this.notificationLedger = null;
   },
 
   async started() {
+    assertNotificationPgCanRun();
+    if (this.settings.pgLedgerEnabled) {
+      const url = process.env.APODS_NOTIFICATION_PG_URL;
+      if (typeof url !== 'string' || !url) {
+        throw new Error('Canonical notification PG ledger requires a dedicated PostgreSQL DSN');
+      }
+      // Only two pooled connections per API replica, never one per user or
+      // webhook. The pool login must have DML, not migration-owner privileges.
+      const { Pool } = require('pg');
+      this.notificationPool = new Pool({
+        connectionString: url, max: 2,
+        connectionTimeoutMillis: 3000, idleTimeoutMillis: 10000,
+        query_timeout: 6500, allowExitOnIdle: true
+      });
+      this.notificationLedger = createCanonicalNotificationLedger({ pool: this.notificationPool });
+      try {
+        await this.notificationLedger.verifySchema();
+      } catch (error) {
+        await this.notificationPool.end();
+        this.notificationPool = null;
+        this.notificationLedger = null;
+        throw error;
+      }
+    }
     const bearerToken = this.settings.auth.bearerToken;
 
     if (!bearerToken) {
@@ -101,6 +132,12 @@ module.exports = {
     this.logger.info('[CanonicalNotificationApi] Internal routes registered under /api/internal/bridge');
   },
 
+  async stopped() {
+    if (this.notificationPool) await this.notificationPool.end();
+    this.notificationPool = null;
+    this.notificationLedger = null;
+  },
+
   actions: {
     ingest: {
       async handler(ctx) {
@@ -134,65 +171,116 @@ module.exports = {
           throw new MoleculerError('Missing or invalid actor object', 400, 'INVALID_INPUT');
         }
 
+        // The PostgreSQL ledger has a fixed 64-recipient bound; reject
+        // oversized mentions before any actor or object-owner lookup.
+        if (params.mentions !== undefined && (!Array.isArray(params.mentions) ||
+            params.mentions.length > 64)) {
+          throw new MoleculerError('Canonical mention list exceeds recipient budget',
+            400, 'INVALID_INPUT');
+        }
         const createdAt = String(params.createdAt || '').trim();
         if (!createdAt || !this.isValidIso8601(createdAt)) {
           throw new MoleculerError('Missing or invalid createdAt (must be ISO 8601)', 400, 'INVALID_INPUT');
         }
 
-        // --------------- Idempotency check ---------------
+        if (this.settings.pgLedgerEnabled) {
+          // Durable record first, external HTTP acknowledgment second.
+          // Expensive actor lookups occur before opening the PG transaction.
+          if (!this.notificationLedger) {
+            throw new MoleculerError('Canonical notification ledger unavailable', 503, 'PG_NOTIFY_UNAVAILABLE');
+          }
+          try {
+            const actorUri = await this.resolveActorUri(ctx, params.actor);
+            const recipients = NOTIFICATION_KINDS.has(kind)
+              ? await this.resolveLocalRecipients(ctx, params) : [];
+            if (recipients.length && !actorUri) {
+              throw new Error('Canonical actor resolution incomplete');
+            }
+            const entries = recipients.map(recipient => ({
+              recipient, actorUri,
+              activity: this.buildBridgeActivity(params, recipient, actorUri)
+            }));
+            const stored = await this.notificationLedger.enqueue({
+              intentId: canonicalIntentId, kind, protocol: sourceProtocol,
+              recipients: entries
+            });
+            ctx.meta.$statusCode = stored.duplicate ? 409 : 202;
+            return {
+              ok: true, durable: true, duplicate: stored.duplicate,
+              delivered: false, queuedRecipients: stored.recipients,
+              canonicalIntentId
+            };
+          } catch (error) {
+            // A database failure MUST NOT return 202, even when a prior
+            // worker already emitted the notification to an inbox.
+            if (error.code === 'PG_NOTIFY_INTENT_CONFLICT' ||
+                error.code === 'PG_NOTIFY_INPUT_INVALID' ||
+                error.code === 'PG_NOTIFY_PAYLOAD_LIMIT') {
+              throw new MoleculerError('Invalid or conflicting canonical notification',
+                409, error.code);
+            }
+            this.logger.error('[CanonicalNotificationApi] Durable enqueue denied', {
+              kind, code: error.code || 'PG_NOTIFY_UNAVAILABLE'
+            });
+            throw new MoleculerError('Canonical notification persistence unavailable',
+              503, 'PG_NOTIFY_UNAVAILABLE');
+          }
+        }
+
+        // Only completed events are duplicates. Never acknowledge an in-flight
+        // delivery as processed: a worker crash or a failed Pod call must remain
+        // replayable. This set is local to one replica, not durable authority.
         if (this.processedIds.has(canonicalIntentId)) {
           ctx.meta.$statusCode = 409;
           return { ok: true, duplicate: true };
         }
-
-        // --------------- Ignore non-notification kinds early ---------------
-        if (!NOTIFICATION_KINDS.has(kind)) {
-          this.processedIds.add(canonicalIntentId);
-          this.trimDedupeSet();
-          ctx.meta.$statusCode = 202;
-          return { ok: true, delivered: false, recipients: [], duplicate: false, reason: 'non-notification kind' };
+        if (this.inFlightIds.has(canonicalIntentId) || this.inFlightIds.size >= 128) {
+          throw new MoleculerError('Bridge delivery is already in progress or at capacity',
+            503, 'BRIDGE_DELIVERY_BUSY');
         }
-
-        // --------------- Resolve recipients and deliver ---------------
-        let delivered = false;
-        let deliveredRecipients = [];
-
+        this.inFlightIds.add(canonicalIntentId);
         try {
+          if (!NOTIFICATION_KINDS.has(kind)) {
+            this.processedIds.add(canonicalIntentId);
+            this.trimDedupeSet();
+            ctx.meta.$statusCode = 202;
+            return { ok: true, delivered: false, recipients: [], duplicate: false, reason: 'non-notification kind' };
+          }
+
           const actorUri = await this.resolveActorUri(ctx, params.actor);
           const localRecipients = await this.resolveLocalRecipients(ctx, params);
-
-          if (localRecipients.length > 0 && actorUri) {
-            deliveredRecipients = await this.deliverToLocalInboxes(ctx, params, localRecipients, actorUri);
-            delivered = deliveredRecipients.length > 0;
+          if (localRecipients.length > 0 && !actorUri) {
+            throw new Error('Canonical notification actor could not be resolved');
           }
-        } catch (err) {
-          // Log but don't fail — the sidecar treats non-2xx as an error and won't commit offset
-          this.logger.error('[CanonicalNotificationApi] Delivery error', {
-            canonicalIntentId,
-            kind,
-            error: err?.message || String(err)
+          const deliveredRecipients = localRecipients.length
+            ? await this.deliverToLocalInboxes(ctx, params, localRecipients, actorUri)
+            : [];
+          // Never persist completed status after an exception or partial
+          // delivery. Existing in-memory dedupe is only an optimization;
+          // cross-replica/exactly-once durability remains a separate gate.
+          this.processedIds.add(canonicalIntentId);
+          this.trimDedupeSet();
+          this.logger.info('[CanonicalNotificationApi] Canonical notification processed', {
+            canonicalIntentId, kind, sourceProtocol,
+            delivered: deliveredRecipients.length > 0,
+            recipientCount: deliveredRecipients.length
           });
+          ctx.meta.$statusCode = 202;
+          return {
+            ok: true,
+            delivered: deliveredRecipients.length > 0,
+            recipients: deliveredRecipients,
+            duplicate: false
+          };
+        } catch (err) {
+          this.logger.error('[CanonicalNotificationApi] Delivery failed and remains replayable', {
+            canonicalIntentId, kind, code: err?.code || err?.type || 'BRIDGE_DELIVERY_FAILED'
+          });
+          throw new MoleculerError('Canonical notification delivery not complete',
+            503, 'BRIDGE_DELIVERY_RETRYABLE');
+        } finally {
+          this.inFlightIds.delete(canonicalIntentId);
         }
-
-        // Mark as processed even if delivery partially failed, to prevent duplicate processing
-        this.processedIds.add(canonicalIntentId);
-        this.trimDedupeSet();
-
-        this.logger.info('[CanonicalNotificationApi] Canonical notification processed', {
-          canonicalIntentId,
-          kind,
-          sourceProtocol,
-          delivered,
-          recipientCount: deliveredRecipients.length
-        });
-
-        ctx.meta.$statusCode = 202;
-        return {
-          ok: true,
-          delivered,
-          recipients: deliveredRecipients,
-          duplicate: false
-        };
       }
     }
   },
@@ -247,7 +335,9 @@ module.exports = {
     // ---------------------------------------------------------------------------
 
     trimDedupeSet() {
-      const max = this.settings.dedupeMaxEntries;
+      const configured = this.settings.dedupeMaxEntries;
+      const max = Number.isSafeInteger(configured) && configured > 0
+        ? Math.min(configured, 10000) : 10000;
       while (this.processedIds.size > max) {
         const oldest = this.processedIds.values().next().value;
         this.processedIds.delete(oldest);
@@ -304,7 +394,8 @@ module.exports = {
 
       // 4. canonicalAccountId fallback – cannot map to AP URI without more info
       this.logger.warn('[CanonicalNotificationApi] Could not resolve actor URI – insufficient actor ref fields', {
-        actorRef
+        hasDid: typeof actorRef.did === 'string',
+        hasHandle: typeof actorRef.handle === 'string'
       });
       return null;
     },
@@ -359,20 +450,22 @@ module.exports = {
         });
       }
 
-      const locals = [];
-      for (const actorUri of candidates) {
+      const candidateUris = [...candidates];
+      let lookupErrors = 0;
+      const checks = await mapWithConcurrency(candidateUris, 4, async actorUri => {
         try {
-          const isLocal = await ctx.call('activitypub.actor.isLocal', { actorUri });
-          if (isLocal) locals.push(actorUri);
+          return await ctx.call('activitypub.actor.isLocal', { actorUri }, { timeout: 5000 })
+            ? actorUri : null;
         } catch (err) {
+          lookupErrors++;
           this.logger.warn('[CanonicalNotificationApi] isLocal check failed', {
-            actorUri,
-            error: err?.message || String(err)
+            actorUri, code: err?.code || err?.type || 'LOOKUP_FAILED'
           });
+          return null;
         }
-      }
-
-      return locals;
+      });
+      if (lookupErrors) throw new Error('Local notification recipient resolution incomplete');
+      return checks.filter(Boolean);
     },
 
     // ---------------------------------------------------------------------------
@@ -537,62 +630,37 @@ module.exports = {
     // ---------------------------------------------------------------------------
 
     async deliverToLocalInboxes(ctx, payload, localRecipients, actorUri) {
-      const delivered = [];
-
-      for (const recipientWebId of localRecipients) {
+      let failures = 0;
+      // The old serial loop performed two broker calls for every recipient.
+      // Bounded parallelism lowers latency without allocating an unbounded
+      // Promise array or oversubscribing the Pod-cell service fabric.
+      const results = await mapWithConcurrency(localRecipients, 4, async recipientWebId => {
         try {
-          // Get local actor document to find their inbox URI
-          const actorDoc = await ctx.call('activitypub.actor.get', {
-            actorUri: recipientWebId,
-            webId: 'system'
-          });
-
-          if (!actorDoc) {
-            this.logger.warn('[CanonicalNotificationApi] Local actor not found', { recipientWebId });
-            continue;
+          const actorDoc = await ctx.call('activitypub.actor.get',
+            { actorUri: recipientWebId, webId: 'system' }, { timeout: 5000 });
+          const inboxUri = actorDoc?.inbox;
+          if (!this.isHttpUrl(inboxUri)) {
+            throw new Error('Local actor has no trusted inbox');
           }
-
-          const inboxUri = actorDoc.inbox;
-          if (!inboxUri || !this.isHttpUrl(inboxUri)) {
-            this.logger.warn('[CanonicalNotificationApi] Local actor has no resolvable inbox', {
-              recipientWebId,
-              inbox: inboxUri
-            });
-            continue;
-          }
-
           const activity = this.buildBridgeActivity(payload, recipientWebId, actorUri);
-
-          // Post to inbox. meta.webId = actorUri ensures the actor check in inbox.post passes.
-          // skipSignatureValidation is safe here because this is an internal API call
-          // from a trusted bridge service that has already authenticated with the bearer token.
-          await ctx.call(
-            'activitypub.inbox.post',
-            { collectionUri: inboxUri, ...activity },
-            { meta: { webId: actorUri, skipSignatureValidation: true } }
-          );
-
-          delivered.push(recipientWebId);
-
-          this.logger.debug('[CanonicalNotificationApi] Delivered bridge activity to inbox', {
-            recipientWebId,
-            inboxUri,
-            kind: payload.kind,
-            actorUri
-          });
+          await ctx.call('activitypub.inbox.post',
+            { ...activity, collectionUri: inboxUri },
+            { meta: { webId: actorUri, skipSignatureValidation: true }, timeout: 5000 });
+          return recipientWebId;
         } catch (err) {
-          this.logger.error('[CanonicalNotificationApi] Failed to deliver to inbox', {
-            recipientWebId,
-            kind: payload.kind,
-            error: err?.message || String(err),
-            code: err?.code,
-            type: err?.type
+          failures++;
+          this.logger.error('[CanonicalNotificationApi] Local inbox delivery failed', {
+            recipientWebId, kind: payload.kind,
+            code: err?.code || err?.type || 'DELIVERY_FAILED'
           });
-          // Continue to next recipient; partial delivery is better than none
+          return null;
         }
-      }
-
-      return delivered;
+      });
+      // Do not return a durable acceptance on partial delivery. A retry
+      // can duplicate already-emitted transient notifications until the
+      // future per-recipient durable idempotency ledger is implemented.
+      if (failures) throw new Error('One or more bridge inbox deliveries failed');
+      return results.filter(Boolean);
     }
   }
 };

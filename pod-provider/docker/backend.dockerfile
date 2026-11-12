@@ -27,6 +27,7 @@ ADD backend/scripts/patch-semapps-jsonld-distributed-context-cache.js /app/backe
 ADD backend/scripts/patch-semapps-ontologies-distributed-cache.js /app/backend/scripts/patch-semapps-ontologies-distributed-cache.js
 ADD backend/scripts/patch-semapps-jsonld-distributed-locality.js /app/backend/scripts/patch-semapps-jsonld-distributed-locality.js
 ADD backend/scripts/patch-semapps-ldp-distributed-semantic-locality.js /app/backend/scripts/patch-semapps-ldp-distributed-semantic-locality.js
+ADD backend/scripts/patch-oidc-provider-solid-token.js /app/backend/scripts/patch-oidc-provider-solid-token.js
 RUN yarn install && yarn cache clean
 
 ADD backend /app/backend

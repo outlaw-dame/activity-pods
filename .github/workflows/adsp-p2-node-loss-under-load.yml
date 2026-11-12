@@ -278,11 +278,9 @@ jobs:
           }
 
           write_epoch_marker() {
-            node - "$1" <<'NODE'
-          const fs = require('node:fs');
-          fs.writeFileSync(process.argv[2], `${Date.now()}\n`, 'utf8');
-          NODE
+            node backend/scripts/adsp-p2-epoch-marker.js "$1"
           }
+
 
           rm -f "$barrier_host"/* measurements/adsp-p2/root-entry-r*.jsonl measurements/adsp-p2/trace-10-r*.jsonl
           export APDM_P8_ENABLED=true ADSP_P2_ROOT_ENTRY_EVIDENCE_ENABLED=true ADSP_P2_REPLICAS=4

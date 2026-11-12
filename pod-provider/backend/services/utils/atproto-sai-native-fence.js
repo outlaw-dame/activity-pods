@@ -1,6 +1,8 @@
 'use strict';
 
 const { MoleculerError } = require('moleculer').Errors;
+const { hasAuthorizedOwnerParentForBroker } = require('./atproto-sai-owner-context');
+const { getProviderAtprotoPgAuthority } = require('../../utils/atproto-canonical-pg-authority');
 const {
   buildCanonicalPodAccountLookup, parseCanonicalPodAccount
 } = require('../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs');
@@ -63,6 +65,31 @@ function approvedApps() {
   return verified;
 }
 
+// ActivityPods stores LDP resources outside the container URI when
+// resourcesWithContainerPath is false. Verify the authoritative ldp:contains
+// triple rather than relying on a URI prefix or listing the whole container.
+function resourceMembershipQuery(containerUri, resourceUri) {
+  safeIri(containerUri, { httpsOnly: true });
+  safeIri(resourceUri, { httpsOnly: true });
+  const container = containerUri.replace(/[/]+$/u, '');
+  const resource = resourceUri.replace(/[/]+$/u, '');
+  return 'ASK WHERE { VALUES ?container { <' + container + '> <' + container +
+    '/> } VALUES ?child { <' + resource + '> <' + resource +
+    '/> } ?container <http://www.w3.org/ns/ldp#contains> ?child . }';
+}
+
+function isOwnedStorageUri(uri, owner) {
+  if (typeof uri !== 'string' || uri.length > 4096) return false;
+  try {
+    const parsed = new URL(uri);
+    const storageRoot = owner.replace(/[/]+$/u, '') + '/data/';
+    return parsed.href === uri && !parsed.username && !parsed.password &&
+      !parsed.search && !parsed.hash && uri.startsWith(storageRoot);
+  } catch {
+    return false;
+  }
+}
+
 function bindingIdentity(kind, resource) {
   if (!ALLOWED_KINDS.has(kind)) deny('ATPROTO_SAI_FENCE_KIND_INVALID');
   const ownerKey = kind.startsWith('access-') ? 'grantedBy' : 'dataOwner';
@@ -92,6 +119,10 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') {
     return { checked: false };
   }
+  const pgAuthorityEnabled =
+    process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED === 'true';
+  // Only approved applications use this narrow canonical PG path.
+  // Unrelated Solid grants do not incur database calls.
   // No broad Solid or provider-wide feature flag is needed for unrelated
   // SAI grants. Parse the small approved-app set before any broker calls.
   const apps = approvedApps();
@@ -108,7 +139,14 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   // SAI registration is an owner decision. A client acting through
   // impersonatedUser may use its granted data permissions, but cannot grant
   // or revoke the owner's repository authority.
-  if (ctx.meta?.webId !== owner || ctx.meta?.impersonatedUser) {
+  // Direct LDP calls must carry the authenticated owner. An app install,
+  // upgrade or uninstall may perform nested LDP writes as 'system'; those
+  // calls are accepted only while the already-authorized parent SAI action
+  // is on the call stack for this exact owner/application pair.
+  const directOwner = ctx.meta?.webId === owner && !ctx.meta?.impersonatedUser;
+  const ownerAction = directOwner ? false :
+    await hasAuthorizedOwnerParentForBroker(ctx, { owner, app });
+  if (!directOwner && !ownerAction) {
     throw new MoleculerError(
       'Only the Pod owner can change this repository authorization',
       403, 'ATPROTO_SAI_OWNER_REQUIRED'
@@ -128,20 +166,18 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   try {
     const nativeContainer = await call(kind + '.getContainerUri', { webId: owner });
     safeIri(nativeContainer, { httpsOnly: true });
-    const prefix = nativeContainer.endsWith('/') ? nativeContainer : nativeContainer + '/';
     const target = operation === 'post' ? nativeContainer : ctx.params?.resourceUri;
+    if (!isOwnedStorageUri(nativeContainer, owner) ||
+        (operation === 'delete' && !isOwnedStorageUri(target, owner))) {
+      throw new MoleculerError(
+        'The authorization is outside the owner’s Pod storage',
+        403, 'ATPROTO_SAI_TARGET_INVALID'
+      );
+    }
     if (operation === 'post' && ctx.params?.containerUri &&
         ctx.params.containerUri !== nativeContainer) {
       throw new MoleculerError(
         'The authorization must be stored in the owner’s SAI container',
-        403, 'ATPROTO_SAI_TARGET_INVALID'
-      );
-    }
-    if (operation === 'delete' &&
-        (typeof target !== 'string' || !target.startsWith(prefix) ||
-         target.length > 4096)) {
-      throw new MoleculerError(
-        'The authorization does not belong to the owner’s SAI container',
         403, 'ATPROTO_SAI_TARGET_INVALID'
       );
     }
@@ -164,47 +200,90 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     });
     const account = parseCanonicalPodAccount(accountRows, owner);
     const dataset = account.username;
+    if (operation === 'delete') {
+      const belongsToContainer = await call('triplestore.query', {
+        dataset, webId: 'system',
+        query: resourceMembershipQuery(nativeContainer, target)
+      });
+      if (belongsToContainer !== true) {
+        throw new MoleculerError(
+          'The authorization is not contained by the owner’s SAI container',
+          403, 'ATPROTO_SAI_TARGET_INVALID'
+        );
+      }
+    }
     const subjectUri = consentSubject(owner, app);
     const getRows = () => call('triplestore.query', {
       dataset, webId: 'system',
       query: readConsentQuery({ subjectUri })
     });
-    const rows = await getRows();
-    // No consent epoch exists yet for the new app/Pod. The eventual native
-    // bootstrap must separately verify installed SAI permission.
-    if (Array.isArray(rows) && rows.length === 0) return { checked: true, present: false };
-    if (!Array.isArray(rows) || rows.length !== 1) {
-      deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
+    let pgAuthority = null;
+    let state;
+    if (pgAuthorityEnabled) {
+      // Once the canonical PG mode is on, mutable RDF is *never* the
+      // authorization truth. A privileged SPARQL update can alter the
+      // projection but cannot forge an active PG consent.
+      pgAuthority = await getProviderAtprotoPgAuthority();
+      const identity = await pgAuthority.getIdentity({ owner });
+      if (!identity || identity.state !== 'active') {
+        deny('ATPROTO_SAI_PG_IDENTITY_MISSING');
+      }
+      state = await pgAuthority.getConsent({ owner, app });
+      if (!state) return { checked: true, present: false };
+    } else {
+      const rows = await getRows();
+      // No consent epoch exists yet for a new app in the legacy disposable
+      // Jena test. It must not be treated as permission for a signed repo.
+      if (Array.isArray(rows) && rows.length === 0) return { checked: true, present: false };
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
+      }
+      const grantUri = scalar(rows[0]?.grant);
+      if (!grantUri) deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
+      safeIri(grantUri, { httpsOnly: true });
+      state = parseConsentRows(rows, { grantUri });
     }
-    const grantUri = scalar(rows[0]?.grant);
-    if (!grantUri) deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
-    safeIri(grantUri, { httpsOnly: true });
-    const state = parseConsentRows(rows, { grantUri });
-    if (state.status === 'blocked') return { checked: true, blocked: true };
+    const grantUri = state.grantUri;
+    if ((state.state || state.status) === 'blocked') return { checked: true, blocked: true };
 
     // Only the approved application's existing access grant is a valid
     // consent pointer. Do not trust the mutation's submitted grant URI.
     const grantContainer = await call('access-grants.getContainerUri', { webId: owner });
     safeIri(grantContainer, { httpsOnly: true });
-    if (!grantUri.startsWith(grantContainer.endsWith('/') ? grantContainer : grantContainer + '/') ||
-        !grantUri.startsWith(new URL(owner).origin + '/')) {
+    if (!isOwnedStorageUri(grantContainer, owner) ||
+        !isOwnedStorageUri(grantUri, owner)) {
       deny('ATPROTO_SAI_FENCE_GRANT_INVALID');
     }
+    const grantIsAttached = await call('triplestore.query', {
+      dataset, webId: 'system',
+      query: resourceMembershipQuery(grantContainer, grantUri)
+    });
+    if (grantIsAttached !== true) deny('ATPROTO_SAI_FENCE_GRANT_INVALID');
     safeEpoch(state.revision);
     if (BigInt(state.revision) === 9223372036854775807n) {
       deny('ATPROTO_SAI_FENCE_EPOCH_EXHAUSTED');
     }
-    await call('triplestore.update', {
-      dataset, webId: 'system',
-      query: beginRevocationQuery({
-        subjectUri, grantUri, revision: state.revision
-      })
-    });
-    // SPARQL update HTTP success does not mean its WHERE clause matched.
-    // A concurrent delete can race this hook; both paths must see blocked
-    // consent before any native mutation is allowed to continue.
-    const readback = parseConsentRows(await getRows(), { grantUri });
-    if (readback.status !== 'blocked' ||
+    let readback;
+    if (pgAuthorityEnabled) {
+      // One indexed transactional CAS in independently privileged storage.
+      // There is no fallback to triplestore.update when PG is unavailable.
+      // The runtime release fuse remains closed pending production proofs.
+      await pgAuthority.revoke({
+        owner, app, grantUri, expectedRevision: state.revision
+      });
+      readback = await pgAuthority.getConsent({owner, app});
+    } else {
+      await call('triplestore.update', {
+        dataset, webId: 'system',
+        query: beginRevocationQuery({
+          subjectUri, grantUri, revision: state.revision
+        })
+      });
+      // A successful HTTP SPARQL update need not have matched its WHERE.
+      readback = parseConsentRows(await getRows(), { grantUri });
+    }
+    if (!readback || (readback.state || readback.status) !== 'blocked' ||
+        readback.grantUri !== grantUri ||
         BigInt(readback.revision) <= BigInt(state.revision)) {
       deny('ATPROTO_SAI_FENCE_NOT_DURABLE');
     }
@@ -218,4 +297,4 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   }
 }
 
-module.exports = { beforeSaiMutation, bindingIdentity, claim };
+module.exports = { beforeSaiMutation, bindingIdentity, claim, resourceMembershipQuery, isOwnedStorageUri };

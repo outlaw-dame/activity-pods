@@ -43,7 +43,8 @@ module.exports = {
         path: '/api/internal/inbox',
         authorization: false,
         authentication: false,
-        bodyParsers: { json: { strict: false } },
+        // Bound parsing before allocating the activity or serializing it again.
+        bodyParsers: { json: { strict: false, limit: '512kb' } },
         onBeforeCall: (ctx, route, req) => {
           const authHeader = (req.headers['authorization'] || '').trim();
           const token = this.parseBearerToken(authHeader);
@@ -124,7 +125,9 @@ module.exports = {
         // actor === webId guard inside inbox.post.
         await ctx.call(
           'activitypub.inbox.post',
-          { collectionUri: normalizedTargetInbox, ...activity },
+          // The verified destination is authoritative; never allow an
+          // ActivityPub extension property named collectionUri to override it.
+          { ...activity, collectionUri: normalizedTargetInbox },
           { meta: { webId: verifiedActorUri, skipSignatureValidation: true } }
         );
 
@@ -132,18 +135,17 @@ module.exports = {
         return { success: true };
       } catch (err) {
         this.logger.error('[SidecarInbox] Failed to deliver activity', {
-          error: err.message,
-          activityId: activity.id,
-          targetInbox: normalizedTargetInbox
+          errorCode: err?.type || err?.code || 'INBOX_POST_FAILED',
+          activityId: activity.id
         });
 
         if (err.code === 404 || err.type === 'NOT_FOUND') {
           ctx.meta.$statusCode = 404;
-          return { success: false, error: 'not_found', message: err.message };
+          return { success: false, error: 'not_found', message: 'Local inbox not found' };
         }
 
         ctx.meta.$statusCode = 500;
-        return { success: false, error: 'processing_error', message: err.message };
+        return { success: false, error: 'processing_error', message: 'Inbound activity processing failed' };
       }
     }
   },
@@ -202,8 +204,8 @@ module.exports = {
       const defaults = [
         process.env.ACTIVITYPODS_URL,
         process.env.SEMAPPS_HOME_URL,
-        'http://localhost:3000',
-        'https://localhost:3000'
+        ...(process.env.NODE_ENV !== 'production'
+          ? ['http://localhost:3000', 'https://localhost:3000'] : [])
       ]
         .map(value => String(value || '').trim())
         .filter(Boolean);
@@ -234,6 +236,8 @@ module.exports = {
       }
 
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+      if (parsed.username || parsed.password || parsed.search || parsed.hash ||
+          parsed.href !== normalized) return null;
       if (!parsed.pathname.endsWith('/inbox')) return null;
 
       const allowedOrigins = this.getAllowedInboxOrigins();

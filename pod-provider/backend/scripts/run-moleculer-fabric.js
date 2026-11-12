@@ -5,6 +5,9 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { createMoleculerFabricConfig } = require('../config/moleculer-fabric');
+const { assertNativeProtectedStorageReleased } =
+  require('../services/utils/atproto-production-release-gate');
+const { assertNotificationPgCanRun } = require('../utils/notification-pg-release-gate');
 
 function resolveMoleculerRunner() {
   // Moleculer 0.14 exports its public package entry but does not export the
@@ -29,6 +32,10 @@ function childExitCode(code, signal) {
 }
 
 function run() {
+  // Every official Moleculer service group must enforce the release fuse,
+  // including groups that do not instantiate the triplestore service.
+  assertNativeProtectedStorageReleased();
+  assertNotificationPgCanRun();
   const fabric = createMoleculerFabricConfig();
   const runner = resolveMoleculerRunner();
   const args = [runner];

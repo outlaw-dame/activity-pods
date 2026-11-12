@@ -13,6 +13,11 @@ services:
       NODE_EXTRA_CA_CERTS: '/app/e2e-tls/ca.crt'
       # Only disposable test backend may access its private Docker test proxy.
       G1_E2E_ALLOW_PRIVATE_CLIENT_HOST: 'app-e2e.test'
+      # Disposable native Solid-OIDC acceptance only; never enables the
+      # unreleased ATProto repository writer or grants.
+      APODS_SOLID_OIDC_DPOP_ENFORCE_ENABLED: 'true'
+      APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true'
+      APODS_ATPROTO_SAI_FENCED_APPS: 'https://app-e2e.test:3443/app'
       PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED: 'true'
       PROVIDER_COLLECTIVES_APPROVED_APPS: 'https://app-e2e.test:3443/app'
       PROVIDER_COLLECTIVES_API_ENABLED: 'false'

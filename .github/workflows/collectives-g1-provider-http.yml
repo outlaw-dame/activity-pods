@@ -10,7 +10,17 @@ on:
       - 'pod-provider/backend/services/sai/access-authorizations.js'
       - 'pod-provider/backend/services/sai/app-registrations.js'
       - 'pod-provider/backend/services/sai/auth-agent.js'
+      - 'pod-provider/backend/services/utils/atproto-sai-owner-context.js'
+      - 'pod-provider/backend/services/utils/atproto-sai-distributed-owner-proof.js'
+      - 'pod-provider/backend/services/utils/atproto-sai-distributed-owner-runtime.js'
+      - 'pod-provider/backend/scripts/proof-sai-owner-redis-live.js'
+      - 'pod-provider/backend/scripts/proof-sai-owner-moleculer-two-node.js'
       - 'pod-provider/backend/services/solid/solid-oidc.js'
+      - 'pod-provider/backend/config/oidc-cors-policy.js'
+      - 'pod-provider/backend/config/oidc-adapter.js'
+      - 'pod-provider/backend/config/oidc-grant-index-policy.js'
+      - 'pod-provider/backend/scripts/proof-oidc-grant-redis-live.js'
+      - 'pod-provider/backend/tests/oidc-cors-policy.test.js'
       - 'pod-provider/backend/services/collective-consent-fence.service.js'
       - 'pod-provider/backend/services/utils/collective-access-policy.js'
       - '.github/workflows/collectives-g1-provider-http.yml'
@@ -106,14 +116,38 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
-            exec -T -e FUSEKI_URL=http://fuseki_test:3030 backend \
+            exec -T -e FUSEKI_URL=http://fuseki_test:3030 \
+              -e ATPROTO_NATIVE_SAI_LIVE_PROOF_ENABLED=confirmed backend \
               node scripts/proof-collective-provider-http.js
+
+      - name: Verify bounded grant tracking and revocation against real Redis
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e ATPROTO_CAPACITY_PROOF_DISPOSABLE=confirmed backend \
+            node scripts/proof-oidc-grant-redis-live.js
+
+      - name: Prove two independent provider Node processes agree on scoped Redis owner capability
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e NODE_ENV=test -e ATPROTO_SAI_OWNER_REDIS_PROOF_DISPOSABLE=confirmed \
+              backend node scripts/proof-sai-owner-redis-live.js
+
+      - name: Prove real two-node Moleculer ctx.call owner capability over isolated Redis
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e NODE_ENV=test \
+              -e ATPROTO_SAI_OWNER_REDIS_PROOF_DISPOSABLE=confirmed \
+              backend node scripts/proof-sai-owner-moleculer-two-node.js
 
       - name: Verify native Solid-OIDC interactive PKCE login and signed user token
         run: |
           set -euo pipefail
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
-            exec -T backend node scripts/proof-collective-provider-oidc.js
+            exec -T -e ATPROTO_DPOP_LIVE_PROOF_ENABLED=confirmed backend \
+              node scripts/proof-collective-provider-oidc.js
 
       - name: Diagnostics on failure
         if: failure()

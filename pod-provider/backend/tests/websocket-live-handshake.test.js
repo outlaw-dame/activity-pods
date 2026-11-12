@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('node:http');
+const { performance } = require('node:perf_hooks');
 const WebSocket = require('ws');
 const mixin = require('../mixins/websocket');
 
@@ -13,7 +14,7 @@ async function fixture() {
   const origin = `http://127.0.0.1:${port}`;
   const handlers = {
     onConnection: connection => accepted.push(connection),
-    onMessage: () => {},
+    onMessage: (message,connection) => connection.send(message),
     onClose: () => {},
     onError: () => {}
   };
@@ -138,6 +139,45 @@ describe('live ws gateway handshake and lifecycle', () => {
     expect(f.service.connections).toHaveLength(0);
     expect(f.service.wss.clients.size).toBe(0);
   });
+
+  test('measures bounded loopback WebSocket handshake/echo latency and RSS',async()=>{
+    const count=128, concurrency=8, latencies=[];
+    let cursor=0;
+    const rssBefore=process.memoryUsage().rss;
+    const start=performance.now();
+    await Promise.all(Array.from({length:concurrency},async()=>{
+      while(cursor<count){
+        const id=cursor++;
+        const t=performance.now();
+        const ws=await connect(f.origin);
+        try{
+          const echoed=new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>reject(Error('Echo timed out')),3000);
+            ws.once('message',data=>{clearTimeout(timer);resolve(data.toString())});
+          });
+          ws.send('echo-'+id);
+          expect(await echoed).toBe('echo-'+id);
+        }finally{
+          await closed(ws);
+        }
+        latencies.push(performance.now()-t);
+      }
+    }));
+    await waitForServerClose(f.service);
+    latencies.sort((a,b)=>a-b);
+    const at=p=>Number(latencies[Math.ceil(p*latencies.length)-1].toFixed(2));
+    const elapsed=performance.now()-start;
+    expect(latencies).toHaveLength(count);
+    expect(f.service.pendingWsUpgrades).toBe(0);
+    expect(f.service.wsSendBudget.usedBytes).toBe(0);
+    console.log(JSON.stringify({
+      sample:'disposable-loopback-ws-only',count,concurrency,
+      handshakeEchoMs:{p50:at(.5),p95:at(.95),p99:at(.99)},
+      connectionsPerSecond:Number((1000*count/elapsed).toFixed(2)),
+      rssDeltaBytes:process.memoryUsage().rss-rssBefore,
+      caveat:'Not production throughput: excludes TLS/CDN, auth, Redis, sustained fanout'
+    }));
+  },30000);
 
   test('shutdown destroys stalled pre-upgrade sockets without counter underflow',async()=>{
     f.service.httpHandler=()=>new Promise(()=>{});

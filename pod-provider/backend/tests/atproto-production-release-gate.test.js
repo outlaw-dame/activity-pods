@@ -3,25 +3,35 @@
 const { assertNativeProtectedStorageReleased } =
   require('../services/utils/atproto-production-release-gate');
 
-test('native protected RDF authorizations cannot activate in production before storage separation', () => {
-  expect(() => assertNativeProtectedStorageReleased({
-    NODE_ENV: 'production',
-    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true'
-  })).toThrow(/canonical RDF storage remains reachable/);
+test('unreleased native storage enforcement is denied regardless of NODE_ENV', () => {
+  for (const env of [
+    { NODE_ENV: 'production', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true' },
+    { NODE_ENV: 'development', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true' },
+    { APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true' },
+    { NODE_ENV: 'test', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true' },
+    { NODE_ENV: 'production', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true',
+      APODS_ATPROTO_TEST_STORAGE_DISPOSABLE: 'confirmed' },
+    { NODE_ENV: 'development', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true',
+      APODS_ATPROTO_TEST_STORAGE_DISPOSABLE: 'confirmed' }
+  ]) {
+    expect(() => assertNativeProtectedStorageReleased(env))
+      .toThrow(/canonical RDF storage remains reachable/);
+  }
 });
 
-test('normal provider startup and disposable integration proofs remain available', () => {
+test('normal provider startup and explicitly disposable test providers remain available', () => {
   for (const env of [
     { NODE_ENV: 'production', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'false' },
     { NODE_ENV: 'production' },
-    { NODE_ENV: 'test', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true' },
-    { NODE_ENV: 'development', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true' }
+    { NODE_ENV: 'development' },
+    { NODE_ENV: 'test', APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED: 'true',
+      APODS_ATPROTO_TEST_STORAGE_DISPOSABLE: 'confirmed' }
   ]) {
     expect(() => assertNativeProtectedStorageReleased(env)).not.toThrow();
   }
 });
 
-test('generic triplestore loads a release check rather than relying on deployment promises', () => {
+test('generic triplestore checks the release boundary before initialization', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const source = fs.readFileSync(path.join(__dirname, '../services/core/triplestore.js'), 'utf8');

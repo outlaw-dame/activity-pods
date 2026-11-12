@@ -142,9 +142,13 @@ write privileges at individual RDF subjects.
 Therefore this branch has an explicit source-controlled release gate.
 Enabling native ATProto SAI fencing in production rejects provider
 startup until the canonical consent and signed-repository authority is
-stored behind distinct, limited write privileges. The startup assertion assumes the process is correctly identified as
-production; deployment policy must enforce NODE_ENV and prevent unsafe
-privilege escalation. An operator with process configuration or database
+stored behind distinct, limited write privileges. Startup refuses activation in production, development, or an unset NODE_ENV.
+A disposable test provider requires both NODE_ENV=test and the explicit
+APODS_ATPROTO_TEST_STORAGE_DISPOSABLE=confirmed marker; the ordinary Docker
+Compose production file does not set that marker. An administrator able to
+change runtime configuration can still defeat a test-only environment
+exception, so production infrastructure must additionally enforce deployment
+policy and least-privilege access. An operator with process configuration or database
 administration privileges cannot be constrained by this check alone.
 
 A viable design keeps Jena as the Solid RDF projection and moves

@@ -7,16 +7,19 @@
  * grant fencing in a production provider until canonical permission state
  * lives behind a separately privileged storage connection.
  *
- * This is a source-controlled release boundary, not an environment variable
- * that an operator can bypass accidentally. Remove it only in the change
- * that installs and verifies the isolated canonical storage service.
+ * This is a source-controlled release boundary. Any attempt to enable the
+ * native fence fails before service startup, regardless of NODE_ENV, except
+ * for a deliberately marked disposable test provider. Remove this gate only
+ * after proving that an ordinary privileged SPARQL writer cannot alter the
+ * isolated canonical authority.
  */
 const NATIVE_PROTECTED_STORAGE_RELEASED = false;
 
 function assertNativeProtectedStorageReleased(env = process.env) {
-  if (env.NODE_ENV === 'production' &&
-      env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED === 'true' &&
-      !NATIVE_PROTECTED_STORAGE_RELEASED) {
+  const disposableTest = env.NODE_ENV === 'test' &&
+    env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE === 'confirmed';
+  if (env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED === 'true' &&
+      !NATIVE_PROTECTED_STORAGE_RELEASED && !disposableTest) {
     throw new Error(
       'The ATProto SAI integration is not released: canonical RDF storage remains reachable by general privileged SPARQL writers'
     );

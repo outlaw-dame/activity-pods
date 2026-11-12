@@ -109,3 +109,34 @@ test('real identitybindings.remove handler rejects a missing resource after exis
   );
   assert.deepEqual(effects, ['ldp.resource.exist']);
 });
+
+
+test('actual LDP DTO accepts one typed fence and rejects duplicate or malicious epochs', () => {
+  const s = loadService();
+  const context = {
+    ...s.methods,
+    _toDto: s.methods._toDto
+  };
+  const base = {
+    '@id': 'https://paper.example.org/alice/data/identity-bindings/atproto-a',
+    'apods:canonicalAccountId': 'https://paper.example.org/alice',
+    'apods:webId': 'https://paper.example.org/alice'
+  };
+  const predicate = 'http://activitypods.org/ns/core#repoProjectionFence';
+  const safe = { ...base, [predicate]: { '@value': '12', '@type': 'http://www.w3.org/2001/XMLSchema#integer' } };
+  assert.equal(s.methods._toDto.call(context, safe).repoProjectionFence, '12');
+  for (const bad of [
+    { ...base, [predicate]: ['10', '12'] },
+    { ...base, [predicate]: '01' },
+    { ...base, [predicate]: '0' },
+    { ...base, [predicate]: '9223372036854775808' },
+    { ...base, [predicate]: { '@value': '12', '@type': 'xsd:string' } },
+    { ...base, [predicate]: '10', 'apods:repoProjectionFence': '12' }
+  ]) {
+    assert.throws(
+      () => s.methods._toDto.call(context, bad),
+      err => err instanceof MoleculerError && err.code === 409 &&
+        err.type === 'IDENTITY_BINDING_FENCE_INCONSISTENT'
+    );
+  }
+});

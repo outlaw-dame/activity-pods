@@ -132,3 +132,50 @@ test('oversized/invalid and untrusted page cursors fail before SPARQL', async ()
   );
   assert.equal(calls, 0);
 });
+
+
+test('terminal pages do not manufacture a cursor and malformed duplicate index pages fail', async () => {
+  const s = serviceModule();
+  const instance = { ...s.methods, logger: { warn() {} } };
+  const row = n => ({
+    binding: { value: 'urn:binding:' + n },
+    canonicalAccountId: { value: id(n) },
+    updatedAt: { value: utc }
+  });
+  let values = [row('a')];
+  const ctx = { call: async () => values };
+  const last = await s.methods._listBindingsWithSparql.call(instance, ctx, { since: null, limit: 2 });
+  assert.equal(last.items.length, 1);
+  assert.equal(last.nextCursor, null);
+  values = [row('a'), row('a')];
+  await assert.rejects(
+    s.methods._listBindingsWithSparql.call(instance, ctx, { since: null, limit: 2 }),
+    error => error.code === 503 && error.type === 'IDENTITY_BINDING_INDEX_INCONSISTENT'
+  );
+});
+
+
+test('DID and handle index ownership collisions reject identity selection without Pod fan-out', async () => {
+  const service = serviceModule();
+  let reads = 0;
+  const ctx = {
+    call: async name => {
+      reads++;
+      assert.equal(name, 'triplestore.query');
+      return [
+        { canonicalAccountId: { value: id('alice') } },
+        { canonicalAccountId: { value: id('mallory') } }
+      ];
+    }
+  };
+  const instance = { ...service.methods, logger: { warn() {} } };
+  for (const field of ['atprotoDid', 'atprotoHandle']) {
+    await assert.rejects(
+      service.methods._findByIndexedFieldWithSparql.call(
+        instance, ctx, field, field === 'atprotoDid' ? 'did:plc:' + 'a'.repeat(24) : 'alice.example.org'
+      ),
+      error => error.code === 409 && error.type === 'IDENTITY_BINDING_INDEX_COLLISION'
+    );
+  }
+  assert.equal(reads, 2, 'One constant-size indexed query per lookup');
+});

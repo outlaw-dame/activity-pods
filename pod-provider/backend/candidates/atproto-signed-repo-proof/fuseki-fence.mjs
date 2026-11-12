@@ -8,6 +8,7 @@
  * response CAN mean the guarded WHERE matched zero rows, so trusted callers
  * MUST independently read the resulting RDF and verify all projected terms.
  */
+import { consentGuard } from './pod-consent-fence.mjs';
 const P = 'http://activitypods.org/ns/core#';
 const DID = /^did:plc:[a-z2-7]{24}$/;
 const CID = /^bafyre[a-z2-7]{53}$/;
@@ -45,7 +46,8 @@ function accountCheck(accountId) {
  * PG-backed cryptographically verified repository and PG lease.
  */
 export function buildFencedRepoProjectionSparql({
-  resourceUri, graphUri = null, accountId, did, rootCid, rev, fence
+  resourceUri, graphUri = null, accountId, did, rootCid, rev, fence,
+  consentFence = null
 } = {}) {
   accountCheck(accountId);
   if (!DID.test(did || '') || !CID.test(rootCid || '') || !TID.test(rev || '') ||
@@ -108,5 +110,6 @@ export function buildFencedRepoProjectionSparql({
   const prefix = 'PREFIX apods: <' + P + '> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> ';
   return prefix + 'DELETE { ' + graph(deletePatterns) + ' } ' +
     'INSERT { ' + graph(insert) + ' } WHERE { ' +
-    graph(identity + guards + old + uniqueIdentity + immutable + noHigher) + ' }';
+    graph(identity + guards + old + uniqueIdentity + immutable + noHigher +
+      (consentFence ? consentGuard(consentFence) : '')) + ' }';
 }

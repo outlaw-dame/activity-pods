@@ -63,25 +63,23 @@ function hasAuthorizedOwnerParent(ctx, { owner, app }) {
 }
 
 
+// Owner authorization is only shared for explicitly protected managed-repo
+// clients. Unrelated Solid apps retain the existing local behavior with zero
+// Redis reads and writes, even when the disposable integration is enabled.
+function usesSharedOwnerProof(scope) {
+  if (process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED !== 'true') return false;
+  const raw = process.env.APODS_ATPROTO_SAI_FENCED_APPS || '';
+  return raw.length <= 8192 &&
+    raw.split(',').some(item => item.trim() === scope?.app);
+}
+
 async function authorizeOwnerSaiActionForBroker(ctx, scope) {
-  // Only apps named in the native SAI protected-app allowlist need a
-  // shared Redis proof. Ordinary Solid application management retains the
-  // original local bounded proof, even in the distributed test deployment.
-  const allowlist = process.env.APODS_ATPROTO_SAI_FENCED_APPS || '';
-  const relevant = allowlist.length <= 8192 &&
-    allowlist.split(',').some(item => item.trim() === scope?.app);
-  if (process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED !== 'true' ||
-      !relevant) {
-    return authorizeOwnerSaiAction(ctx, scope);
-  }
-  // No Redis connection is opened for disabled or unrelated apps.
+  if (!usesSharedOwnerProof(scope)) return authorizeOwnerSaiAction(ctx, scope);
   return require('./atproto-sai-distributed-owner-runtime').issueDistributedOwnerProof(ctx, scope);
 }
 
 async function hasAuthorizedOwnerParentForBroker(ctx, scope) {
-  if (process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED !== 'true') {
-    return hasAuthorizedOwnerParent(ctx, scope);
-  }
+  if (!usesSharedOwnerProof(scope)) return hasAuthorizedOwnerParent(ctx, scope);
   return require('./atproto-sai-distributed-owner-runtime').verifyDistributedOwnerProof(ctx, scope);
 }
 

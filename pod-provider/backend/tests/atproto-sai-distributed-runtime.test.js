@@ -100,14 +100,17 @@ test('unrelated Solid apps never open Redis in distributed test mode',async()=>{
   const child={requestID:ctx.requestID,meta:{
     webId:'system',apodsNativeSaiOwnerProof:ctx.meta.apodsNativeSaiOwnerProof
   }};
+  // A same-node unrelated app continues to use the original bounded
+  // nonce; no shared Redis proof or connection is ever needed.
+  expect(await hasAuthorizedOwnerParentForBroker(child,{
+    owner,app:unrelated
+  })).toBe(true);
+  expect(Redis).not.toHaveBeenCalled();
+  await release();
   expect(await hasAuthorizedOwnerParentForBroker(child,{
     owner,app:unrelated
   })).toBe(false);
-  // The cross-replica proof is deliberately absent. On a same-node SAI
-  // action, the old bounded nonce remains valid for unrelated apps.
-  const {hasAuthorizedOwnerParent}=require('../services/utils/atproto-sai-owner-context');
-  expect(hasAuthorizedOwnerParent(child,{owner,app:unrelated})).toBe(true);
-  await release();
+  expect(Redis).not.toHaveBeenCalled();
 });
 test('owner context cannot issue proof to app impersonation',async()=>{
   const ctx=parent();ctx.meta.impersonatedUser=owner;

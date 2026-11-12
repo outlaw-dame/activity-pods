@@ -35,7 +35,12 @@ const native = load(path.join(backend, 'services/utils/atproto-sai-native-fence.
   moleculer: { Errors: { MoleculerError } },
   './atproto-sai-owner-context': ownerScope,
   '../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs': account,
-  '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs': consent
+  '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs': consent,
+  '../../utils/atproto-canonical-pg-authority': {
+    getProviderAtprotoPgAuthority: async () => {
+      throw Error('Canonical PG authority is not needed in the legacy tests');
+    }
+  }
 });
 
 const origin = 'https://paper.example.org';
@@ -325,5 +330,79 @@ test('duplicate, unbounded and noncanonical app allowlists fail before any broke
       e => e.type === 'ATPROTO_SAI_FENCE_CONFIG_INVALID'
     );
     assert.equal(calls.length, 0);
+  }
+});
+
+const oldPgEnabled = process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
+process.on('exit', () => {
+  if (oldPgEnabled === undefined) delete process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
+  else process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = oldPgEnabled;
+});
+test('PG SAI revocation checks owner + exact approved app and never writes generic RDF', async () => {
+  env(true);
+  process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = 'true';
+  let epoch = '1', status = 'active', revokeCount = 0;
+  const authority = {
+    getIdentity: async ({owner:who}) => {
+      assert.equal(who, owner); return {owner:who,state:'active',revision:'1'};
+    },
+    getConsent: async ({owner:who,app:client}) => {
+      assert.equal(who, owner); assert.equal(client, app);
+      return {owner:who,app:client,grantUri:grant,revision:epoch,state:status};
+    },
+    revoke: async ({owner:who,app:client,grantUri,expectedRevision}) => {
+      assert.equal(who, owner); assert.equal(client, app);
+      assert.equal(grantUri,grant); assert.equal(expectedRevision,'1');
+      revokeCount++;status='blocked';epoch='2';
+      return {revision:epoch,state:status};
+    }
+  };
+  const isolated = load(path.join(backend,'services/utils/atproto-sai-native-fence.js'),{
+    moleculer:{Errors:{MoleculerError}},
+    './atproto-sai-owner-context':ownerScope,
+    '../../utils/atproto-canonical-pg-authority':{
+      getProviderAtprotoPgAuthority:async()=>authority
+    },
+    '../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs':account,
+    '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs':consent
+  });
+  try {
+    const {ctx,calls}=setup();
+    const first=await isolated.beforeSaiMutation(ctx,'access-grants',resource,'post');
+    assert.equal(first.blocked,true);
+    assert.equal(revokeCount,1);
+    assert.equal(calls.filter(x=>x.name==='triplestore.update').length,0);
+    const second=await isolated.beforeSaiMutation(ctx,'access-grants',resource,'post');
+    assert.equal(second.blocked,true);
+    assert.equal(revokeCount,1);
+    assert.equal(calls.filter(x=>x.name==='triplestore.update').length,0);
+  } finally {
+    if(oldPgEnabled===undefined)delete process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
+    else process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED=oldPgEnabled;
+  }
+});
+
+test('PG database outage fails closed instead of falling back to SPARQL writes',async()=>{
+  env(true);
+  process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = 'true';
+  const isolated = load(path.join(backend,'services/utils/atproto-sai-native-fence.js'),{
+    moleculer:{Errors:{MoleculerError}},
+    './atproto-sai-owner-context':ownerScope,
+    '../../utils/atproto-canonical-pg-authority':{
+      getProviderAtprotoPgAuthority:async()=>{throw Error('PG unavailable')}
+    },
+    '../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs':account,
+    '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs':consent
+  });
+  try{
+    const {ctx,calls}=setup();
+    await assert.rejects(
+      isolated.beforeSaiMutation(ctx,'access-grants',resource,'post'),
+      e=>e.type==='ATPROTO_SAI_FENCE_UNAVAILABLE'
+    );
+    assert.equal(calls.filter(x=>x.name==='triplestore.update').length,0);
+  }finally{
+    if(oldPgEnabled===undefined)delete process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
+    else process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED=oldPgEnabled;
   }
 });

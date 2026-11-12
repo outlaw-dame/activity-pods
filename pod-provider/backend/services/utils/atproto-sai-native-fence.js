@@ -243,7 +243,7 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
       state = parseConsentRows(rows, { grantUri });
     }
     const grantUri = state.grantUri;
-    if (state.status === 'blocked') return { checked: true, blocked: true };
+    if ((state.state || state.status) === 'blocked') return { checked: true, blocked: true };
 
     // Only the approved application's existing access grant is a valid
     // consent pointer. Do not trust the mutation's submitted grant URI.

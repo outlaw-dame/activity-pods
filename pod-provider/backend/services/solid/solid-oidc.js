@@ -197,10 +197,10 @@ module.exports = {
       // Don't treat its second authorization check as a replay.
       const fingerprint = crypto.createHash('sha256')
         .update(token).update('\0')
-        .update(req.headers.dpop).digest('hex');
-      const cached = validatedRequests.get(req);
-      if (cached && cached.fingerprint === fingerprint &&
-          cached.method === req.method && cached.target === target) return;
+        .update(req.headers.dpop).update('\0')
+        .update(req.method).update('\0')
+        .update(target).digest('hex');
+      if (validatedRequests.get(req) === fingerprint) return;
 
       await verifySolidDpop({
         proof: req.headers.dpop, idToken: token, verifiedToken: payload,
@@ -217,9 +217,7 @@ module.exports = {
       });
       // Keep only a fixed-size fingerprint on the short-lived request.
       // Raw bearer tokens and signed proofs must not remain in a cache.
-      validatedRequests.set(req, {
-        fingerprint, method: req.method, target
-      });
+      validatedRequests.set(req, fingerprint);
     },
     async interactionFinished(interactionId, result) {
       const interaction = await this.oidc.Interaction.find(interactionId);

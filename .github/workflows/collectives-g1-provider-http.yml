@@ -14,6 +14,7 @@ on:
       - 'pod-provider/backend/services/utils/atproto-sai-distributed-owner-proof.js'
       - 'pod-provider/backend/services/utils/atproto-sai-distributed-owner-runtime.js'
       - 'pod-provider/backend/scripts/proof-sai-owner-redis-live.js'
+      - 'pod-provider/backend/scripts/proof-sai-owner-moleculer-two-node.js'
       - 'pod-provider/backend/services/solid/solid-oidc.js'
       - 'pod-provider/backend/config/oidc-cors-policy.js'
       - 'pod-provider/backend/config/oidc-adapter.js'
@@ -132,6 +133,14 @@ jobs:
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
             exec -T -e NODE_ENV=test -e ATPROTO_SAI_OWNER_REDIS_PROOF_DISPOSABLE=confirmed \
               backend node scripts/proof-sai-owner-redis-live.js
+
+      - name: Prove real two-node Moleculer ctx.call owner capability over isolated Redis
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e NODE_ENV=test \
+              -e ATPROTO_SAI_OWNER_REDIS_PROOF_DISPOSABLE=confirmed \
+              backend node scripts/proof-sai-owner-moleculer-two-node.js
 
       - name: Verify native Solid-OIDC interactive PKCE login and signed user token
         run: |

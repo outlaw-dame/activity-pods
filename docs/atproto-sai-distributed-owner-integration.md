@@ -62,3 +62,24 @@ Only after the canonical PostgreSQL SAI/identitybinding authority
 migration and signed-repository permission reads have passed can
 the native storage release fuse be removed. This is not a passkey
 or login-system change.
+
+
+## Real Moleculer transport acceptance
+
+A distinct disposable CI script starts a parent and child **ServiceBroker
+in different Node processes** with a random isolated namespace and Redis
+transporter database 14. The parent action issues an owner-scoped proof
+using the same runtime adapter used by auth-agent; its `ctx.call`
+travels to the separately registered child worker, which uses the same
+runtime verifier that native SAI hooks call. The test checks the actual
+Moleculer requestID survived that remote hop, verifies the HMAC proof,
+rejects a changed app and request ID, and proves the worker was a
+different OS process. Proof storage uses separate Redis database 15.
+The services and namespace exist only within the test script; they
+are never autoloaded into the production service catalog.
+
+This is stronger evidence of cross-node routing behavior than a manually
+constructed context. It does **not** yet constitute an installed
+real-OIDC owner-consent ceremony with the new PostgreSQL canonical
+authority enabled. Those deployment and consent acceptance gates stay
+mandatory.

@@ -58,6 +58,15 @@ function closed(ws) {
     ws.terminate();
   });
 }
+async function waitForServerClose(service) {
+  const start = Date.now();
+  while (service.connections.length !== 0 || service.wss.clients.size !== 0) {
+    if (Date.now() - start > 3000) {
+      throw new Error('Server WebSocket did not release its connection state');
+    }
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+}
 
 describe('live ws gateway handshake and lifecycle', () => {
   let f;
@@ -80,7 +89,7 @@ describe('live ws gateway handshake and lifecycle', () => {
     expect(connection.requestUrl).toContain('token=private');
     expect(f.service.logger.debug.mock.calls.flat().join(' ')).not.toContain('token=private');
     await closed(ws);
-    await new Promise(resolve=>setImmediate(resolve));
+    await waitForServerClose(f.service);
     expect(f.service.connections).toHaveLength(0);
     expect(f.service.connectionIndexes.size).toBe(0);
   });
@@ -96,7 +105,7 @@ describe('live ws gateway handshake and lifecycle', () => {
     for(let i=0;i<16;i++){
       const ws=await connect(f.origin);
       await closed(ws);
-      await new Promise(resolve=>setImmediate(resolve));
+      await waitForServerClose(f.service);
     }
     expect(f.service.connections).toHaveLength(0);
     expect(f.service.connectionIndexes.size).toBe(0);

@@ -19,8 +19,12 @@ const source = process.env.SEMAPPS_REDIS_OIDC_PROVIDER_URL || 'redis://redis:637
 const url = new URL(source);
 if (!['redis','localhost','127.0.0.1'].includes(url.hostname)) throw Error('Unknown Redis host');
 url.pathname = '/15';
+const testKeyPrefix = process.env.ATPROTO_OIDC_TEST_KEY_PREFIX;
+if (!/^atproto-oidc-test:[0-9a-f-]{36}:$/u.test(testKeyPrefix || '')) {
+  throw Error('Missing isolated Redis namespace for the disposable worker');
+}
 const redis = new Redis(url.toString(), {
-  keyPrefix: 'atproto-oidc-test:',
+  keyPrefix: testKeyPrefix,
   connectTimeout: 3000, maxRetriesPerRequest: 1
 });
 (async () => {

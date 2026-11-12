@@ -70,6 +70,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-fence-child.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
@@ -92,6 +93,16 @@ jobs:
         run: |
           set -euo pipefail
           npm test --prefix pod-provider/backend/candidates/atproto-signed-repo-proof
+
+      - name: Prove two real PostgreSQL LOGIN roles cannot cross the canonical-authority boundary
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
 
       - name: Independently verify against Bluesky reference repository implementation
         shell: bash

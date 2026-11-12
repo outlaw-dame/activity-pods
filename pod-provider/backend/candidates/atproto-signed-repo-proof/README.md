@@ -182,3 +182,28 @@ This distinction matters for multi-replica durability. For example, PG worker A 
 The per-Pod proof now requires a real Solid-OIDC ID-token audience array containing both the application client identifier (the 'azp') and the special 'solid' audience, along with a syntactically valid DPoP confirmation thumbprint ('cnf.jkt'). A conventional app-only ID token is not sufficient for this permission path. The fixture explicitly rejects app-only, missing-'solid' and unbound tokens. Source: https://solid.github.io/solid-oidc/ (Token Instantiation and DPoP-bound OIDC ID Token).
 
 **The native 'jwk.verifyToken' action currently checks signed JWT validity, NOT the request's DPoP proof.** Checking the 'cnf.jkt' field makes token shape stricter but does not establish proof of private-key possession. The native Solid-OIDC OP's emitted audience/cnf claims and the resource server's DPoP verification must be tested end-to-end (including method/URL, replay, nonce and key thumbprint). Do not activate this candidate by just enabling its feature flags.
+
+## Disposable PostgreSQL canonical-storage privilege boundary (November 2026)
+
+The `pg-private-authority-proof.mjs` acceptance uses two **independent
+PostgreSQL LOGIN credentials** with new, randomized disposable roles.
+The ordinary/general-service role can resolve the private schema but cannot
+SELECT, INSERT, UPDATE, DELETE or TRUNCATE canonical consent, cannot create
+objects in the schema, and cannot assume the authority-writer role.
+The dedicated authority role can insert and atomically block consent but is
+explicitly denied DELETE. The proof reads back canonical state after the
+attempted unauthorized operations. It uses SQLSTATE 42501 from a real
+PostgreSQL 18 service, not an in-process mock or a privileged SET ROLE test.
+Its temporary schema and roles are destroyed afterward; credentials are
+generated in memory and not logged or stored.
+
+**This is a least-privilege proof, NOT production integration.** The real
+ActivityPods `triplestore` service still has direct privileged access to the
+live Fuseki dataset used for identitybinding and SAI, so a general Fuseki
+SPARQL update remains able to bypass LDP hooks. No actual canonical consent
+migration, runtime role wiring, signed writer, default-deny production SQL
+deployment or recovery protocol is enabled here. Next, wire a separately
+authenticated canonical authority with fail-closed versioned revocation and
+prove that the real general-provider credential cannot write it; project
+non-authoritative RDF views separately with causal fencing and reconciliation.
+Only then reconsider the protected writer source-controlled release fuse.

@@ -128,7 +128,7 @@ describe('APDM durable ActivityPub handoff', () => {
       ok: true,
       status: 202,
       async json() {
-        return { accepted: true, intentId: 'sidecar-intent-1', jobCount: 1 };
+        return { accepted: true, intentId: plan.intentId, jobCount: 1 };
       }
     }));
     const service = { settings: createSettings() };
@@ -138,7 +138,7 @@ describe('APDM durable ActivityPub handoff', () => {
     expect(result).toEqual({
       status: 'accepted',
       deliveryPlanIntentId: plan.intentId,
-      sidecarIntentId: 'sidecar-intent-1',
+      sidecarIntentId: plan.intentId,
       jobCount: 1
     });
     expect(progress).toHaveBeenCalledWith(100);
@@ -218,6 +218,56 @@ describe('APDM durable ActivityPub handoff', () => {
           fetchImpl
         )
       ).rejects.toThrow(/did not confirm Redis acceptance/u);
+    }
+  });
+
+
+  test('rejects a 202 receipt for a different request and invalid job counts', async () => {
+    for (const ack of [
+      { accepted: true, intentId: 'another-intent', jobCount: 1 },
+      { accepted: true, intentId: createPlan().intentId, jobCount: 0 },
+      { accepted: true, intentId: createPlan().intentId, jobCount: 2 },
+      { accepted: true, intentId: createPlan().intentId, jobCount: 1.5 },
+      { accepted: true, intentId: createPlan().intentId },
+    ]) {
+      await expect(processDeliveryHandoffJob(
+        { settings: createSettings() }, { data: { deliveryPlan: createPlan() } },
+        async () => new Response(JSON.stringify(ack), { status: 202 })
+      )).rejects.toThrow(/did not confirm Redis acceptance/u);
+    }
+  });
+
+  test('bounds streamed receipt JSON before allocating an unbounded body', async () => {
+    const plan = createPlan();
+    const hugeAck = JSON.stringify({
+      accepted: true, intentId: plan.intentId, jobCount: 1,
+      padding: 'a'.repeat(5000)
+    });
+    await expect(processDeliveryHandoffJob(
+      { settings: createSettings() }, { data: { deliveryPlan: plan } },
+      async () => new Response(hugeAck, { status: 202 })
+    )).rejects.toThrow(/exceeds size limit/u);
+  });
+
+  test('does not parse an oversized Content-Length response', async () => {
+    const plan = createPlan();
+    const response = new Response('{"accepted":true}', {
+      status: 202, headers: { 'Content-Length': '1000000' }
+    });
+    await expect(processDeliveryHandoffJob(
+      { settings: createSettings() }, { data: { deliveryPlan: plan } },
+      async () => response
+    )).rejects.toThrow(/exceeds size limit/u);
+  });
+
+  test('rejects embedded URL credentials and fragments', () => {
+    for (const url of [
+      'http://u:p@fedify-sidecar:8080/webhook/outbox',
+      'http://fedify-sidecar:8080/webhook/outbox#fragment',
+    ]) {
+      expect(() => assertDurableHandoffConfigured({
+        ...createSettings(), deliveryHandoffUrl: url
+      })).toThrow(/canonical/u);
     }
   });
 

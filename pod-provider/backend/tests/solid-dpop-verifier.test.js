@@ -147,3 +147,32 @@ test('native Solid-OIDC middleware verifies once per HTTP request but rejects a 
   await expect(instance.verifyDpopRequest({ ...req }, token, f.payload))
     .rejects.toMatchObject({ code: 'SOLID_DPOP_INVALID' });
 });
+
+
+test('the OIDC Redis connection is closed once when Moleculer stops the service', () => {
+  const client = { disconnect: jest.fn() };
+  const instance = { dpopRedis: client };
+  solidOidcService.stopped.call(instance);
+  solidOidcService.stopped.call(instance);
+  expect(client.disconnect).toHaveBeenCalledTimes(1);
+  expect(instance.dpopRedis).toBeNull();
+});
+
+test('an absolute or protocol-relative HTTP target cannot choose its own DPoP audience', async () => {
+  const f = await setup();
+  const proof = await f.create();
+  const redis = { set: jest.fn(async () => 'OK') };
+  const instance = { settings: { baseUrl: issuer }, dpopRedis: redis };
+  const authenticate = solidOidcService.methods.verifyDpopRequest.bind(instance);
+  for (const originalUrl of [
+    'https://attacker.example.org/alice/data/document',
+    '//attacker.example.org/alice/data/document',
+    '/\\attacker.example.org/alice/data/document',
+    'http://attacker.example.org/alice/data/document'
+  ]) {
+    await expect(authenticate({
+      method: 'GET', originalUrl, headers: { dpop: proof }
+    }, token, f.payload)).rejects.toThrow();
+  }
+  expect(redis.set).not.toHaveBeenCalled();
+});

@@ -63,8 +63,10 @@ describe('live ws gateway handshake and lifecycle', () => {
   let f;
   beforeEach(async()=>{f=await fixture()});
   afterEach(async()=>{
+    if (!f) return;
     mixin.stopped.call(f.service);
     await new Promise(resolve=>f.server.close(resolve));
+    f = undefined;
   });
 
   test('only the configured browser origin upgrades, and the query token is never logged',async()=>{

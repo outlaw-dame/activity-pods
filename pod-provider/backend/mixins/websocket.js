@@ -40,7 +40,7 @@ module.exports = {
     // connection and get a web socket object.
     this.wsAllowedOrigins = allowedOrigins(
       this.settings.baseUrl,
-      require('../config/config').FRONTEND_URL,
+      this.settings.frontendUrl,
       process.env.APODS_WS_ALLOWED_ORIGINS
     );
     this.wss = new WebSocketServer({

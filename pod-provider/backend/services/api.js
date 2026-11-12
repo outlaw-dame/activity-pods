@@ -13,6 +13,7 @@ module.exports = {
     // deadline beyond the benchmark client's non-replayable request timeout.
     httpServerTimeout: Number(process.env.APODS_HTTP_SERVER_TIMEOUT_MS || 300000),
     baseUrl: CONFIG.BASE_URL,
+    frontendUrl: CONFIG.FRONTEND_URL,
     port: CONFIG.PORT,
     cors: {
       origin: '*',

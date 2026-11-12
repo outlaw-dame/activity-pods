@@ -104,7 +104,10 @@ module.exports = {
             this.logger.info(
               `Deleting data authorization ${dataAuthorization.id} as it is not linked anymore with an existing access need...`
             );
-            await this.actions.delete({ resourceUri: dataAuthorization.id, webId: podOwner });
+            await this.actions.delete(
+              { resourceUri: dataAuthorization.id, webId: podOwner },
+              { parentCtx: ctx }
+            );
           } else {
             throw e;
           }

@@ -69,3 +69,61 @@ The non-activated 'provider-authority.mjs' and 'provider-moleculer.mjs' now conn
 3. Connect Solid-OIDC/SAI delegated grants and verify revocation cannot be bypassed. New account bootstrap also needs a carefully defined provider registration authority (as distinct from user-initiated writes).
 4. Implement outbox publish/ack/retry with at-least-once delivery and deterministic idempotency; implement non-empty MST writes, repository reads/XRPC, relay interoperability, deletion, rotation and live DID PLC acceptance.
 5. Confirm acceptable latency of repeated independent PLC/DNS verification (cache only with bounded staleness and revocation strategy), database costs, exact-head CI and disaster recovery. Do not activate this draft merely because proof tests pass.
+
+
+## Next gate — PG18 ↔ protected RDF crash recovery and fencing (stacked draft)
+
+The candidate now includes an *atomic recovery intent* in the same PostgreSQL genesis transaction as the signed v3 commit/CID blocks and pending native event outbox. A genesis that commits without the RDF intent violates the database transaction; a test injects failure immediately after outbox INSERT and proves complete rollback.
+
+### Safety and concurrency model
+
+- Table 'rdf_projection_jobs' is one row per existing canonical account, with a foreign key to the immutable genesis repo plus both actual CID-addressed blocks. Per-account 'lease_epoch' is a monotone bigint, 'lease_owner' is a random UUID, 'lease_until' uses the **database clock**, and retries are bounded. Two concurrent Moleculer replicas cannot both claim the same current lease because the claim uses one conditional PostgreSQL UPDATE. No PG locks or connections are held across RDF I/O.
+- All attempted RDF updates carry the PG epoch and must be implemented by a **provider-owned, atomic conditional Jena writer that persists the fence with repoRootCid/repoRev in the same RDF transaction**. It must reject older leases even if an old worker wakes after the new worker finishes. An ordinary GET/PUT or unchecked upsert is NOT sufficient. The PG18 suite first models this property with a protected atomic in-memory RDF CAS. A separate **real Fuseki/TDB2 disposable** suite now checks the conditional SPARQL update (including conflicting duplicate identities), eight-way contention, stale fences and persistence across a server restart. A combined **real PG18 + real Fuseki** suite exercises crash-after-RDF/before-PG-ACK, competing worker pools, stale writer wakeup, revoked synthetic grants and signed read-back after restart. These do not activate actual Pod LDP resource mutation.
+- Before writing and before ACK, the reconciler checks current provider authorization, the canonical WebID = AP actor and bound DID, and signed durable PG evidence (commit CID, MST CID, TID, checked CAR, outbox). It compares the protected RDF record after writing. An exhausted or conflicting job transitions to 'blocked' for manual review; transient failures are retried with bounded exponential full jitter.
+- After RDF is applied, PostgreSQL requires the *same epoch, owner, nonexpired lease and exact head CIDs/revision* to mark applied. A crashed worker leaves a leased row; after expiry the next worker increments epoch and replays the **same signed head** without creating another DID or genesis commit.
+- The 'readiness' API requires **all three**: cryptographically verified PG repo/outbox, an applied recovery record, and a newly read protected RDF projection matching the exact PG head and current epoch. A PG-only or RDF-only success must fail closed. Completed-state drift triggers a read-only diagnostic, never silent rewriting.
+- Unreleased by construction: no production service import, no background scanner, no API route, no automatic backfill. The proof only runs with 'fixtureOnly: true' and an explicit disposable PG18 test marker; NODE_ENV=production disables the reconciler.
+
+### Acceptance / limitations
+
+The dedicated test suite covers atomic rollback, successful projection and durable ACK, eight competing replica objects, a simulated crash after RDF before PG ACK, a stale worker prevented from overwriting a newer fence, bounded transient retry, exhausted retries, missing grants, false-ready drift and identity collisions. These tests include disposable PG18 with a simulated RDF CAS, real Jena Fuseki/TDB2 guarded SPARQL updates, and combined real PG18/Fuseki integration. They are **not** proof of production-ready per-Pod identitybinding updates, SAI revocation, distributed user onboarding, or real relay federation.
+
+Remaining blockers before live deployment:
+
+1. Integrate the **tested conditional Fuseki/TDB2 RDF update** with actual protected per-user ActivityPods LDP identitybinding graphs and datasets. Add the fence predicate to the JSON-LD/DTO schema; verify URI-to-graph resolution, provider-only SPARQL execution and SAI-grant version fencing. Invalidate or synchronize any LDP/JSON-LD indexed projections; eliminate unfenced 'upsertRepoBootstrap' writes on the new path.
+2. Wire the candidate through the reviewed mandatory unified signup and verified-repo branches (#134/#140), with provider-only capability minted inside trusted ActivityPods code and no public signing bypass.
+3. Extend the disposable real-PG/real-Jena **four-worker contention, injected process-crash and persistent-restart** acceptance to full multi-process/four-replica **Pod-dataset** integration with real process SIGKILL, Solid-OIDC/SAI grants and revocation races. Test long pauses, provider partition, lease renewal and live DID/key rotation.
+4. Add a production PG schema migration with least-privilege roles, replication/backup/restore, observability, paginated claim queue, rate/connection budgets and zero-downtime rollback. Test actual duplicate delivery and immutable native outbox publishing.
+5. Only after the above and protocol writes/XRPC/relay acceptance pass, authorize a separate production activation PR. Never equate a green disposable CI proof with a live PDS.
+
+### Cost and performance constraints
+
+- Keep a **single** recoverable row per account per genesis, not a per-request history or duplicated identity graph. One partial pending index and one partial expired-lease index are sufficient for the initial bounded worker; watch their write amplification in production. Do not scan an entire account population on each restart.
+- Use a bounded PG connection pool across Moleculer replicas, short DB transactions and per-account leases. No network, crypto signing or Jena writes inside PG locks. Prefer at-least-once idempotent replay to two-phase distributed blocking transactions.
+- Cap retry attempts and use jitter; avoid tight failure loops and unbounded in-memory queues. Metrics should summarize lease contention, stale-fence rejections, job age and blocked jobs **without logging identity keys, private data or raw CAR bytes**.
+
+
+### Real Jena + real PostgreSQL evidence (still NON-ACTIVATED)
+
+The dedicated workflow now includes two independent mechanisms and a combined test:
+
+- The local PostgreSQL 18 and signer proof validates durable genesis/outbox/recovery intent and epoch-owner lease completion.
+- The real 'semapps/jena-fuseki-webacl' TDB2 fixture tests an atomic SPARQL 1.1 DELETE/INSERT WHERE guarded by canonical WebID/AP/DID/source/status, **absence of conflicting duplicate claims**, an immutable root CID/revision, and strictly increasing numeric lease fence. Both default and named graph variants are tested. HTTP 2xx cannot be treated as successful CAS; the caller must read back and compare every required predicate. The test restarts the persistent Fuseki store to verify durability.
+- The combined PG18 + TDB2 fixture uses **independent PG pools** to simulate four Moleculer workers and tests lease arbitration, process-crash simulation after RDF write/before PG ACK, epoch+1 retry, stale writer no-op and refusal to ACK a superseded epoch, and full signed PG/RDF state after the Fuseki restart. The fixture key is generated at runtime in the CI runner's temporary directory (permissions 0600) and deleted after verification, never checked into source or stored in PostgreSQL.
+
+This proof uses synthetic bindings in the disposable 'settings' dataset, not actual ActivityPods per-Pod protected LDP identitybinding graph placement. It also uses a stub authorization decision, not live SAI consent enforcement. Thus **actual runtime activation and automatic user account repair remain blocked.**
+
+
+### Integration audit: real ActivityPods identitybindings vs synthetic Fuseki fixture (2026-11-11)
+
+The *real* 'pod-provider/backend/services/identitybindings.service.js' is a 'ControlledContainerMixin' resource stored under the canonical account WebID's own container. It is NOT the globally indexed 'settings' RDF view. The 'settings' data is a lookup **projection**, and may not be used as the source of truth for readiness or atomic account updates. Its live location is computed from 'identitybindings.getContainerUri({webId})' plus a SHA-256 canonical-account-based slug ('atproto-' + first 24 lowercase hex chars). A production writer MUST resolve the exact binding dataset/graph through SemApps resource location rules, not infer it from the path, assume the 'settings' graph, or expose a caller-selected graph.
+
+The current LDP 'identitybindings.upsertRepoBootstrap' delegates to an unfenced resource upsert. It must NOT be called concurrently with a fenced RDF writer and must NOT be used as a production repository-ready transition until its compare-and-set semantics and JSON-LD projection invalidation are redesigned. The existing DTO currently exposes 'repoInitialized', 'repoRootCid' and 'repoRev' but **does not expose 'repoProjectionFence'**; the real context/ontology and indexers need this field and an exact typed lexical representation before integration.
+
+The synthetic Fuseki fixture intentionally models direct triples with 'webId'/'activityPubActorId' as URI nodes and 'canonicalAccountId' as a literal. A real Solid/JSON-LD resource may encode these properties as IRIs or literals depending on its installed context. The tested SPARQL guard compares 'STR(...)' values across those representations, but production must verify real live resource serialization and end-to-end LDP reads before writing anything. The installed ontology and graph conventions must be checked against SemApps on the exact provider version. No speculative default or named graph selection is permitted.
+
+Further safety concerns:
+- The current recovery ledger is deliberately a *genesis-only candidate* ('generation=1'). A production PDS would need a separate versioned repository-head update protocol and appropriate key rotation handling.
+- A bounded lease and monotone RDF epoch protect *completed* projections against stale writers; a lease expiry cannot interrupt an already in-flight RDF request. The PG ACK must therefore remain fenced and readiness must recheck current evidence. Before activation, evaluate cancellation and stale-grant protection at the **RDF mutation boundary**, not only before issuing it.
+- Pending jobs whose attempt count has already reached the policy limit are now transitioned to a terminal 'blocked' status. An attempt-exhausted pending row must never produce an infinite 'busy' response.
+- The failure history must be distinguished from current CI: earlier intermediate work had a missing 'resolveDelegatedIdentity' injection and an isolated PG connection exhaustion; their later exact-head workflows passed. Only cite the current head's checks as an acceptance result.

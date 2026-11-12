@@ -23,11 +23,7 @@ CREATE TABLE IF NOT EXISTS paper_atproto_authority.consents (
   imported_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY(owner_webid,app_uri)
 );
-CREATE INDEX IF NOT EXISTS paper_atproto_consents_grant_lookup
-  ON paper_atproto_authority.consents(owner_webid,app_uri)
-  INCLUDE (grant_uri,revision,state);
-
--- Only a migration-specific credential can INSERT the verified initial
+-- The (owner_webid,app_uri) PRIMARY KEY already supplies the selective\n-- lookup index. Avoid maintaining a duplicate index for every revoke.\n\n-- Only a migration-specific credential can INSERT the verified initial
 -- identity and signed SAI grant snapshot. Runtime can NEVER regrant itself.
 DO $roles$
 BEGIN

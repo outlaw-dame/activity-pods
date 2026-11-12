@@ -25,6 +25,17 @@ const redis = new Redis(url.toString(), {
   maxRetriesPerRequest: 1
 });
 async function main() {
+  if (redis.status !== 'ready') {
+    await Promise.race([
+      new Promise((resolve, reject) => {
+        redis.once('ready', resolve);
+        redis.once('error', reject);
+      }),
+      new Promise((_, reject) => setTimeout(
+        () => reject(Error('Disposable Redis did not become ready in time')), 5000
+      ))
+    ]);
+  }
   await redis.ping();
   await redis.flushdb();
   const adapter = new RedisAdapter('AccessToken', redis);

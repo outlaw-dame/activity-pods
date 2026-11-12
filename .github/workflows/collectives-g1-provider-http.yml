@@ -118,7 +118,8 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
-            exec -T backend node scripts/proof-collective-provider-oidc.js
+            exec -T -e ATPROTO_DPOP_LIVE_PROOF_ENABLED=confirmed backend \
+              node scripts/proof-collective-provider-oidc.js
 
       - name: Verify bounded grant tracking and revocation against real Redis
         run: |

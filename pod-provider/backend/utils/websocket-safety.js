@@ -51,6 +51,20 @@ function isAllowedOrigin(origin, allowlist) {
   return typeof origin === 'string' &&
     canonicalOrigin(origin) === origin && allowlist.has(origin);
 }
+// Solid's WebSocketChannel2023 uses an opaque, server-issued receiveFrom
+// URL as the channel capability. Third-party Solid apps must be able to
+// connect from their own browser origin; the channel service verifies the
+// exact issued URL after upgrade. Never exempt other cookie-authenticated
+// WebSocket routes from the normal Origin allowlist.
+const CAPABILITY_CHANNEL_PATH =
+  /^\/\.notifications\/WebSocketChannel2023\/socket\/[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+function isAllowedCapabilityOrigin(origin, requestPath) {
+  if (typeof origin !== 'string' || !canonicalOrigin(origin) ||
+      typeof requestPath !== 'string' || requestPath.length > 512 ||
+      !requestPath.startsWith('/') || requestPath.startsWith('//') ||
+      requestPath.includes('?') || requestPath.includes('#')) return false;
+  return CAPABILITY_CHANNEL_PATH.test(requestPath);
+}
 function canAcceptConnection(connected, pending) {
   return Number.isSafeInteger(connected) && connected >= 0 &&
     Number.isSafeInteger(pending) && pending >= 0 &&
@@ -94,5 +108,6 @@ function createSendBudget(limit = MAX_AGGREGATE_BUFFERED_BYTES) {
 module.exports = {
   MAX_INBOUND_BYTES,MAX_BUFFERED_BYTES,MAX_AGGREGATE_BUFFERED_BYTES,MAX_CONNECTIONS,HEARTBEAT_MS,
   MAX_ASYNC_MESSAGES,canonicalOrigin,allowedOrigins,isAllowedOrigin,
-  canAcceptConnection,outboundSize,canBufferMessage,createSendBudget
+  canAcceptConnection,outboundSize,canBufferMessage,createSendBudget,
+  isAllowedCapabilityOrigin
 };

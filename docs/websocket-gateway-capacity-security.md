@@ -60,3 +60,22 @@ reservations. This is a conservative queue budget across the full
 2,048-connection process, not 2 MiB multiplied by every connection.
 The budget does not include OS TCP buffers, inbound parsers or
 application state; those still require real RSS profiling.
+
+
+## Third-party Solid clients
+
+The Solid Notifications Protocol permits browser clients from other
+origins to connect to a `WebSocketChannel2023` receiveFrom URI. The
+SemApps notification channel uses an opaque UUIDv4 receiveFrom path
+and verifies that exact issued channel URI. The gateway therefore
+permits cross-origin WebSocket handshakes **only** for this exact
+capability route shape. Other routes still enforce the configured
+Origin allowlist. Unknown/forged channel IDs are rejected by the
+notification service itself; possession of a valid capability URL
+authorizes that notification channel, not general Pod access.
+
+The upstream SemApps notification implementation must also avoid
+logging the full receiveFrom capability URL at DEBUG level and must
+use valid WebSocket close codes. These are separate upstream
+hardening items; the gateway itself no longer logs token-bearing
+request URLs.

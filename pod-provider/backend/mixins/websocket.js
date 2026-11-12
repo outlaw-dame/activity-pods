@@ -2,7 +2,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 const {
   MAX_INBOUND_BYTES, MAX_CONNECTIONS, HEARTBEAT_MS, MAX_ASYNC_MESSAGES,
   allowedOrigins, isAllowedOrigin, canAcceptConnection, canBufferMessage,
-  outboundSize, createSendBudget
+  outboundSize, createSendBudget, isAllowedCapabilityOrigin
 } = require('../utils/websocket-safety');
 const http = require('http');
 const urlJoin = require('url-join');
@@ -298,7 +298,8 @@ module.exports = {
       // Browser WebSockets send Origin even when they cannot send custom
       // Authorization headers. Block cross-site cookie-backed upgrades
       // before invoking the route middleware or allocating a WebSocket.
-      if (!isAllowedOrigin(request.headers.origin, this.wsAllowedOrigins) ||
+      if (!(isAllowedOrigin(request.headers.origin, this.wsAllowedOrigins) ||
+            isAllowedCapabilityOrigin(request.headers.origin, request.url)) ||
           head.length > MAX_INBOUND_BYTES ||
           !canAcceptConnection(this.connections.length, this.pendingWsUpgrades)) {
         if (!socket.destroyed) {

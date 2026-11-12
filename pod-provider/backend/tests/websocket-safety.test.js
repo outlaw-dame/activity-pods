@@ -5,7 +5,8 @@ const path = require('node:path');
 const {
   MAX_INBOUND_BYTES, MAX_CONNECTIONS, MAX_BUFFERED_BYTES,
   canonicalOrigin, allowedOrigins, isAllowedOrigin,
-  canAcceptConnection, canBufferMessage, outboundSize,createSendBudget
+  canAcceptConnection, canBufferMessage, outboundSize,createSendBudget,
+  isAllowedCapabilityOrigin
 } = require('../utils/websocket-safety');
 
 test('WebSocket origin policy accepts configured origins and denies cross-site cookie upgrades', () => {
@@ -89,4 +90,17 @@ test('global WebSocket outgoing budget accounts for all connections and releases
   third();
   expect(quota.usedBytes).toBe(0);
   expect(quota.reserve(-1)).toBeNull();
+});
+
+test('valid cross-origin Solid WebSocketChannel2023 capability URLs remain usable', () => {
+  const uri='/.notifications/WebSocketChannel2023/socket/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  expect(isAllowedCapabilityOrigin('https://reader.example.test',uri)).toBe(true);
+  expect(isAllowedCapabilityOrigin('http://reader.example.test',uri)).toBe(true);
+  expect(isAllowedCapabilityOrigin('null',uri)).toBe(false);
+  expect(isAllowedCapabilityOrigin('https://reader.example.test',
+    '/.notifications/WebSocketChannel2023/socket/not-a-capability')).toBe(false);
+  expect(isAllowedCapabilityOrigin('https://reader.example.test',
+    '/.notifications/WebSocketChannel2023/socket/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa?token=private')).toBe(false);
+  expect(isAllowedCapabilityOrigin('https://reader.example.test',
+    '/api/private/socket/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')).toBe(false);
 });

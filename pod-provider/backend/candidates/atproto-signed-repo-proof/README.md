@@ -207,3 +207,27 @@ authenticated canonical authority with fail-closed versioned revocation and
 prove that the real general-provider credential cannot write it; project
 non-authoritative RDF views separately with causal fencing and reconciliation.
 Only then reconsider the protected writer source-controlled release fuse.
+
+### Restricted revocation-only database writer
+
+The original temporary permission proof allowed the "authority writer" role
+direct `UPDATE` rights. A stolen writer login could therefore forge
+`state='active'` and replace consent revisions. This follow-up removes **all
+direct canonical table DML** from the revocation login and grants it only
+`EXECUTE` on a narrowly scoped `SECURITY DEFINER` function, which uses a
+fixed `pg_catalog` search path and fully qualified table name. The function
+atomically changes only `active -> blocked`, only for an exact
+(owner, app, grant, expected revision) match, with monotonic revision increment
+and bigint exhaustion guard. The ordinary service cannot even execute it.
+
+A non-activated provider adapter validates canonical HTTPS scope and a
+bounded revision before issuing one parameterized function call. Two
+independent revocation connections compete over the same version; precisely
+one succeeds and one receives a stale result. Neither a rejected request nor
+a replay may reactivate an old grant. The function owner/test administrator
+remains privileged, and the revocation login remains able to revoke arbitrary
+matching account tuples **if the calling service fails owner authentication**.
+Therefore cross-node owner consent and narrow provider authority validation
+must occur before the function call. This acceptance does not grant an HTTP
+client a new revocation endpoint, migrate Jena identities, or remove the
+source-controlled production release fuse.

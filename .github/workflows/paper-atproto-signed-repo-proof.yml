@@ -71,6 +71,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-fence-child.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-revocation-gate.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash

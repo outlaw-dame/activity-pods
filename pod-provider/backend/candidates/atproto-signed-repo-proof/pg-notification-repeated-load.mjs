@@ -130,7 +130,7 @@ async function main(){
     // Advance only fixture rows' scheduling clocks; the production retry
     // policy remains capped exponential full-jitter.
     await pool.query('UPDATE '+schema+
-      ".deliveries SET next_attempt_at=clock_timestamp()-interval '1 second' "+
+      ".deliveries SET next_attempt_at=clock_timestamp()-interval '1 minute' "+
       "WHERE state='pending' AND attempts=1");
     const secondToken=crypto.randomUUID();
     const replay=await ledger.claim({limit:16,workerToken:secondToken});

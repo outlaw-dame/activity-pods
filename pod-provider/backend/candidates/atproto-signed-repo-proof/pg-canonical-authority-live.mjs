@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { Client } from 'pg';
 
 const require = createRequire(import.meta.url);
-const { createCanonicalAtprotoPgAuthority } =
+const { createCanonicalAtprotoPgAuthority, assertRestrictedPgAuthorityLogin } =
   require('../../utils/atproto-canonical-pg-authority.js');
 
 const dsn = process.env.ATPROTO_REPO_PROOF_DSN || '';
@@ -141,6 +141,12 @@ async function run() {
     }
     const [generic,reader,revoker,revoker2]=await Promise.all(
       temporaryRoles.map(([name])=>connectRole(name)));
+    assert.equal(await assertRestrictedPgAuthorityLogin(revoker),true);
+    assert.equal(await assertRestrictedPgAuthorityLogin(revoker2),true);
+    await assert.rejects(assertRestrictedPgAuthorityLogin(admin),
+      e=>e?.code==='ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
+    await assert.rejects(assertRestrictedPgAuthorityLogin(generic),
+      e=>e?.code==='ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
     const owner='https://paper.example.test/alice';
     const other='https://paper.example.test/bob';
     const app='https://writer.example.test/app';

@@ -108,6 +108,40 @@ function createCanonicalAtprotoPgAuthority({pool}={}) {
   });
 }
 
+/**
+ * Required startup permission proof, checked by PostgreSQL, not an
+ * application role-name claim. A deployment accidentally passing the DB
+ * administrator or migration-importer login is rejected before any SAI
+ * operation is permitted.
+ */
+async function assertRestrictedPgAuthorityLogin(pool) {
+  if (!pool?.query) refused('ATPROTO_PG_AUTHORITY_POOL');
+  const result = await pool.query(
+    'SELECT r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,' +
+    'r.rolbypassrls,r.rolcanlogin, ' +
+    "pg_catalog.has_schema_privilege(current_user,'paper_atproto_authority','CREATE') AS schema_create, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','SELECT') AS identity_read, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','SELECT') AS consent_read, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','INSERT') AS identity_insert, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','INSERT') AS consent_insert, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','UPDATE') AS consent_update, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','DELETE') AS consent_delete, " +
+    "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','TRUNCATE') AS consent_truncate, " +
+    "pg_catalog.has_function_privilege(current_user,'paper_atproto_authority.block_consent(text,text,text,bigint)','EXECUTE') AS revoke_execute " +
+    'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user'
+  );
+  const row = result.rows?.[0];
+  const blocked = ['rolsuper','rolcreatedb','rolcreaterole','rolreplication',
+    'rolbypassrls','schema_create','identity_insert','consent_insert',
+    'consent_update','consent_delete','consent_truncate'];
+  if(result.rowCount!==1 || !row || row.rolcanlogin!==true ||
+      row.identity_read!==true || row.consent_read!==true ||
+      row.revoke_execute!==true || blocked.some(key=>row[key]!==false)) {
+    refused('ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
+  }
+  return true;
+}
+
 // One bounded pool per provider process, not per Pod or service call.
 // This is NOT a public Moleculer action. Owner authentication is enforced
 // by beforeSaiMutation before calling into this private adapter.
@@ -129,6 +163,18 @@ async function getProviderAtprotoPgAuthority() {
     initializing = (async () => {
       const dsn = process.env.APODS_ATPROTO_AUTHORITY_PG_URL;
       if (!dsn) refused('ATPROTO_PG_AUTHORITY_DSN_MISSING');
+      // Only exact disposable loopback PG18 is permitted in unreleased
+      // mode. Production connection TLS and certificate pins require a
+      // separate reviewed release before accepting an external DB host.
+      let uri;
+      try { uri = new URL(dsn); }
+      catch { refused('ATPROTO_PG_AUTHORITY_DSN_UNTRUSTED'); }
+      if (!['postgres:','postgresql:'].includes(uri.protocol) ||
+          uri.hostname !== '127.0.0.1' || uri.port !== '5548' ||
+          uri.pathname !== '/atproto_signed_repo_proof_test' ||
+          !uri.username || !uri.password || uri.hash) {
+        refused('ATPROTO_PG_AUTHORITY_DSN_UNTRUSTED');
+      }
       const { Pool } = require('pg');
       const pool = new Pool({
         connectionString: dsn, max: 2,
@@ -136,7 +182,7 @@ async function getProviderAtprotoPgAuthority() {
         query_timeout: 5000, allowExitOnIdle: true
       });
       try {
-        await pool.query('SELECT 1');
+        await assertRestrictedPgAuthorityLogin(pool);
         const authority = createCanonicalAtprotoPgAuthority({ pool });
         singleton = { pool, authority };
         return authority;
@@ -163,5 +209,6 @@ async function closeProviderAtprotoPgAuthority() {
 }
 module.exports={
   createCanonicalAtprotoPgAuthority,
+  assertRestrictedPgAuthorityLogin,
   getProviderAtprotoPgAuthority,closeProviderAtprotoPgAuthority
 };

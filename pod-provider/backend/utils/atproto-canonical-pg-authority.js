@@ -88,30 +88,54 @@ function createCanonicalAtprotoPgAuthority({pool}={}) {
 // This is NOT a public Moleculer action. Owner authentication is enforced
 // by beforeSaiMutation before calling into this private adapter.
 let singleton;
+let initializing = null;
+let closing = false;
 async function getProviderAtprotoPgAuthority() {
-  if(process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED!=='true') {
+  if (process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED !== 'true') {
     refused('ATPROTO_PG_AUTHORITY_NOT_ENABLED');
   }
-  const disposable=process.env.NODE_ENV==='test' &&
-    process.env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE==='confirmed';
+  const disposable = process.env.NODE_ENV === 'test' &&
+    process.env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE === 'confirmed';
   if (!disposable) refused('ATPROTO_PG_AUTHORITY_NOT_RELEASED');
-  if (singleton)return singleton.authority;
-  const dsn=process.env.APODS_ATPROTO_AUTHORITY_PG_URL;
-  if (!dsn) refused('ATPROTO_PG_AUTHORITY_DSN_MISSING');
-  const { Pool }=require('pg');
-  const pool=new Pool({
-    connectionString:dsn,max:2,connectionTimeoutMillis:3000,
-    idleTimeoutMillis:10000,query_timeout:5000,allowExitOnIdle:true
-  });
-  const authority=createCanonicalAtprotoPgAuthority({pool});
-  try { await pool.query('SELECT 1'); }
-  catch { await pool.end(); refused('ATPROTO_PG_AUTHORITY_UNAVAILABLE'); }
-  singleton={pool,authority};
-  return authority;
+  if (closing) refused('ATPROTO_PG_AUTHORITY_STOPPING');
+  if (singleton) return singleton.authority;
+  // Single-flight initialization: concurrent first SAI calls must not each
+  // create a PostgreSQL pool and leak the losing connections.
+  if (!initializing) {
+    initializing = (async () => {
+      const dsn = process.env.APODS_ATPROTO_AUTHORITY_PG_URL;
+      if (!dsn) refused('ATPROTO_PG_AUTHORITY_DSN_MISSING');
+      const { Pool } = require('pg');
+      const pool = new Pool({
+        connectionString: dsn, max: 2,
+        connectionTimeoutMillis: 3000, idleTimeoutMillis: 10000,
+        query_timeout: 5000, allowExitOnIdle: true
+      });
+      try {
+        await pool.query('SELECT 1');
+        const authority = createCanonicalAtprotoPgAuthority({ pool });
+        singleton = { pool, authority };
+        return authority;
+      } catch {
+        await pool.end().catch(() => {});
+        refused('ATPROTO_PG_AUTHORITY_UNAVAILABLE');
+      }
+    })().finally(() => { initializing = null; });
+  }
+  return initializing;
 }
-async function closeProviderAtprotoPgAuthority(){
-  const current=singleton;singleton=null;
-  if(current)await current.pool.end();
+async function closeProviderAtprotoPgAuthority() {
+  if (closing) return;
+  closing = true;
+  try {
+    const pending = initializing;
+    if (pending) await pending.catch(() => {});
+    const current = singleton;
+    singleton = null;
+    if (current) await current.pool.end();
+  } finally {
+    closing = false;
+  }
 }
 module.exports={
   createCanonicalAtprotoPgAuthority,

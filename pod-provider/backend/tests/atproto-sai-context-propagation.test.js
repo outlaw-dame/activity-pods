@@ -26,7 +26,13 @@ test('native owner scope is registered only at the authenticated SAI action boun
   const source = fs.readFileSync(
     path.join(__dirname, '../services/sai/auth-agent.js'), 'utf8'
   );
-  const matches = source.match(/authorizeOwnerSaiAction\(ctx, \{ owner: webId, app: appUri \}\)/gu);
+  // Three explicit owner-authenticated app-management entry points now
+  // await the async wrapper. In disabled mode it uses the original local
+  // proof; in disposable distributed mode it verifies shared Redis state.
+  const matches = source.match(/await authorizeOwnerSaiActionForBroker\(ctx, \{ owner: webId, app: appUri \}\)/gu);
   expect(matches).toHaveLength(3);
-  expect(source.match(/releaseOwnerContext\(\)/gu)).toHaveLength(3);
+  // Every auth-agent path must await revocation of its scoped capability
+  // in a finally block, including error and cancellation paths.
+  expect(source.match(/await releaseOwnerContext\(\)/gu)).toHaveLength(3);
+  expect(source.match(/finally \{/gu).length).toBeGreaterThanOrEqual(3);
 });

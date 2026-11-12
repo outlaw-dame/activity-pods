@@ -36,4 +36,6 @@ test('generic triplestore checks the release boundary before initialization', ()
   const path = require('node:path');
   const source = fs.readFileSync(path.join(__dirname, '../services/core/triplestore.js'), 'utf8');
   expect(source).toContain('assertNativeProtectedStorageReleased();');
+  const launcher = fs.readFileSync(path.join(__dirname, '../scripts/run-moleculer-fabric.js'), 'utf8');
+  expect(launcher).toContain('assertNativeProtectedStorageReleased();');
 });

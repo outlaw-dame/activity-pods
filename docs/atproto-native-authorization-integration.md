@@ -209,3 +209,25 @@ nonzero before the acceptance assertion. Neither should be dismissed as
 an application error without a repeatable diagnosis. The latest commit
 and workflow runs, not those historical results, determine the pass/fail
 status of the current candidate.
+
+
+### Final security-review follow-up: provider entrypoints and OIDC errors
+
+The official Moleculer fabric launcher checks the protected-storage release
+fuse before spawning **any** service group. The generic triplestore continues
+to check independently during module initialization. This closes the normal
+multi-service deployment path in which a service group does not load the
+triplestore module. Direct alternative launchers are not proof of isolation:
+operators must keep production startup commands and configuration under
+review, and the storage boundary itself remains unreleased.
+
+The native Solid-OIDC HTML error renderer now escapes client-controlled error
+field names and values, caps the number and size of displayed fields, and
+logs only a bounded error code and numeric status rather than arbitrary
+request metadata. This prevents reflecting attacker-supplied markup in an
+OAuth error response and avoids logging token-bearing exception objects.
+The provider's current one-year ID-token lifetime, existing ID-token use by
+resource handlers, and automatic OIDC scope grant remain separate security
+and compatibility decisions. These need a migration plan and real client
+acceptance before shortening lifetimes or changing scope issuance; no
+silent authentication cutover is included in this branch.

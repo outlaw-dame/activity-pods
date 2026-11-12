@@ -95,7 +95,12 @@ async function main() {
       'WHERE c.owner_id = p_owner AND c.app_id = p_app AND c.grant_uri = p_grant ' +
       'AND c.revision = p_expected AND c.state = \'active\' ' +
       'AND c.revision < 9223372036854775807 ' +
-      'RETURNING c.revision, c.state $body
+      'RETURNING c.revision, c.state $body$'
+    );
+    await admin.query('REVOKE ALL ON FUNCTION ' + revokeFunction +
+      ' (text, text, text, bigint) FROM PUBLIC');
+    await admin.query('GRANT EXECUTE ON FUNCTION ' + revokeFunction +
+      ' (text, text, text, bigint) TO ' + identifier(writer));
 
     ownerClient = asRoleConnection(writer, writerSecret);
     ordinaryClient = asRoleConnection(ordinary, ordinarySecret);
@@ -115,8 +120,9 @@ async function main() {
       'UPDATE ' + authority + " SET state='active',revision=99 WHERE owner_id=$1",
       [ownerId]);
     await deny(ordinaryClient,
-      'INSERT INTO ' + authority + " VALUES ($1,$2,99,'active')",
-      ['https://paper.example.test/attacker', appId]);
+      'INSERT INTO ' + authority +
+      " (owner_id,app_id,grant_uri,revision,state) VALUES ($1,$2,$3,99,'active')",
+      ['https://paper.example.test/attacker', appId, grantUri]);
     await deny(ordinaryClient, 'DELETE FROM ' + authority + ' WHERE owner_id=$1', [ownerId]);
     await deny(ordinaryClient, 'TRUNCATE TABLE ' + authority);
     await deny(ordinaryClient,
@@ -192,77 +198,6 @@ async function main() {
     // any external schema, database, role or key. Every name has a random,
     // validated per-run prefix; the known disposable DB was verified above.
     if (secondRevoker) await secondRevoker.end().catch(() => {});
-    if (ordinaryClient) await ordinaryClient.end().catch(() => {});
-    if (ownerClient) await ownerClient.end().catch(() => {});
-    await admin.query('DROP SCHEMA IF EXISTS ' + sqlSchema + ' CASCADE');
-    for (const name of created.reverse()) {
-      await admin.query('DROP ROLE ' + identifier(name));
-    }
-    await admin.end();
-  }
-}
-main().catch(error => {
-  console.error('PG private authority proof failed:', error.code || error.name);
-  process.exitCode = 1;
-});
-
-    );
-    await admin.query('REVOKE ALL ON FUNCTION ' + revokeFunction +
-      ' (text, text, text, bigint) FROM PUBLIC');
-    await admin.query('GRANT EXECUTE ON FUNCTION ' + revokeFunction +
-      ' (text, text, text, bigint) TO ' + identifier(writer));
-    // Ordinary SemApps and generic SPARQL writers get zero DML rights
-    // and zero EXECUTE privileges. Both logins are real separate users.
-
-    ownerClient = asRoleConnection(writer, writerSecret);
-    ordinaryClient = asRoleConnection(ordinary, ordinarySecret);
-    await Promise.all([ownerClient.connect(), ordinaryClient.connect()]);
-    assert.equal((await ownerClient.query('SELECT current_user AS u')).rows[0].u, writer);
-    assert.equal((await ordinaryClient.query('SELECT current_user AS u')).rows[0].u, ordinary);
-    const ownerId = 'https://paper.example.test/alice';
-    const appId = 'https://writer.example.test/app';
-    await ownerClient.query(
-      'INSERT INTO ' + authority +
-      ' (owner_id,app_id,revision,state) VALUES ($1,$2,1,$3)',
-      [ownerId, appId, 'active']
-    );
-    await deny(ordinaryClient, 'SELECT * FROM ' + authority + ' WHERE owner_id=$1', [ownerId]);
-    await deny(ordinaryClient,
-      'UPDATE ' + authority + " SET state='active',revision=99 WHERE owner_id=$1",
-      [ownerId]);
-    await deny(ordinaryClient,
-      'INSERT INTO ' + authority + " VALUES ($1,$2,99,'active')",
-      ['https://paper.example.test/attacker', appId]);
-    await deny(ordinaryClient, 'DELETE FROM ' + authority + ' WHERE owner_id=$1', [ownerId]);
-    await deny(ordinaryClient, 'TRUNCATE TABLE ' + authority);
-    await deny(ordinaryClient,
-      'CREATE TABLE ' + sqlSchema + '.unauthorized_copy (id text)');
-    await deny(ordinaryClient, 'SET ROLE ' + identifier(writer));
-    await deny(ownerClient, 'DELETE FROM ' + authority + ' WHERE owner_id=$1', [ownerId]);
-
-    const blocked = await ownerClient.query(
-      'UPDATE ' + authority +
-      " SET state='blocked',revision=revision+1 WHERE owner_id=$1 RETURNING revision,state",
-      [ownerId]
-    );
-    assert.equal(blocked.rowCount, 1);
-    assert.equal(blocked.rows[0].state, 'blocked');
-    assert.equal(blocked.rows[0].revision, '2');
-    const actual = await admin.query('SELECT owner_id,app_id,revision,state FROM ' + authority);
-    assert.equal(actual.rowCount, 1);
-    assert.equal(actual.rows[0].owner_id, ownerId);
-    assert.equal(actual.rows[0].app_id, appId);
-    assert.equal(actual.rows[0].revision, '2');
-    assert.equal(actual.rows[0].state, 'blocked');
-    console.log(JSON.stringify({
-      success: true, scope: 'non-activated-postgresql18-canonical-storage-isolation',
-      independentLogins: 2, deniedUnauthorizedOperations: 7,
-      deniedWriterDeletion: true, canonicalStateRetained: true
-    }));
-  } finally {
-    // Terminate our own clients before removing test roles. Do not DROP
-    // any external schema, database, role or key. Every name has a random,
-    // validated per-run prefix; the known disposable DB was verified above.
     if (ordinaryClient) await ordinaryClient.end().catch(() => {});
     if (ownerClient) await ownerClient.end().catch(() => {});
     await admin.query('DROP SCHEMA IF EXISTS ' + sqlSchema + ' CASCADE');

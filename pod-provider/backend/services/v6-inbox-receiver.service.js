@@ -43,7 +43,8 @@ module.exports = {
         path: '/api/internal/inbox',
         authorization: false,
         authentication: false,
-        bodyParsers: { json: { strict: false } },
+        // Bound parsing before allocating the activity or serializing it again.
+        bodyParsers: { json: { strict: false, limit: '512kb' } },
         onBeforeCall: (ctx, route, req) => {
           const authHeader = (req.headers['authorization'] || '').trim();
           const token = this.parseBearerToken(authHeader);
@@ -124,7 +125,9 @@ module.exports = {
         // actor === webId guard inside inbox.post.
         await ctx.call(
           'activitypub.inbox.post',
-          { collectionUri: normalizedTargetInbox, ...activity },
+          // The verified destination is authoritative; never allow an
+          // ActivityPub extension property named collectionUri to override it.
+          { ...activity, collectionUri: normalizedTargetInbox },
           { meta: { webId: verifiedActorUri, skipSignatureValidation: true } }
         );
 
@@ -202,8 +205,8 @@ module.exports = {
       const defaults = [
         process.env.ACTIVITYPODS_URL,
         process.env.SEMAPPS_HOME_URL,
-        'http://localhost:3000',
-        'https://localhost:3000'
+        ...(process.env.NODE_ENV !== 'production'
+          ? ['http://localhost:3000', 'https://localhost:3000'] : [])
       ]
         .map(value => String(value || '').trim())
         .filter(Boolean);
@@ -234,6 +237,8 @@ module.exports = {
       }
 
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+      if (parsed.username || parsed.password || parsed.search || parsed.hash ||
+          parsed.href !== normalized) return null;
       if (!parsed.pathname.endsWith('/inbox')) return null;
 
       const allowedOrigins = this.getAllowedInboxOrigins();

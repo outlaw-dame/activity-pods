@@ -67,3 +67,15 @@ privileged Fuseki/SPARQL writes safe for repository authorization.
 ### Worker-crash retry budget
 
 An expired claimed lease now counts as a failed delivery attempt, even when the worker dies before it can call the explicit failure path. The database advances its count under a row lock in the same `SKIP LOCKED` statement that reclaims work. After eight failed lease windows, the record moves to durable quarantine with reason `LEASE_TIMEOUT_EXHAUSTED`. A worker cannot loop indefinitely on the same poisoned notification merely by crashing. The healthy path retains one indexed claim query and at most eight records per worker poll.
+
+### Durable webhook response correlation
+
+The durable HTTP envelope now includes the exact `canonicalIntentId`
+alongside `ok: true`, `durable: true`, the duplicate bit and queued
+recipient count. A sidecar using strict PostgreSQL acknowledgment must match
+that identifier before it advances a Kafka offset. An ordinary HTTP 409 can
+also mean a conflicting, rejected manifest; it must **not** be treated as a
+completed duplicate without checking the response body. The internal
+`activitypods` canonical source protocol is preserved alongside
+`activitypub` and `atproto` by the ledger, following the existing
+canonical.v1 event schema.

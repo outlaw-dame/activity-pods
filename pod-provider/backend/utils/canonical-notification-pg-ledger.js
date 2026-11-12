@@ -34,7 +34,7 @@ function str(value, max) {
 }
 function validateBatch({ intentId, kind, protocol, recipients }) {
   if (!str(intentId, 512) || !str(kind, 64) ||
-      !['activitypub', 'atproto'].includes(protocol) ||
+      !['activitypub', 'atproto', 'activitypods'].includes(protocol) ||
       !Array.isArray(recipients) || recipients.length > MAX_RECIPIENTS) {
     throw invalid('PG_NOTIFY_INPUT_INVALID');
   }

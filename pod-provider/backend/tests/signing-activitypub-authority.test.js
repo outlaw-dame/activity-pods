@@ -48,9 +48,9 @@ function rsaPrivateKey(overrides = {}) {
 
 describe('ActivityPub signing authority boundary', () => {
   test.each([
-    ['person account', localAccount()],
-    ['group account', localAccount({ group: true })]
-  ])('accepts an exact local %s only after account and actor proof', async (_label, account) => {
+    ['person account', localAccount(), localActor()],
+    ['group account', localAccount({ group: true }), localActor({ type: 'Group' })]
+  ])('accepts an exact local %s only after account and actor proof', async (_label, account, actor) => {
     const ctx = {
       call: jest.fn(async (action, params) => {
         if (action === 'auth.account.findByWebId') {
@@ -59,7 +59,7 @@ describe('ActivityPub signing authority boundary', () => {
         }
         if (action === 'activitypub.actor.get') {
           expect(params).toEqual({ actorUri: ACTOR, webId: 'system' });
-          return localActor();
+          return actor;
         }
         throw new Error(`Unexpected action: ${action}`);
       })

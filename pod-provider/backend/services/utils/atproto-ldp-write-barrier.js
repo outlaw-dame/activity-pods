@@ -41,8 +41,6 @@ function localPath(uri, base) {
   if (target.origin !== base.origin || target.protocol !== base.protocol) return null;
   if (target.username || target.password ||
       !target.pathname.startsWith(base.path)) return null;
-  if (target.search || target.hash) return { invalid: true };
-
   let tail = target.pathname.slice(base.path.length);
   // SemApps, HTTP routing, and reverse proxies need not decode the same
   // number of times. Recognize encoded container names and separators before

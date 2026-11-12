@@ -1,6 +1,10 @@
 const fetch = require('node-fetch');
 const isEmpty = require('lodash/isEmpty.js');
 const { clientFetchOptions } = require('./oidc-client-network-policy');
+const {
+  ATOMIC_GRANT_UPSERT, MAX_GRANT_TOKENS, MAX_GRANT_TTL_SECONDS,
+  REVOKE_BATCH, MAX_REVOKE_BATCHES, revokeMarker, validTtl, cappedError
+} = require('./oidc-grant-index-policy');
 
 const grantable = new Set([
   'AccessToken',
@@ -32,39 +36,49 @@ class RedisAdapter {
 
   async upsert(id, payload, expiresIn) {
     const key = this.key(id);
-    const store = consumable.has(this.name) ? { payload: JSON.stringify(payload) } : JSON.stringify(payload);
+    const tracking = grantable.has(this.name) && Boolean(payload.grantId);
+    const isHash = consumable.has(this.name);
+    const serialized = JSON.stringify(payload);
 
-    const multi = this.client.multi();
-    multi[consumable.has(this.name) ? 'hmset' : 'set'](key, store);
-
-    if (expiresIn) {
-      multi.expire(key, expiresIn);
-    }
-
-    if (grantable.has(this.name) && payload.grantId) {
-      const grantKey = grantKeyFor(payload.grantId);
-      multi.rpush(grantKey, key);
-      // if you're seeing grant key lists growing out of acceptable proportions consider using LTRIM
-      // here to trim the list to an appropriate length
-      const ttl = await this.client.ttl(grantKey);
-      if (expiresIn > ttl) {
-        multi.expire(grantKey, expiresIn);
+    if (tracking) {
+      if (!validTtl(expiresIn)) {
+        throw cappedError('OIDC_GRANT_TTL_INVALID');
       }
+      // Persist the token, its revocation pointer and its TTL in one
+      // server-side transaction. Reject before writing if the grant was
+      // revoked or its bounded index is full.
+      const result = await this.client.eval(
+        ATOMIC_GRANT_UPSERT, 5,
+        key, grantKeyFor(payload.grantId), revokeMarker(payload.grantId),
+        payload.userCode ? userCodeKeyFor(payload.userCode) : 'unused:code',
+        payload.uid ? uidKeyFor(payload.uid) : 'unused:uid',
+        isHash ? 'hash' : 'string', serialized, String(expiresIn),
+        String(MAX_GRANT_TOKENS), key,
+        payload.userCode ? 'yes' : '', id,
+        payload.uid ? 'yes' : ''
+      );
+      if (result === -1) throw cappedError('OIDC_GRANT_TOKEN_LIMIT');
+      if (result === -2) throw cappedError('OIDC_GRANT_ALREADY_REVOKED');
+      if (result !== 1) throw cappedError('OIDC_GRANT_WRITE_UNKNOWN');
+      return;
     }
 
+    const store = isHash ? { payload: serialized } : serialized;
+    const multi = this.client.multi();
+    multi[isHash ? 'hmset' : 'set'](key, store);
+    if (expiresIn) multi.expire(key, expiresIn);
     if (payload.userCode) {
-      const userCodeKey = userCodeKeyFor(payload.userCode);
-      multi.set(userCodeKey, id);
-      multi.expire(userCodeKey, expiresIn);
+      multi.set(userCodeKeyFor(payload.userCode), id);
+      multi.expire(userCodeKeyFor(payload.userCode), expiresIn);
     }
-
     if (payload.uid) {
-      const uidKey = uidKeyFor(payload.uid);
-      multi.set(uidKey, id);
-      multi.expire(uidKey, expiresIn);
+      multi.set(uidKeyFor(payload.uid), id);
+      multi.expire(uidKeyFor(payload.uid), expiresIn);
     }
-
-    await multi.exec();
+    const executed = await multi.exec();
+    if (!executed || executed.some(([error]) => error)) {
+      throw cappedError('OIDC_GRANT_WRITE_FAILED');
+    }
   }
 
   async find(id) {
@@ -138,14 +152,16 @@ class RedisAdapter {
       }
     }
 
-    if (typeof data === 'string') {
-      return JSON.parse(data);
+    const value = typeof data === 'string'
+      ? JSON.parse(data)
+      : { ...data, ...JSON.parse(data.payload) };
+    // A cancelled revocation can leave an old key in Redis until the
+    // next recovery attempt. The marker still denies that token.
+    if (grantable.has(this.name) && value.grantId &&
+        await this.client.exists(revokeMarker(value.grantId))) {
+      return undefined;
     }
-    const { payload, ...rest } = data;
-    return {
-      ...rest,
-      ...JSON.parse(payload)
-    };
+    return value;
   }
 
   async findByUid(uid) {
@@ -164,11 +180,30 @@ class RedisAdapter {
   }
 
   async revokeByGrantId(grantId) {
-    const multi = this.client.multi();
-    const tokens = await this.client.lrange(grantKeyFor(grantId), 0, -1);
-    tokens.forEach(token => multi.del(token));
-    multi.del(grantKeyFor(grantId));
-    await multi.exec();
+    const key = grantKeyFor(grantId);
+    // Mark as revoked before deleting any token: concurrent upserts must
+    // observe the marker and fail closed. Retain it for the maximum allowed
+    // tracked-token lifetime so interrupted revocation is still denied.
+    await this.client.set(
+      revokeMarker(grantId), '1', 'EX', MAX_GRANT_TTL_SECONDS
+    );
+    for (let batch = 0; batch < MAX_REVOKE_BATCHES; batch++) {
+      const tokens = await this.client.lrange(key, 0, REVOKE_BATCH - 1);
+      if (!tokens.length) {
+        await this.client.del(key);
+        return;
+      }
+      // Delete this batch's token keys and remove their pointers in one
+      // Redis transaction. A crash cannot discard a pointer before its token.
+      const multi = this.client.multi();
+      for (const token of tokens) multi.del(token);
+      multi.ltrim(key, tokens.length, -1);
+      const executed = await multi.exec();
+      if (!executed || executed.some(([error]) => error)) {
+        throw cappedError('OIDC_GRANT_REVOKE_FAILED');
+      }
+    }
+    throw cappedError('OIDC_GRANT_LEGACY_INDEX_TOO_LARGE');
   }
 
   async consume(id) {

@@ -72,6 +72,10 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-revocation-gate.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-ledger-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-replay-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-capacity-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
@@ -104,6 +108,64 @@ jobs:
         run: |
           set -euo pipefail
           node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-private-authority-proof.mjs
+
+      - name: Prove durable per-recipient notification ledger and measure real PostgreSQL 18 loopback capacity
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-ledger-live.mjs
+
+      - name: Upload PG ledger timing / RSS / indexed queue size evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-notification-pg-loopback-capacity
+          path: ${{ runner.temp }}/paper-notification-pg-capacity.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Measure PG18 sustained backpressure, replay amplification, drain latency and post-GC RSS
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --expose-gc pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-capacity-live.mjs
+
+      - name: Upload PG18 sustained capacity and backlog measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-notification-pg-steady-capacity
+          path: ${{ runner.temp }}/paper-notification-pg-steady-capacity.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Prove canonical identity and SAI rights cannot be altered by general SQL writers
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
+
+      - name: Prove restricted operator quarantine replay and immutable audit in real PostgreSQL 18
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-notification-replay-live.mjs
 
       - name: Independently verify against Bluesky reference repository implementation
         shell: bash
@@ -189,6 +251,17 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs prepare
+
+      - name: Prove privileged Fuseki SPARQL changes cannot resurrect PostgreSQL SAI authority
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
 
       - name: Restart persistent Fuseki TDB2
         run: |

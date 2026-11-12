@@ -5,6 +5,8 @@ const { MoleculerError } = require('moleculer').Errors;
 const { Errors: WebErrors } = require('moleculer-web');
 const CONFIG = require('../config/config');
 const { mapWithConcurrency } = require('../utils/activitypub-delivery-planner');
+const { assertNotificationPgCanRun } = require('../utils/notification-pg-release-gate');
+const { createCanonicalNotificationLedger } = require('../utils/canonical-notification-pg-ledger');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -27,7 +29,7 @@ const VALID_KINDS = new Set([
 
 const NOTIFICATION_KINDS = new Set(['ReactionAdd', 'ShareAdd', 'FollowAdd', 'PostCreate', 'DirectMessage']);
 
-const VALID_PROTOCOLS = new Set(['activitypub', 'atproto']);
+const VALID_PROTOCOLS = new Set(['activitypub', 'atproto', 'activitypods']);
 
 const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams';
 
@@ -49,6 +51,7 @@ module.exports = {
     },
     routePath: '/api/internal/bridge',
     dedupeMaxEntries: Number(process.env.CANONICAL_NOTIFICATION_DEDUPE_MAX || 10000),
+    pgLedgerEnabled: process.env.APODS_NOTIFICATION_LEDGER_ENABLED === 'true',
     baseUrl: (CONFIG.BASE_URL || process.env.SEMAPPS_HOME_URL || '').replace(/\/$/, '')
   },
 
@@ -56,9 +59,35 @@ module.exports = {
     // In-memory idempotency set. Capped at dedupeMaxEntries to prevent unbounded growth.
     this.processedIds = new Set();
     this.inFlightIds = new Set();
+    this.notificationPool = null;
+    this.notificationLedger = null;
   },
 
   async started() {
+    assertNotificationPgCanRun();
+    if (this.settings.pgLedgerEnabled) {
+      const url = process.env.APODS_NOTIFICATION_PG_URL;
+      if (typeof url !== 'string' || !url) {
+        throw new Error('Canonical notification PG ledger requires a dedicated PostgreSQL DSN');
+      }
+      // Only two pooled connections per API replica, never one per user or
+      // webhook. The pool login must have DML, not migration-owner privileges.
+      const { Pool } = require('pg');
+      this.notificationPool = new Pool({
+        connectionString: url, max: 2,
+        connectionTimeoutMillis: 3000, idleTimeoutMillis: 10000,
+        query_timeout: 6500, allowExitOnIdle: true
+      });
+      this.notificationLedger = createCanonicalNotificationLedger({ pool: this.notificationPool });
+      try {
+        await this.notificationLedger.verifySchema();
+      } catch (error) {
+        await this.notificationPool.end();
+        this.notificationPool = null;
+        this.notificationLedger = null;
+        throw error;
+      }
+    }
     const bearerToken = this.settings.auth.bearerToken;
 
     if (!bearerToken) {
@@ -103,6 +132,12 @@ module.exports = {
     this.logger.info('[CanonicalNotificationApi] Internal routes registered under /api/internal/bridge');
   },
 
+  async stopped() {
+    if (this.notificationPool) await this.notificationPool.end();
+    this.notificationPool = null;
+    this.notificationLedger = null;
+  },
+
   actions: {
     ingest: {
       async handler(ctx) {
@@ -136,9 +171,60 @@ module.exports = {
           throw new MoleculerError('Missing or invalid actor object', 400, 'INVALID_INPUT');
         }
 
+        // The PostgreSQL ledger has a fixed 64-recipient bound; reject
+        // oversized mentions before any actor or object-owner lookup.
+        if (params.mentions !== undefined && (!Array.isArray(params.mentions) ||
+            params.mentions.length > 64)) {
+          throw new MoleculerError('Canonical mention list exceeds recipient budget',
+            400, 'INVALID_INPUT');
+        }
         const createdAt = String(params.createdAt || '').trim();
         if (!createdAt || !this.isValidIso8601(createdAt)) {
           throw new MoleculerError('Missing or invalid createdAt (must be ISO 8601)', 400, 'INVALID_INPUT');
+        }
+
+        if (this.settings.pgLedgerEnabled) {
+          // Durable record first, external HTTP acknowledgment second.
+          // Expensive actor lookups occur before opening the PG transaction.
+          if (!this.notificationLedger) {
+            throw new MoleculerError('Canonical notification ledger unavailable', 503, 'PG_NOTIFY_UNAVAILABLE');
+          }
+          try {
+            const actorUri = await this.resolveActorUri(ctx, params.actor);
+            const recipients = NOTIFICATION_KINDS.has(kind)
+              ? await this.resolveLocalRecipients(ctx, params) : [];
+            if (recipients.length && !actorUri) {
+              throw new Error('Canonical actor resolution incomplete');
+            }
+            const entries = recipients.map(recipient => ({
+              recipient, actorUri,
+              activity: this.buildBridgeActivity(params, recipient, actorUri)
+            }));
+            const stored = await this.notificationLedger.enqueue({
+              intentId: canonicalIntentId, kind, protocol: sourceProtocol,
+              recipients: entries
+            });
+            ctx.meta.$statusCode = stored.duplicate ? 409 : 202;
+            return {
+              ok: true, durable: true, duplicate: stored.duplicate,
+              delivered: false, queuedRecipients: stored.recipients,
+              canonicalIntentId
+            };
+          } catch (error) {
+            // A database failure MUST NOT return 202, even when a prior
+            // worker already emitted the notification to an inbox.
+            if (error.code === 'PG_NOTIFY_INTENT_CONFLICT' ||
+                error.code === 'PG_NOTIFY_INPUT_INVALID' ||
+                error.code === 'PG_NOTIFY_PAYLOAD_LIMIT') {
+              throw new MoleculerError('Invalid or conflicting canonical notification',
+                409, error.code);
+            }
+            this.logger.error('[CanonicalNotificationApi] Durable enqueue denied', {
+              kind, code: error.code || 'PG_NOTIFY_UNAVAILABLE'
+            });
+            throw new MoleculerError('Canonical notification persistence unavailable',
+              503, 'PG_NOTIFY_UNAVAILABLE');
+          }
         }
 
         // Only completed events are duplicates. Never acknowledge an in-flight

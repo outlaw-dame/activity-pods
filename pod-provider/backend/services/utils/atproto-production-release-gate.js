@@ -18,7 +18,12 @@ const NATIVE_PROTECTED_STORAGE_RELEASED = false;
 function assertNativeProtectedStorageReleased(env = process.env) {
   const disposableTest = env.NODE_ENV === 'test' &&
     env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE === 'confirmed';
-  if (env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED === 'true' &&
+  if (env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED === 'true' &&
+      env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') {
+    throw new Error('The canonical PG authority requires the native SAI owner fence');
+  }
+  if ((env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED === 'true' ||
+       env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED === 'true') &&
       !NATIVE_PROTECTED_STORAGE_RELEASED && !disposableTest) {
     throw new Error(
       'The ATProto SAI integration is not released: canonical RDF storage remains reachable by general privileged SPARQL writers'

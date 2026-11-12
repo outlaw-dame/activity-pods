@@ -1,5 +1,6 @@
 'use strict';
 
+const { readBoundedAcknowledgement } = require('./activitypub-webhook-ack');
 const DELIVERY_HANDOFF_QUEUE = 'deliveryHandoff';
 const DELIVERY_HANDOFF_JOB_NAME = 'apdm-delivery-handoff-v1';
 
@@ -27,6 +28,9 @@ function assertDurableHandoffConfigured(settings) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error('APDM sidecar durable outbox handoff URL must be valid HTTP(S)');
+  }
+  if (url.username || url.password || url.hash || url.href !== settings.deliveryHandoffUrl) {
+    throw new Error('APDM handoff URL must be canonical and contain no embedded credentials or fragment');
   }
   if (typeof settings.deliveryHandoffToken !== 'string' || settings.deliveryHandoffToken.length === 0) {
     throw new Error('APDM external delivery requires SIDECAR_TOKEN for authenticated durable handoff');
@@ -107,15 +111,17 @@ async function processDeliveryHandoffJob(service, job, fetchImpl = fetch) {
     throw new Error(`Sidecar durable outbox handoff returned ${response.status}; expected durable 202 acceptance`);
   }
 
-  let acknowledgement;
-  try {
-    acknowledgement = await response.json();
-  } catch {
-    throw new Error('Sidecar durable outbox handoff returned an invalid acknowledgement body');
-  }
-
-  if (!acknowledgement || acknowledgement.accepted !== true || typeof acknowledgement.intentId !== 'string') {
-    throw new Error('Sidecar durable outbox handoff acknowledgement did not confirm Redis acceptance');
+  // The Fedify sidecar returns the X-APDM-Intent-Id as the durable queue
+  // intentId in external mode. Do not report success for another request.
+  const acknowledgement = await readBoundedAcknowledgement(response);
+  if (acknowledgement.accepted !== true ||
+      acknowledgement.intentId !== intentId ||
+      !Number.isSafeInteger(acknowledgement.jobCount) ||
+      acknowledgement.jobCount < 0 ||
+      !Array.isArray(deliveryPlan.remoteRecipients) ||
+      acknowledgement.jobCount > deliveryPlan.remoteRecipients.length ||
+      (deliveryPlan.remoteRecipients.length > 0 && acknowledgement.jobCount === 0)) {
+    throw new Error('Sidecar durable outbox handoff acknowledgement did not confirm Redis acceptance for this intent');
   }
 
   if (typeof job.progress === 'function') job.progress(100);

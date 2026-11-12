@@ -5,6 +5,7 @@
 
 const { ulid } = require('ulid');
 const { retryWithBackoff } = require('../utils/backoff');
+const { readBoundedAcknowledgement } = require('../utils/activitypub-webhook-ack');
 const { validateDeliveryPlanV1 } = require('../utils/activitypub-delivery-plan');
 const { resolvePublicSearchConsent } = require('../utils/search-consent');
 const { extractHashtagsFromText } = require('../utils/hashtags');
@@ -16,8 +17,14 @@ module.exports = {
     remoteDeliveryMode: String(process.env.SEMAPPS_ACTIVITYPUB_REMOTE_DELIVERY_MODE || 'native').trim().toLowerCase(),
     sidecarObservationWebhookUrl: process.env.SIDECAR_OBSERVATION_WEBHOOK_URL || 'http://fedify-sidecar:8080/webhook/outbox-observation',
     sidecarToken: process.env.SIDECAR_TOKEN || '',
-    observationWebhookRetries: Number(process.env.OBSERVATION_WEBHOOK_RETRIES) || 3,
-    observationWebhookTimeoutMs: Number(process.env.OBSERVATION_WEBHOOK_TIMEOUT_MS) || 5000
+    observationWebhookRetries: (() => {
+      const value = Number(process.env.OBSERVATION_WEBHOOK_RETRIES);
+      return Number.isSafeInteger(value) && value >= 1 ? Math.min(3, value) : 3;
+    })(),
+    observationWebhookTimeoutMs: (() => {
+      const value = Number(process.env.OBSERVATION_WEBHOOK_TIMEOUT_MS);
+      return Number.isSafeInteger(value) && value >= 100 ? Math.min(3000, value) : 3000;
+    })()
   },
   events: {
     'activitypub.outbox.posted': {
@@ -105,28 +112,43 @@ module.exports = {
         meta: event.meta
       };
       try {
+        // Native observation is not the authoritative remote delivery path.
+        // Never let its network/retry budget grow with arbitrary configuration
+        // or hold a Moleculer event handler indefinitely.
+        const body = JSON.stringify(payload);
+        if (Buffer.byteLength(body, 'utf8') > 1048576) {
+          throw new Error('Native observation webhook exceeds sidecar request limit');
+        }
+        const headers = {
+          'Content-Type': 'application/json',
+          'X-Event-Id': event.eventId,
+          'X-Event-Schema': event.schema
+        };
+        if (this.settings.sidecarToken) {
+          headers.Authorization = `Bearer ${this.settings.sidecarToken}`;
+        }
         await retryWithBackoff(async () => {
-          const headers = {
-            'Content-Type': 'application/json',
-            'X-Event-Id': event.eventId,
-            'X-Event-Schema': event.schema
-          };
-          if (this.settings.sidecarToken) headers.Authorization = `Bearer ${this.settings.sidecarToken}`;
           const response = await fetch(this.settings.sidecarObservationWebhookUrl, {
             method: 'POST',
-            headers,
-            body: JSON.stringify(payload),
+            headers, body,
             signal: AbortSignal.timeout(this.settings.observationWebhookTimeoutMs)
           });
-          if (!response.ok) {
+          if (response.status !== 202) {
             const error = new Error(`Sidecar observation webhook returned ${response.status}`);
             error.retryable = response.status === 429 || response.status >= 500;
             throw error;
           }
+          const ack = await readBoundedAcknowledgement(response);
+          if (ack.accepted !== true ||
+              ack.intentId !== 'apdm-observation:' + event.eventId ||
+              ack.jobCount !== 0 || ack.observationOnly !== true) {
+            throw new Error('Sidecar observation webhook did not confirm targetless durable acceptance');
+          }
         }, {
           maxRetries: Math.max(0, this.settings.observationWebhookRetries - 1),
           baseDelayMs: 250,
-          maxDelayMs: 5000,
+          maxDelayMs: 1000,
+          deadlineMs: 10000,
           retryIf: error => error.retryable !== false
         });
       } catch (error) {

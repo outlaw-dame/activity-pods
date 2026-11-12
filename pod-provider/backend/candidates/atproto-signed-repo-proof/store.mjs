@@ -3,8 +3,8 @@
  * repository transaction. Not registered in Moleculer or available to signup.
  *
  * Transaction invariant:
- * repo head + both content-addressed blocks + native-event outbox row
- * either all commit, or none commit. A durable native outbox entry stays
+ * repo head + both content-addressed blocks + native-event outbox row +
+ * the RDF projection recovery-intent row either all commit, or none commit. A durable native outbox entry stays
  * pending until a separately verified publisher/consumer exists.
  *
  * The trusted signer remains outside PostgreSQL; no keys are stored here.
@@ -105,11 +105,12 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
 
   async function bootstrap({
     accountId, did, signer, publicKeyPem,
-    rev = makeTid(), testFailAfterBlocks = false
+    rev = makeTid(), testFailAfterBlocks = false, testFailAfterOutbox = false
   }) {
     assertAccountId(accountId);
     assertManagedDid(did);
-    if (testFailAfterBlocks !== false && process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
+    if ((testFailAfterBlocks !== false || testFailAfterOutbox !== false) &&
+        process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
       fail('ATPROTO_TEST_FAILPOINT_FORBIDDEN', 'Failure injection is limited to disposable proof tests');
     }
 
@@ -151,6 +152,17 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
         await client.query(
           "INSERT INTO paper_atproto_repo_proof.native_event_outbox (did,commit_cid,rev,kind) VALUES ($1,$2,$3,'at.commit.v1')",
           [did, signed.commitCid, signed.rev]
+        );
+        if (testFailAfterOutbox) {
+          fail('ATPROTO_TEST_INJECTED_FAILURE', 'Simulated crash before RDF recovery intent persistence');
+        }
+        // This insertion is in the SAME transaction. A committed repo can
+        // never lack a durable, discoverable RDF projection recovery intent.
+        await client.query(
+          `INSERT INTO paper_atproto_repo_proof.rdf_projection_jobs
+            (account_id,did,head_cid,root_cid,rev)
+            VALUES ($1,$2,$3,$4,$5)`,
+          [accountId, did, signed.commitCid, signed.rootCid, signed.rev]
         );
       }
       await client.query('COMMIT');

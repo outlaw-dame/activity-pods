@@ -203,7 +203,7 @@ async function main() {
   }));
 }
 main().catch(error => {
-  console.error('OIDC grant Redis proof failed:', error.code || error.message);
+  console.error('OIDC grant Redis proof failed:', error.stack || error.message || String(error));
   process.exitCode = 1;
 }).finally(async () => {
   try {

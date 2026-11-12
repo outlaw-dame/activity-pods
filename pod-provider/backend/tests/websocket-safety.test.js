@@ -68,7 +68,10 @@ test('gateway reuses one ws server, disconnects idle clients, and never logs the
   expect(source).toContain('if (ws.__apodsHeartbeatAlive === false)');
   expect(source).toContain('this.server?.off(\'upgrade\', this.upgradeHandler)');
   expect(source).toContain('this.connectionIndexes.set(last, index)');
-  expect(source).toContain('if (inflightMessages >= MAX_ASYNC_MESSAGES)');
+  expect(source).toContain('inflightMessages >= MAX_ASYNC_MESSAGES');
+  expect(source).toContain('++messagesInWindow > 256');
+  expect(source).toContain('this.pendingWsUpgrades++');
+  expect(source).toContain('this.pendingWsUpgrades--');
   expect(source).not.toContain('this.connections = this.connections.filter(');
   expect(source).not.toContain('New WebSocket registered with URI');
 });

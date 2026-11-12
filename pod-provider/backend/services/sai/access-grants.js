@@ -1,3 +1,4 @@
+const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 
 module.exports = {
@@ -57,6 +58,21 @@ module.exports = {
       );
 
       return filteredContainer['ldp:contains']?.[0];
+    }
+  },
+  hooks: {
+    before: {
+      async post(ctx) {
+        await beforeSaiMutation(ctx, 'access-grants', ctx.params.resource);
+      },
+      async delete(ctx) {
+        if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') return;
+        const resource = await this.actions.get(
+          { resourceUri: ctx.params.resourceUri, webId: 'system' },
+          { parentCtx: ctx }
+        );
+        await beforeSaiMutation(ctx, 'access-grants', resource);
+      }
     }
   }
 };

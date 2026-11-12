@@ -1,77 +1,89 @@
-# ATProto managed identity and consent: PostgreSQL authority cutover
+# Managed-ATProto PostgreSQL authority: controlled cutover gates
 
-This integration introduces a **separate canonical PostgreSQL 18 control
-plane** for managed ATProto account identity and grant consent. Solid/Jena
-continues storing RDF resources for LDP/WebID interoperability, but a
-privileged generic `triplestore.update`, `insert`, direct Fuseki HTTP
-write, or migration must **never** be an authority to re-activate a
-managed repository grant.
+Status: **DRAFT, SOURCE-LOCKED, DISPOSABLE TEST MODE ONLY**.
+This milestone is stacked on PR #151. The production source fuse
+`NATIVE_PROTECTED_STORAGE_RELEASED=false` is unchanged.
 
-## Runtime separation
+## Security boundary
 
-The migration is `pod-provider/backend/sql/paper-atproto-canonical-authority-v1.sql`.
-It creates:
-- `paper_atproto_authority.identities` (one verified managed WebID→DID
-  mapping plus revision and source-proof hash);
-- `paper_atproto_authority.consents` (one exact owner/app/grant binding,
-  monotonic revision and active/blocked state);
-- `block_consent(owner,app,grant,expected_revision)`, a single
-  transactional active→blocked CAS, owned by the migration administrator,
-  with a restricted search path and no broad table UPDATE rights.
+The canonical identities and app consents live in
+`paper_atproto_authority.identities` and `paper_atproto_authority.consents`.
+They are separate from mutable Jena/Solid RDF resources. The general
+SemApps/Fuseki/SPARQL credentials have **no database role membership**,
+table DML, or `block_consent` EXECUTE rights. A privileged Fuseki
+`INSERT DATA` of a forged active consent is therefore incapable of
+reactivating a revoked PostgreSQL consent.
 
-Only the admin migration role may mutate table definitions. The named
-NOLOGIN runtime roles split SELECT, revocation EXECUTE, and one-time
-verified import; actual LOGIN credentials must be provisioned separately
-with network isolation and distinct secrets. The ordinary Fuseki/SPARQL
-writer gets **no** role membership, schema USAGE or function EXECUTE.
-The only indexed consent lookup uses its existing (owner_webid,app_uri)
-primary key; no redundant secondary index or account scan is introduced.
+A migration admin owns the PostgreSQL schema. Separate logins should be
+granted only the NOLOGIN reader, revoker, or initial importer roles.
+The runtime's revoker credential has SELECT and narrowly scoped EXECUTE;
+it cannot directly INSERT, UPDATE, DELETE, TRUNCATE or ALTER canonical
+tables, create schema objects, or become a migration administrator.
+An explicit startup introspection query tests actual PostgreSQL privileges,
+not claims about a connection string's username.
 
-The existing native SAI before-hook switches to `getIdentity/getConsent`
-in the PG-specific mode and commits a PG revocation before completing
-an owner's permission removal. It does not fall back to RDF if the PG
-connection fails, and it verifies the blocked state afterward. Existing
-WebACL, native SAI container membership, and authenticated-owner checks
-still run. The ordinary non-PG test path remains unchanged.
+The only runtime revocation function performs a single conditional,
+monotonic `active -> blocked` transaction against the exact owner,
+app, grant and version. The owner authentication is performed earlier
+in the protected SAI action. If either permission check or PostgreSQL
+fails, the SAI mutation does not continue. No generic SPARQL fallback.
 
-The provider pool is lazy, at most two connections per SAI provider
-process, and is never allocated per Pod. Network/service errors deny the
-protected change rather than re-enabling a stale grant. The new source
-flag `APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED` cannot be enabled
-without the existing native SAI fence. The source-controlled production
-release fuse remains closed; only explicit disposable test fixtures can
-instantiate this authority while the migration is under review.
+Signed repository projection ticket issuance now requires a real-time,
+separate canonical PostgreSQL check of active identity+consent, matching
+owner/DID/app/grant/revision, in addition to its existing verified signing
+head and recovery lease. An RDF grant alone cannot mint a ticket.
 
-## Import and release prerequisites
+## Account import and release procedure
 
-Importers must select each existing managed account by exact owner WebID
-and verify the live Solid-OIDC owner, signed ATProto DID/PLC binding,
-current SAI grant, client app, provider-held keys, and signed repository
-head. They may INSERT only a verified initial snapshot, never overwrite
-an existing canonical row. Store only fixed-length evidence hashes and
-the required authority tuple; do not copy access tokens, OAuth codes or
-private keys into PostgreSQL. An account missing verified PG authority
-must fail managed-repository readiness, not fall back to RDF.
+The SQL includes an import-only role but **does not turn on automatic account
+migration**. Before any active PostgreSQL row may be imported:
 
-**Remaining implementation gate:** The native provider uses PG for the
-SAI revocation hook in its explicitly enabled mode. Production bootstraps
-of existing identity bindings and a release-approved reauthorization
-ceremony are not implemented here; the repository ticket/readiness paths
-must use the PG reader, with a projection-consistency check against RDF,
-before this can be activated. A process-local SAI parent proof also needs
-a distributed, authenticated parent-action capability across Moleculer
-nodes. Complete these and real sign-in/grant/uninstall/revoke flows
-before changing either release fuse.
+1. Freeze managed-ATProto repo grant issuance, SAI app changes, and native
+   repository writes for the exact account while reconciling authority;
+   ordinary Solid actions should continue independently where possible.
+2. Require trusted server-verified account WebID, managed DID/PLC signature,
+   current Solid-OIDC/DPoP owner approval, matching live AccessGrant and
+   DataGrant, expected application, and a concrete consent revision.
+   A general privileged Jena read is not proof of owner approval.
+3. Import one bounded account (and its explicitly verified apps) via the
+   dedicated importer login, using INSERT-only operations. Verify the
+   imported record's proof fingerprint and revision. Neither blind
+   `ON CONFLICT DO UPDATE` nor a full-instance scan is permitted.
+4. Confirm distinct database credentials on **every** node and prove the
+   generic Fuseki identity cannot read, update or execute revocation.
+   Record an auditable but secret-free migration manifest. Compare the
+   PG canonical state with the RDF projection and reject disagreement.
+5. Recheck PG canonical permission at both ticket issuance and the actual
+   fenced write boundary; test revocation races and stale tickets across
+   multiple processes. A successful ticket issuance is not durable user
+   permission if it becomes stale before the writer uses it.
+6. Perform real enforced Solid-OIDC/SAI consent, uninstall/revoke/delete,
+   redelegation and multi-node restart tests. Measure response time,
+   provider PG pool saturation, request memory/RSS, tenant isolation,
+   offline recovery and backup/PITR with rollback.
+7. Explicitly review and change the source-controlled release fuse only
+   after all gates pass. Never use disposable PostgreSQL DSNs or the
+   administrative migration credentials outside that test environment.
 
-## Disposable negative acceptance
+**Rollback:** If the cutover fails, stop native repository writes and
+permission issuance (fail closed). Do not restore mutable Jena RDF as
+permission authority. Recover the PostgreSQL authority from an audited
+backup/PITR snapshot, reconcile signed repository heads, and reverify
+owner-grant state before resuming. An already blocked consent stays
+blocked; do not resurrect it from an old snapshot without fresh user
+approval. Independent activity publication should remain unaffected.
 
-The PG18 proof tests separate ordinary, importer and revoker connections,
-rejects ordinary/underprivileged DML, proves one winner in concurrent
-revocations and rejects stale grants. In a real PG18 + Jena TDB2 proof,
-a privileged Fuseki writer deliberately forges an active RDF consent
-triple after PG revocation; PG remains blocked. That proves the storage
-boundary, not yet full production permission enforcement.
+## Completed disposable evidence
 
-The source of truth and its least-privilege credentials must remain
-outside the generic Fuseki and Pod-resource mutation processes in a
-production multi-service deployment.
+Real PostgreSQL 18 proof tests exercise separate general, reader and
+revoker logins, wrong-role denial, one-way grant revocation, two
+concurrent revokers, and a privileged Jena/TDB2 write that successfully
+creates a forged RDF claim but cannot change canonical PostgreSQL
+consent. Native SAI mock tests confirm that a PostgreSQL outage denies
+revocation rather than falling back to SPARQL. Backend tests check
+pool single-flight initialization and shutdown behavior.
+
+This is not yet the production migration or the fully protected live
+writer. No production database, security flags or runtime secrets are
+modified by this PR. See `docs/atproto-native-authorization-integration.md`
+for the earlier security and capacity gates.

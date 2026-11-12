@@ -271,3 +271,36 @@ test('cross-Pod and incorrectly scoped SAI resource URIs cannot revoke a grant',
   );
   assert.equal(calls.some(x => x.name === 'triplestore.update'), false);
 });
+
+
+test('approved app changes are recognized without restarting or retaining old grants', async () => {
+  env(true);
+  const original = setup();
+  assert.equal((await native.beforeSaiMutation(
+    original.ctx, 'data-grants', resource, 'post'
+  )).blocked, true);
+
+  env(true, origin + '/clients/other');
+  const later = setup();
+  assert.equal((await native.beforeSaiMutation(
+    later.ctx, 'data-grants', resource, 'post'
+  )).checked, false);
+  assert.equal(later.calls.length, 0);
+});
+
+test('duplicate, unbounded and noncanonical app allowlists fail before any broker call', async () => {
+  for (const invalid of [
+    app + ',' + app,
+    app + '#fragment',
+    app + '?debug=true',
+    'x'.repeat(8200)
+  ]) {
+    env(true, invalid);
+    const { ctx, calls } = setup();
+    await assert.rejects(
+      native.beforeSaiMutation(ctx, 'access-grants', resource, 'post'),
+      e => e.type === 'ATPROTO_SAI_FENCE_CONFIG_INVALID'
+    );
+    assert.equal(calls.length, 0);
+  }
+});

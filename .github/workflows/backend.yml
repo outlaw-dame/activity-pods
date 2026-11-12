@@ -119,12 +119,19 @@ jobs:
           set -euo pipefail
           NODE_ENV=test node --expose-gc scripts/bench-atproto-security-gates.js | tee security-gates-microbench.json
 
+      - name: Calculate million-account volume and replay-memory scenarios
+        run: |
+          set -euo pipefail
+          node scripts/report-atproto-security-capacity.js | tee atproto-security-capacity-model.json
+
       - name: Upload bounded memory and latency evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: atproto-security-gate-microbench
-          path: pod-provider/backend/security-gates-microbench.json
+          path: |
+            pod-provider/backend/security-gates-microbench.json
+            pod-provider/backend/atproto-security-capacity-model.json
           if-no-files-found: ignore
           retention-days: 7
 

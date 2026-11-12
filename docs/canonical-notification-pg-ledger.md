@@ -63,3 +63,7 @@ capacity guarantees.
 The canonical ATProto consent/identitybinding PostgreSQL cutover is a
 **different** security boundary. This ledger does not make arbitrary
 privileged Fuseki/SPARQL writes safe for repository authorization.
+
+### Worker-crash retry budget
+
+An expired claimed lease now counts as a failed delivery attempt, even when the worker dies before it can call the explicit failure path. The database advances its count under a row lock in the same `SKIP LOCKED` statement that reclaims work. After eight failed lease windows, the record moves to durable quarantine with reason `LEASE_TIMEOUT_EXHAUSTED`. A worker cannot loop indefinitely on the same poisoned notification merely by crashing. The healthy path retains one indexed claim query and at most eight records per worker poll.

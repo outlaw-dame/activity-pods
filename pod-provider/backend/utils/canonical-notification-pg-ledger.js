@@ -142,18 +142,36 @@ function createCanonicalNotificationLedger({ pool } = {}) {
     async claim({ limit = 8, workerToken = crypto.randomUUID() } = {}) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) throw invalid('PG_NOTIFY_BATCH_INVALID');
       claimToken(workerToken);
+      // Crash-only retries must also consume a bounded attempt. A process
+      // killed after claiming work otherwise creates unlimited reclaims.
+      // One SQL statement atomically leases valid rows and durably parks
+      // exhausted expired leases without a network call or JS retry loop.
       const results = await pool.query(
-        'WITH due AS (SELECT intent_key,recipient_key FROM '+SCHEMA+'.deliveries ' +
-        "WHERE (state='pending' AND next_attempt_at <= clock_timestamp()) OR " +
+        'WITH due AS (SELECT intent_key,recipient_key,state AS prior_state,attempts AS prior_attempts ' +
+        'FROM '+SCHEMA+'.deliveries ' +
+        "WHERE (state='pending' AND attempts < $5 AND next_attempt_at <= clock_timestamp()) OR " +
         "(state='leased' AND lease_until <= clock_timestamp()) " +
         'ORDER BY next_attempt_at,created_at,intent_key,recipient_key ' +
-        'FOR UPDATE SKIP LOCKED LIMIT $1) ' +
-        'UPDATE '+SCHEMA+'.deliveries d ' +
-        "SET state='leased',lease_token=$2::uuid,lease_until=clock_timestamp()+make_interval(secs=>$3) " +
+        'FOR UPDATE SKIP LOCKED LIMIT $1), ' +
+        'updated AS (UPDATE '+SCHEMA+'.deliveries d SET ' +
+        "state=CASE WHEN due.prior_state='leased' AND due.prior_attempts >= $4 " +
+        "THEN 'dead' ELSE 'leased' END, " +
+        "attempts=CASE WHEN due.prior_state='leased' THEN LEAST(due.prior_attempts+1,$5) " +
+        'ELSE due.prior_attempts END, ' +
+        "lease_token=CASE WHEN due.prior_state='leased' AND due.prior_attempts >= $4 " +
+        'THEN NULL ELSE $2::uuid END, ' +
+        "lease_until=CASE WHEN due.prior_state='leased' AND due.prior_attempts >= $4 " +
+        'THEN NULL ELSE clock_timestamp()+make_interval(secs=>$3) END ' +
         'FROM due WHERE d.intent_key=due.intent_key AND d.recipient_key=due.recipient_key ' +
-        'RETURNING encode(d.intent_key,\'hex\') AS intent_key, ' +
-        'encode(d.recipient_key,\'hex\') AS recipient_key, d.recipient_webid, d.activity_json, d.attempts',
-        [limit,workerToken,LEASE_SECONDS]
+        'RETURNING d.intent_key,d.recipient_key,d.recipient_webid,d.activity_json,d.attempts,d.state), ' +
+        'parked AS (INSERT INTO '+SCHEMA+'.quarantine ' +
+        '(intent_key,recipient_key,reason_code,attempts) ' +
+        "SELECT intent_key,recipient_key,'LEASE_TIMEOUT_EXHAUSTED',attempts " +
+        "FROM updated WHERE state='dead' ON CONFLICT DO NOTHING RETURNING 1) " +
+        "SELECT encode(intent_key,'hex') AS intent_key, " +
+        "encode(recipient_key,'hex') AS recipient_key, recipient_webid,activity_json,attempts " +
+        "FROM updated WHERE state='leased'",
+        [limit,workerToken,LEASE_SECONDS,MAX_ATTEMPTS-1,MAX_ATTEMPTS]
       );
       return results.rows.map(r => Object.freeze({ ...r, workerToken }));
     },
@@ -180,8 +198,12 @@ function createCanonicalNotificationLedger({ pool } = {}) {
           [key(intentKey),key(recipientKey),workerToken]
         );
         if (row.rowCount !== 1) throw invalid('PG_NOTIFY_STALE_LEASE');
-        const count = Number(row.rows[0].attempts)+1;
-        if (!Number.isSafeInteger(count) || count > MAX_ATTEMPTS) throw invalid('PG_NOTIFY_ATTEMPTS_INVALID');
+        const previous = Number(row.rows[0].attempts);
+        if (!Number.isSafeInteger(previous) || previous < 0 || previous > MAX_ATTEMPTS) {
+          throw invalid('PG_NOTIFY_ATTEMPTS_INVALID');
+        }
+        // A lease expiry has already counted as a failed attempt in claim().
+        const count = Math.min(MAX_ATTEMPTS, previous + 1);
         const dead = count >= MAX_ATTEMPTS;
         // Full jitter, capped at one minute. No retry sleeps inside this
         // transaction; the next worker claim checks a indexed due timestamp.

@@ -1,7 +1,7 @@
 'use strict';
 
-// Real Redis acceptance proof. Restrict destructive database operations to
-// the disposable container's dedicated DB 15; never run against production.
+// Real Redis acceptance proof. Use a unique, bounded test namespace in DB 15.
+// Never flush an entire database or remove another test's or app's keys.
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const Redis = require('ioredis');
@@ -22,12 +22,35 @@ if (!['redis', 'localhost', '127.0.0.1'].includes(url.hostname)) {
   throw Error('Refusing to connect OIDC proof to an unknown Redis host');
 }
 url.pathname = '/15';
-const redis = new Redis(url.toString(), {
-  keyPrefix: 'atproto-oidc-test:',
+const testKeyPrefix = 'atproto-oidc-test:' + crypto.randomUUID() + ':';
+const redisOptions = {
   enableOfflineQueue: false,
   connectTimeout: 3000,
   maxRetriesPerRequest: 1
+};
+const redis = new Redis(url.toString(), {
+  ...redisOptions, keyPrefix: testKeyPrefix
 });
+// SCAN and UNLINK operate on real Redis keys, not ioredis-prefixed keys.
+// Restrict cleanup to the random namespace created for this one test.
+const cleanupRedis = new Redis(url.toString(), redisOptions);
+async function cleanupOwnKeys() {
+  for (let pass = 0; pass < 2; pass++) {
+    let cursor = '0';
+    let inspectedPages = 0;
+    do {
+      if (++inspectedPages > 64) throw Error('Disposable Redis cleanup page limit exceeded');
+      const [next, keys] = await cleanupRedis.scan(
+        cursor, 'MATCH', testKeyPrefix + '*', 'COUNT', 256
+      );
+      cursor = next;
+      if (keys.length) {
+        if (keys.length > 512) throw Error('Disposable Redis cleanup batch too large');
+        await cleanupRedis.unlink(...keys);
+      }
+    } while (cursor !== '0');
+  }
+}
 async function main() {
   if (redis.status !== 'ready') {
     await Promise.race([
@@ -40,8 +63,7 @@ async function main() {
       ))
     ]);
   }
-  await redis.ping();
-  await redis.flushdb();
+  await Promise.all([redis.ping(), cleanupRedis.ping()]);
   const adapter = new RedisAdapter('AccessToken', redis);
   const grantId = 'grant-' + crypto.randomUUID();
   const basePayload = { grantId, accountId: 'test-user', clientId: 'test-client' };
@@ -93,7 +115,11 @@ async function main() {
       path.join(__dirname, 'proof-oidc-grant-worker.js'),
       sharedGrant, String(i), '150'
     ], {
-      env: { ...process.env, ATPROTO_OIDC_REDIS_WORKER: 'confirmed' },
+      env: {
+        ...process.env,
+        ATPROTO_OIDC_REDIS_WORKER: 'confirmed',
+        ATPROTO_OIDC_TEST_KEY_PREFIX: testKeyPrefix
+      },
       timeout: 12000, maxBuffer: 32 * 1024
     });
     return JSON.parse(stdout.trim());
@@ -165,12 +191,17 @@ async function main() {
     heapUsedBytes: process.memoryUsage().heapUsed
   }));
 }
-main().then(async () => {
-  await redis.flushdb();
-  redis.disconnect();
-}).catch(async error => {
-  try { await redis.flushdb(); } catch { /* test Redis unavailable */ }
-  redis.disconnect();
+main().catch(error => {
   console.error('OIDC grant Redis proof failed:', error.code || error.message);
   process.exitCode = 1;
+}).finally(async () => {
+  try {
+    await cleanupOwnKeys();
+  } catch (error) {
+    console.error('Disposable Redis cleanup failed:', error.code || error.message);
+    process.exitCode = 1;
+  } finally {
+    redis.disconnect();
+    cleanupRedis.disconnect();
+  }
 });

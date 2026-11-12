@@ -1,37 +1,65 @@
 'use strict';
 
-// The SAI owner action may invoke several nested Moleculer services.
-// Individual LDP calls can use the provider's system WebID to write a
-// resource, but that is not proof that the user approved the change.
-//
-// Keep the authorization on the already-authenticated parent action
-// context, never in propagated ctx.meta or a caller-supplied parameter.
-const ownerActions = new WeakMap();
-const MAX_PARENT_DEPTH = 40;
+const crypto = require('node:crypto');
+
+// Moleculer propagates ctx.requestID and a *copy* of ctx.meta to child
+// actions. It does not retain a parentCtx reference on the child Context.
+// An unpredictable nonce checked against a provider-local authorization
+// record is therefore required; metadata by itself is not authority.
+const PROOF_KEY = 'apodsNativeSaiOwnerProof';
+const MAX_IN_FLIGHT = 4096;
+const MAX_LIFETIME_NS = 120_000_000_000n;
+const proofs = new Map();
 
 function authorizeOwnerSaiAction(ctx, { owner, app }) {
-  if (typeof owner !== 'string' || typeof app !== 'string' ||
+  if (!ctx || typeof ctx.requestID !== 'string' ||
+      !ctx.requestID || ctx.requestID.length > 256 ||
+      typeof owner !== 'string' || typeof app !== 'string' ||
       !owner.startsWith('https://') || !app.startsWith('https://') ||
-      !ctx || ctx.meta?.webId !== owner || ctx.meta?.impersonatedUser) {
-    const err = new Error('Only the authenticated Pod owner may authorize this SAI change');
-    err.code = 'ATPROTO_SAI_OWNER_CONTEXT_INVALID';
-    throw err;
+      !ctx.meta || ctx.meta.webId !== owner || ctx.meta.impersonatedUser ||
+      Object.prototype.hasOwnProperty.call(ctx.meta, PROOF_KEY)) {
+    const error = new Error('Only the authenticated Pod owner may authorize this SAI change');
+    error.code = 'ATPROTO_SAI_OWNER_CONTEXT_INVALID';
+    throw error;
   }
-  if (ownerActions.has(ctx)) {
-    throw Error('The SAI owner action is already in progress');
+  if (proofs.size >= MAX_IN_FLIGHT) {
+    // A hung provider request cannot grow the map indefinitely. Only
+    // when saturated, discard expired entries before refusing new work.
+    const now = process.hrtime.bigint();
+    for (const [key, entry] of proofs) {
+      if (now >= entry.until) proofs.delete(key);
+    }
+    if (proofs.size >= MAX_IN_FLIGHT) {
+      const error = new Error('Too many in-flight SAI authorizations');
+      error.code = 'ATPROTO_SAI_OWNER_CONTEXT_BUSY';
+      throw error;
+    }
   }
-  ownerActions.set(ctx, { owner, app });
-  return () => ownerActions.delete(ctx);
+
+  const nonce = crypto.randomBytes(32).toString('base64url');
+  const entry = {
+    owner, app, requestID: ctx.requestID,
+    until: process.hrtime.bigint() + MAX_LIFETIME_NS
+  };
+  proofs.set(nonce, entry);
+  ctx.meta[PROOF_KEY] = nonce;
+  return () => {
+    proofs.delete(nonce);
+    if (ctx.meta[PROOF_KEY] === nonce) delete ctx.meta[PROOF_KEY];
+  };
 }
 
 function hasAuthorizedOwnerParent(ctx, { owner, app }) {
-  let current = ctx;
-  for (let depth = 0; current && depth < MAX_PARENT_DEPTH; depth++) {
-    const scope = ownerActions.get(current);
-    if (scope) return scope.owner === owner && scope.app === app;
-    current = current.parentCtx;
+  const nonce = ctx?.meta?.[PROOF_KEY];
+  if (typeof nonce !== 'string' || nonce.length !== 43) return false;
+  const entry = proofs.get(nonce);
+  if (!entry) return false;
+  if (process.hrtime.bigint() >= entry.until) {
+    proofs.delete(nonce);
+    return false;
   }
-  return false;
+  return entry.owner === owner && entry.app === app &&
+    entry.requestID === ctx.requestID;
 }
 
 module.exports = { authorizeOwnerSaiAction, hasAuthorizedOwnerParent };

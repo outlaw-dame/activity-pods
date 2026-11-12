@@ -46,6 +46,13 @@ module.exports = {
       this.settings.frontendUrl,
       process.env.APODS_WS_ALLOWED_ORIGINS
     );
+    // A route/authentication middleware may stall before the actual 101 upgrade.
+    // Reserve at the HTTP upgrade boundary, not after middleware completes.
+    this.wsUpgradeTimeoutMs = this.settings.wsUpgradeTimeoutMs ?? 10000;
+    if (!Number.isSafeInteger(this.wsUpgradeTimeoutMs) ||
+        this.wsUpgradeTimeoutMs < 100 || this.wsUpgradeTimeoutMs > 10000) {
+      throw new Error('WebSocket upgrade deadline must be between 100 and 10000 ms');
+    }
     this.wss = new WebSocketServer({
       noServer: true,
       maxPayload: MAX_INBOUND_BYTES,
@@ -153,15 +160,7 @@ module.exports = {
         next();
         return;
       }
-      if (!canAcceptConnection(this.connections.length, this.pendingWsUpgrades)) {
-        response.statusCode = 503;
-        response.statusMessage = 'WebSocket capacity reached';
-        next();
-        return;
-      }
-      // Count handshakes as well as accepted clients: concurrent upgrades
-      // cannot slip past the per-node cap before registration completes.
-      this.pendingWsUpgrades++;
+      // The pending slot was reserved before route middleware started.
       let webSocket;
       try {
         webSocket = await request.webSocketRequestHandler();
@@ -170,8 +169,6 @@ module.exports = {
         response.statusMessage = 'WebSocket handshake failed';
         next();
         return;
-      } finally {
-        this.pendingWsUpgrades--;
       }
       webSocket.__apodsHeartbeatAlive = true;
       webSocket.on('pong', () => { webSocket.__apodsHeartbeatAlive = true; });
@@ -238,8 +235,16 @@ module.exports = {
       };
       webSocket.addEventListener('close', e => safeHandler('onClose', e, connection));
       let inflightMessages = 0;
+      let messageWindowStart = Date.now();
+      let messagesInWindow = 0;
       webSocket.addEventListener('message', e => {
-        if (inflightMessages >= MAX_ASYNC_MESSAGES) {
+        const now = Date.now();
+        if (now - messageWindowStart >= 10000) {
+          messageWindowStart = now;
+          messagesInWindow = 0;
+        }
+        // Cap CPU/handler dispatch even when each message completes synchronously.
+        if (++messagesInWindow > 256 || inflightMessages >= MAX_ASYNC_MESSAGES) {
           webSocket.terminate();
           return;
         }
@@ -295,49 +300,93 @@ module.exports = {
      * @returns  {object} `this.httpHandler(request, response)`
      */
     upgradeHandler(request, socket, head) {
-      // Browser WebSockets send Origin even when they cannot send custom
-      // Authorization headers. Block cross-site cookie-backed upgrades
-      // before invoking the route middleware or allocating a WebSocket.
-      if (!(isAllowedOrigin(request.headers.origin, this.wsAllowedOrigins) ||
-            isAllowedCapabilityOrigin(request.headers.origin, request.url)) ||
+      // Authentication and route middleware run AFTER this function. Counting
+      // slots only inside handleWsRequest leaves stalled routes unbounded.
+      const originAllowed =
+        isAllowedOrigin(request.headers.origin, this.wsAllowedOrigins) ||
+        isAllowedCapabilityOrigin(request.headers.origin, request.url);
+      if (!originAllowed || !Buffer.isBuffer(head) ||
           head.length > MAX_INBOUND_BYTES ||
+          !this.wss ||
           !canAcceptConnection(this.connections.length, this.pendingWsUpgrades)) {
         if (!socket.destroyed) {
           socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
         }
         return;
       }
+      this.pendingWsUpgrades++;
+      let pending = true;
+      let upgradeStarted = false;
+      let upgradeTimeout;
+      const releasePending = () => {
+        if (!pending) return;
+        pending = false;
+        this.pendingWsUpgrades--;
+        clearTimeout(upgradeTimeout);
+        socket.off('close', releasePending);
+      };
+      upgradeTimeout = setTimeout(() => {
+        // A hung middleware, client or WebSocket handshake is not allowed to
+        // reserve capacity indefinitely. Closing the socket releases it.
+        releasePending();
+        socket.destroy();
+      }, this.wsUpgradeTimeoutMs);
+      upgradeTimeout.unref?.();
+      socket.once('close', releasePending);
       socket.setNoDelay?.(true);
       const response = new http.ServerResponse(request);
       response.assignSocket(socket);
-
-      // Avoid hanging onto upgradeHead as this will keep the entire
-      // slab buffer used by node alive.
       const copyOfHead = Buffer.alloc(head.length);
       head.copy(copyOfHead);
-
       response.on('finish', () => {
-        if (response.socket !== null) {
-          response.socket.destroy();
-        }
+        if (response.socket !== null) response.socket.destroy();
       });
 
-      // Add a handler that indicates a web socket request.
-      // Calling the handler will perform the ws upgrade handshake and return the webSocket.
       request.webSocketRequestHandler = () =>
         new Promise((resolve, reject) => {
+          if (upgradeStarted || !pending || socket.destroyed || !this.wss) {
+            reject(new Error('WebSocket upgrade unavailable'));
+            return;
+          }
+          upgradeStarted = true;
+          const failed = () => reject(new Error('WebSocket socket closed before handshake'));
+          socket.once('close', failed);
           try {
-            if (!this.wss) throw new Error('WebSocket server unavailable');
-            this.wss.handleUpgrade(request, request.socket, copyOfHead, ws => {
-              this.wss?.emit('connection', ws, request);
+            const wsServer = this.wss;
+            wsServer.handleUpgrade(request, request.socket, copyOfHead, ws => {
+              socket.off('close', failed);
+              releasePending();
+              // A shutdown during handshake must not resurrect a connection.
+              if (this.wss !== wsServer) {
+                ws.terminate();
+                reject(new Error('WebSocket server stopped'));
+                return;
+              }
+              wsServer.emit('connection', ws, request);
               resolve(ws);
             });
-          } catch (error) {
-            reject(error);
+          } catch {
+            socket.off('close', failed);
+            releasePending();
+            socket.destroy();
+            reject(new Error('WebSocket handshake rejected'));
           }
         });
 
-      return this.httpHandler(request, response);
+      try {
+        const result = this.httpHandler(request, response);
+        // Sync and asynchronous routing failures must release the reservation.
+        if (result && typeof result.catch === 'function') {
+          result.catch(() => {
+            releasePending();
+            socket.destroy();
+          });
+        }
+        return result;
+      } catch {
+        releasePending();
+        socket.destroy();
+      }
     },
 
     /**

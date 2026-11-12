@@ -37,14 +37,30 @@ function claim(resource, property) {
   return scalar(resource[present[0]]);
 }
 
+// The approved-app configuration is small and rarely changes. Avoid parsing
+// it and allocating a new Set for every SAI grant action. Hold only the most
+// recent value so configuration reloads cannot accumulate cache entries.
+let cachedApprovedApps = null;
 function approvedApps() {
   const raw = process.env.APODS_ATPROTO_SAI_FENCED_APPS || '';
+  if (cachedApprovedApps?.raw === raw) return cachedApprovedApps.apps;
+  if (raw.length > 8192) deny('ATPROTO_SAI_FENCE_CONFIG_INVALID');
   const apps = raw.split(',').map(app => app.trim()).filter(Boolean);
   if (!apps.length || apps.length > 32 || new Set(apps).size !== apps.length) {
     deny('ATPROTO_SAI_FENCE_CONFIG_INVALID');
   }
-  for (const app of apps) safeIri(app, { httpsOnly: true });
-  return new Set(apps);
+  for (const app of apps) {
+    try {
+      safeIri(app, { httpsOnly: true });
+      const uri = new URL(app);
+      if (uri.search || uri.hash || uri.href !== app) throw Error('Invalid app');
+    } catch {
+      deny('ATPROTO_SAI_FENCE_CONFIG_INVALID');
+    }
+  }
+  const verified = new Set(apps);
+  cachedApprovedApps = { raw, apps: verified };
+  return verified;
 }
 
 function bindingIdentity(kind, resource) {

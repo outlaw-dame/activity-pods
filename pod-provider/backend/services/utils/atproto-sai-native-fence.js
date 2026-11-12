@@ -2,6 +2,7 @@
 
 const { MoleculerError } = require('moleculer').Errors;
 const { hasAuthorizedOwnerParent } = require('./atproto-sai-owner-context');
+const { getProviderAtprotoPgAuthority } = require('../../utils/atproto-canonical-pg-authority');
 const {
   buildCanonicalPodAccountLookup, parseCanonicalPodAccount
 } = require('../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs');
@@ -118,6 +119,10 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   if (process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') {
     return { checked: false };
   }
+  const pgAuthorityEnabled =
+    process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED === 'true';
+  // Only approved applications use this narrow canonical PG path.
+  // Unrelated Solid grants do not incur database calls.
   // No broad Solid or provider-wide feature flag is needed for unrelated
   // SAI grants. Parse the small approved-app set before any broker calls.
   const apps = approvedApps();
@@ -211,17 +216,33 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
       dataset, webId: 'system',
       query: readConsentQuery({ subjectUri })
     });
-    const rows = await getRows();
-    // No consent epoch exists yet for the new app/Pod. The eventual native
-    // bootstrap must separately verify installed SAI permission.
-    if (Array.isArray(rows) && rows.length === 0) return { checked: true, present: false };
-    if (!Array.isArray(rows) || rows.length !== 1) {
-      deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
+    let pgAuthority = null;
+    let state;
+    if (pgAuthorityEnabled) {
+      // Once the canonical PG mode is on, mutable RDF is *never* the
+      // authorization truth. A privileged SPARQL update can alter the
+      // projection but cannot forge an active PG consent.
+      pgAuthority = await getProviderAtprotoPgAuthority();
+      const identity = await pgAuthority.getIdentity({ owner });
+      if (!identity || identity.state !== 'active') {
+        deny('ATPROTO_SAI_PG_IDENTITY_MISSING');
+      }
+      state = await pgAuthority.getConsent({ owner, app });
+      if (!state) return { checked: true, present: false };
+    } else {
+      const rows = await getRows();
+      // No consent epoch exists yet for a new app in the legacy disposable
+      // Jena test. It must not be treated as permission for a signed repo.
+      if (Array.isArray(rows) && rows.length === 0) return { checked: true, present: false };
+      if (!Array.isArray(rows) || rows.length !== 1) {
+        deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
+      }
+      const grantUri = scalar(rows[0]?.grant);
+      if (!grantUri) deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
+      safeIri(grantUri, { httpsOnly: true });
+      state = parseConsentRows(rows, { grantUri });
     }
-    const grantUri = scalar(rows[0]?.grant);
-    if (!grantUri) deny('ATPROTO_SAI_FENCE_AMBIGUOUS');
-    safeIri(grantUri, { httpsOnly: true });
-    const state = parseConsentRows(rows, { grantUri });
+    const grantUri = state.grantUri;
     if (state.status === 'blocked') return { checked: true, blocked: true };
 
     // Only the approved application's existing access grant is a valid
@@ -241,17 +262,27 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     if (BigInt(state.revision) === 9223372036854775807n) {
       deny('ATPROTO_SAI_FENCE_EPOCH_EXHAUSTED');
     }
-    await call('triplestore.update', {
-      dataset, webId: 'system',
-      query: beginRevocationQuery({
-        subjectUri, grantUri, revision: state.revision
-      })
-    });
-    // SPARQL update HTTP success does not mean its WHERE clause matched.
-    // A concurrent delete can race this hook; both paths must see blocked
-    // consent before any native mutation is allowed to continue.
-    const readback = parseConsentRows(await getRows(), { grantUri });
-    if (readback.status !== 'blocked' ||
+    let readback;
+    if (pgAuthorityEnabled) {
+      // One indexed transactional CAS in independently privileged storage.
+      // There is no fallback to triplestore.update when PG is unavailable.
+      // The runtime release fuse remains closed pending production proofs.
+      await pgAuthority.revoke({
+        owner, app, grantUri, expectedRevision: state.revision
+      });
+      readback = await pgAuthority.getConsent({owner, app});
+    } else {
+      await call('triplestore.update', {
+        dataset, webId: 'system',
+        query: beginRevocationQuery({
+          subjectUri, grantUri, revision: state.revision
+        })
+      });
+      // A successful HTTP SPARQL update need not have matched its WHERE.
+      readback = parseConsentRows(await getRows(), { grantUri });
+    }
+    if (!readback || (readback.state || readback.status) !== 'blocked' ||
+        readback.grantUri !== grantUri ||
         BigInt(readback.revision) <= BigInt(state.revision)) {
       deny('ATPROTO_SAI_FENCE_NOT_DURABLE');
     }

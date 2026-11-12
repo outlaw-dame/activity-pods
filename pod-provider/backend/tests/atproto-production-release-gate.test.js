@@ -39,3 +39,23 @@ test('generic triplestore checks the release boundary before initialization', ()
   const launcher = fs.readFileSync(path.join(__dirname, '../scripts/run-moleculer-fabric.js'), 'utf8');
   expect(launcher).toContain('assertNativeProtectedStorageReleased();');
 });
+
+test('new canonical PostgreSQL authority cannot bypass the release fuse or native owner gate', () => {
+  const { assertNativeProtectedStorageReleased } =
+    require('../services/utils/atproto-production-release-gate');
+  expect(() => assertNativeProtectedStorageReleased({
+    NODE_ENV:'production',
+    APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED:'true',
+    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'true'
+  })).toThrow(/not released/);
+  expect(() => assertNativeProtectedStorageReleased({
+    NODE_ENV:'test',APODS_ATPROTO_TEST_STORAGE_DISPOSABLE:'confirmed',
+    APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED:'true',
+    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'false'
+  })).toThrow(/requires the native SAI owner fence/);
+  expect(() => assertNativeProtectedStorageReleased({
+    NODE_ENV:'test',APODS_ATPROTO_TEST_STORAGE_DISPOSABLE:'confirmed',
+    APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED:'true',
+    APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED:'true'
+  })).not.toThrow();
+});

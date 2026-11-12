@@ -140,6 +140,38 @@ async function prove() {
       assert.equal(remain.rows[0].state,'dead');
     });
 
+
+    await one('repeated worker crashes are eventually quarantined without endless lease replay',async()=>{
+      const req=makeRequest(11,1);
+      await ledger.enqueue(req);
+      const target=crypto.createHash('sha256').update(req.intentId).digest('hex');
+      let work=(await ledger.claim({limit:16,workerToken:crypto.randomUUID()}))
+        .find(j=>j.intent_key===target);
+      assert(work,'Must claim the test notification once');
+      for(let crashes=1;crashes<=8;crashes++){
+        await pool.query(
+          'UPDATE '+schema+".deliveries SET lease_until=clock_timestamp()-interval '1 second' "+
+          'WHERE intent_key=$1',[Buffer.from(target,'hex')]);
+        const next=await ledger.claim({limit:16,workerToken:crypto.randomUUID()});
+        work=next.find(j=>j.intent_key===target);
+        if(crashes<8){
+          assert(work,'Expired lease must be recoverable within retry budget');
+          assert.equal(Number(work.attempts),crashes);
+        }else assert.equal(work,undefined,'Eighth lease timeout must be quarantined');
+      }
+      const dlq=await pool.query(
+        'SELECT reason_code,attempts FROM '+schema+'.quarantine WHERE intent_key=$1',
+        [Buffer.from(target,'hex')]);
+      assert.equal(dlq.rowCount,1);
+      assert.deepEqual(dlq.rows.map(r=>r.reason_code),['LEASE_TIMEOUT_EXHAUSTED']);
+      assert.equal(Number(dlq.rows[0].attempts),8);
+      const state=await pool.query(
+        'SELECT state,attempts FROM '+schema+'.deliveries WHERE intent_key=$1',
+        [Buffer.from(target,'hex')]);
+      assert.equal(state.rows[0].state,'dead');
+      assert.equal(Number(state.rows[0].attempts),8);
+    });
+
     // Controlled PG18 loopback workload. This is NOT a production-capacity
     // benchmark: report environment and tail latency, never label it prod.
     const n=256, recipientsPerIntent=4;

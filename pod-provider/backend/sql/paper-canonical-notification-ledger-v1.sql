@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS paper_notification_ledger.intents (
   intent_id text NOT NULL CHECK (length(intent_id) BETWEEN 1 AND 512),
   payload_sha256 bytea NOT NULL CHECK (octet_length(payload_sha256)=32),
   notification_kind text NOT NULL CHECK (length(notification_kind) BETWEEN 1 AND 64),
-  source_protocol text NOT NULL CHECK (source_protocol IN ('activitypub','atproto')),
+  source_protocol text NOT NULL CHECK (source_protocol IN ('activitypub','atproto','activitypods')),
   recipient_count integer NOT NULL CHECK (recipient_count BETWEEN 0 AND 64),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );

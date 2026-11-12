@@ -78,3 +78,85 @@ The implementation has been reviewed with the same constraints that motivated mo
 **What this does not prove:** static review and CI regressions cannot establish leak-free behavior at every workload, cost per million requests, or maximum throughput on deployed hardware. The installed provider still needs repeated startup/shutdown and load/heap profiling with the native enforcement flags enabled. A privileged triplestore/Fuseki actor still bypasses these LDP hooks. The existing permissive OIDC client-origin CORS behavior requires an independent protocol-aware review before DPoP production enforcement. Neither that policy nor production provisioning has been changed in this hardening pass.
 
 The completed verification belongs to the exact commit reported in GitHub Actions, not merely the pull request's draft or mergeability state.
+
+
+## November 2026 security and capacity evidence
+
+The disposable provider exercises native SemApps HTTPS signup, real SAI,
+Jena TDB2, Redis, OIDC authorization code with PKCE, signed DPoP-bound ID
+tokens, and DPoP replay denial. It is **not** production-scale traffic.
+
+### Measured results
+
+On e794071bc721e33a3b8e60878c1deb6ff2a80537, Backend checks passed
+158 Jest suites and 1,287 tests. Native Solid-OIDC HTTP acceptance and
+private Docker Compose boundary checks also passed.
+
+The Node 22.23.4 GitHub runner reported these disposable microbenchmarks:
+
+| Case | Operations per second | Post-GC heap delta |
+| --- | ---: | ---: |
+| LDP guard disabled (50k calls) | 2,925,782 | 4,024 bytes |
+| Enabled, ordinary unrelated LDP path (50k calls) | 494,200 | 61,520 bytes |
+| Enabled, protected resource denied (10k calls) | 59,860 | 39,448 bytes |
+| OIDC client-origin CORS checks (15k calls) | 307,934 | 11,920 bytes |
+
+These figures measure in-process functions, not HTTP throughput or
+long-duration leak behavior.
+
+The first real Redis run accepted 512 of 536 simultaneous grant token
+issuances, rejected 24 above the cap, and removed 532 legacy revocation
+pointers in bounded batches. It ran in a single process. Follow-up
+four-process contention, interrupted-revocation, duplicate-token and
+Redis replay-key MEMORY USAGE tests are separate acceptance requirements
+until they have passed CI on their exact commit.
+
+### Thirty-day scale assumptions, not a billing quote
+
+One million accounts with one affected grant change each per month
+would generate an estimated four million Jena calls and seven million
+broker calls per month, averaging 1.54 Jena calls per second or 15.43 at a
+tenfold traffic peak. The model assumes every change affects an approved
+app with active consent. Unrelated grants make no extra RDF calls.
+
+At 1,000 DPoP-protected requests per second, a 130-second replay TTL
+implies approximately 130,000 live Redis keys and 2.592 billion replay
+reservations in 30 days. Actual RAM must include key overhead and Redis
+allocator behavior. Expiring replay keys must not be evicted early or
+replay validation will become unsafe. Real Redis memory sampling now
+supplies a bounded empirical allocation figure.
+
+The cost model deliberately leaves dollar pricing blank until real host
+CPU, memory, network, storage, backup and service rates are known.
+CI runner measurements are not production hardware sizing.
+
+### Privileged RDF storage: production release blocked
+
+The current SemApps triplestore uses broad rights over the same
+per-user Jena dataset as managed identity bindings and consent state.
+A privileged direct SPARQL update bypasses JavaScript LDP hooks.
+Apache Jena supports dataset and endpoint ACLs, but its documented
+graph-level authorization mechanism protects read-only datasets, not
+write privileges at individual RDF subjects.
+
+Therefore this branch has an explicit source-controlled release gate.
+Enabling native ATProto SAI fencing in production rejects provider
+startup until the canonical consent and signed-repository authority is
+stored behind distinct, limited write privileges. There is no
+operator-set environment bypass.
+
+A viable design keeps Jena as the Solid RDF projection and moves
+canonical repo/consent state either to an isolated protected Jena
+service or to a PostgreSQL control-plane table with a restricted
+writer role. Native SAI revocation must commit the canonical blocked
+revision before modifying a grant. An ordinary SemApps triplestore
+caller must not be able to forge a readiness epoch, root CID or
+active permission. Crashes across PostgreSQL and Jena must remain
+fail-closed and repairable.
+
+Before removing the source-controlled gate, require real deployed
+negative SPARQL tests, owner consent and uninstall scenarios,
+broker credential isolation, concurrent revocation/projector crash
+recovery, sustained heap/RSS and pool profiles, and a costed
+deployment configuration. No SPARQL text filter can replace a
+storage-level permission boundary.

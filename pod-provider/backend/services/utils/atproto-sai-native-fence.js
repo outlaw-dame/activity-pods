@@ -76,10 +76,6 @@ function bindingIdentity(kind, resource) {
   return { owner, app };
 }
 
-async function ask(ctx, name, params) {
-  return ctx.call(name, params, { timeout: 5000 });
-}
-
 /**
  * Called from the native SAI LDP before-hooks.
  *
@@ -119,8 +115,18 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     );
   }
 
+  // A slow Jena or Moleculer node must not hold a grant-mutation request
+  // through a chain of independent 5-second timeouts. The entire fence has
+  // one monotonic 12-second budget; exhausting it denies the SAI change.
+  const deadline = process.hrtime.bigint() + 12_000_000_000n;
+  const call = (name, params) => {
+    const remainingMs = Number((deadline - process.hrtime.bigint()) / 1_000_000n);
+    if (remainingMs < 1) deny('ATPROTO_SAI_FENCE_TIMEOUT');
+    return ctx.call(name, params, { timeout: Math.min(5000, remainingMs) });
+  };
+
   try {
-    const nativeContainer = await ask(ctx, kind + '.getContainerUri', { webId: owner });
+    const nativeContainer = await call(kind + '.getContainerUri', { webId: owner });
     safeIri(nativeContainer, { httpsOnly: true });
     const prefix = nativeContainer.endsWith('/') ? nativeContainer : nativeContainer + '/';
     const target = operation === 'post' ? nativeContainer : ctx.params?.resourceUri;
@@ -139,7 +145,7 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
         403, 'ATPROTO_SAI_TARGET_INVALID'
       );
     }
-    const rights = await ask(ctx, 'webacl.resource.hasRights', {
+    const rights = await call('webacl.resource.hasRights', {
       resourceUri: target,
       rights: operation === 'post' ? { append: true, write: true } : { write: true },
       webId: owner
@@ -152,14 +158,14 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
       );
     }
 
-    const accountRows = await ask(ctx, 'triplestore.query', {
+    const accountRows = await call('triplestore.query', {
       dataset: 'settings', webId: 'system',
       query: buildCanonicalPodAccountLookup(owner)
     });
     const account = parseCanonicalPodAccount(accountRows, owner);
     const dataset = account.username;
     const subjectUri = consentSubject(owner, app);
-    const getRows = () => ask(ctx, 'triplestore.query', {
+    const getRows = () => call('triplestore.query', {
       dataset, webId: 'system',
       query: readConsentQuery({ subjectUri })
     });
@@ -178,7 +184,7 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
 
     // Only the approved application's existing access grant is a valid
     // consent pointer. Do not trust the mutation's submitted grant URI.
-    const grantContainer = await ask(ctx, 'access-grants.getContainerUri', { webId: owner });
+    const grantContainer = await call('access-grants.getContainerUri', { webId: owner });
     safeIri(grantContainer, { httpsOnly: true });
     if (!grantUri.startsWith(grantContainer.endsWith('/') ? grantContainer : grantContainer + '/') ||
         !grantUri.startsWith(new URL(owner).origin + '/')) {
@@ -188,7 +194,7 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     if (BigInt(state.revision) === 9223372036854775807n) {
       deny('ATPROTO_SAI_FENCE_EPOCH_EXHAUSTED');
     }
-    await ask(ctx, 'triplestore.update', {
+    await call('triplestore.update', {
       dataset, webId: 'system',
       query: beginRevocationQuery({
         subjectUri, grantUri, revision: state.revision

@@ -1,5 +1,7 @@
 'use strict';
 
+// This suite isolates the bridge service from deployment-only configuration.
+jest.mock('../config/config', () => ({ BASE_URL: 'https://paper.example.test/' }));
 const bridge = require('../services/internal-bridge-canonical-notification-api.service');
 
 function harness(overrides = {}) {

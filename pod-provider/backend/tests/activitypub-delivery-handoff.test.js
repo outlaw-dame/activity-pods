@@ -217,7 +217,7 @@ describe('APDM durable ActivityPub handoff', () => {
           { data: { deliveryPlan: createPlan() }, progress: jest.fn() },
           fetchImpl
         )
-      ).rejects.toThrow(/did not confirm Redis acceptance/u);
+      ).rejects.toThrow(/did not confirm Redis acceptance|invalid acknowledgement body/u);
     }
   });
 

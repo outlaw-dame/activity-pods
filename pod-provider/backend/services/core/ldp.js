@@ -20,12 +20,18 @@ module.exports = {
   hooksContainer: {
     before: {
       post(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
-      create(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
-      createAndAttach(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
+      create(ctx) {
+        assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { allowEmptyBootstrap: 'create' });
+      },
+      createAndAttach(ctx) {
+        assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { allowEmptyBootstrap: 'create' });
+      },
       delete(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { protectAncestors: true }); },
       clear(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { protectAncestors: true }); },
       patch(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
-      attach(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); },
+      attach(ctx) {
+        assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL, { allowEmptyBootstrap: 'attach' });
+      },
       detach(ctx) { assertNotManagedLdpMutation(ctx, CONFIG.BASE_URL); }
     }
   },

@@ -38,8 +38,8 @@ async function fixture() {
   mixin.started.call(service);
   return {service,server,accepted,origin};
 }
-function connect(origin, headerOrigin=origin) {
-  const ws = new WebSocket(origin.replace(/^http/u, 'ws') + '/live?token=private', {
+function connect(origin, headerOrigin=origin, target='/live?token=private') {
+  const ws = new WebSocket(origin.replace(/^http/u, 'ws') + target, {
     origin: headerOrigin,perMessageDeflate:false,handshakeTimeout:3000
   });
   return new Promise((resolve,reject) => {
@@ -92,6 +92,16 @@ describe('live ws gateway handshake and lifecycle', () => {
     await waitForServerClose(f.service);
     expect(f.service.connections).toHaveLength(0);
     expect(f.service.connectionIndexes.size).toBe(0);
+  });
+
+  test('cross-origin Solid capabilities are limited to the exact channel route',async()=>{
+    await expect(connect(f.origin,'https://reader.example.test'))
+      .rejects.toMatchObject({status:403});
+    const capability='/.notifications/WebSocketChannel2023/socket/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const ws=await connect(f.origin,'https://reader.example.test',capability);
+    expect(f.service.connections).toHaveLength(1);
+    await closed(ws);
+    await waitForServerClose(f.service);
   });
 
   test('a payload above 256 KiB is rejected by the actual ws parser',async()=>{

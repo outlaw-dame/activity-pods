@@ -116,7 +116,9 @@ function createCanonicalAtprotoPgAuthority({pool}={}) {
  */
 async function assertRestrictedPgAuthorityLogin(pool) {
   if (!pool?.query) refused('ATPROTO_PG_AUTHORITY_POOL');
-  const result = await pool.query(
+  let result;
+  try {
+    result = await pool.query(
     'SELECT r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,' +
     'r.rolbypassrls,r.rolcanlogin, ' +
     "pg_catalog.has_schema_privilege(current_user,'paper_atproto_authority','CREATE') AS schema_create, " +
@@ -129,7 +131,13 @@ async function assertRestrictedPgAuthorityLogin(pool) {
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','TRUNCATE') AS consent_truncate, " +
     "pg_catalog.has_function_privilege(current_user,'paper_atproto_authority.block_consent(text,text,text,bigint)','EXECUTE') AS revoke_execute " +
     'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user'
-  );
+    );
+  } catch {
+    // Some PostgreSQL privilege introspection calls themselves raise
+    // SQLSTATE 42501 for a generic login without USAGE on this schema.
+    // Treat that as a privilege refusal, not a raw database exception.
+    refused('ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
+  }
   const row = result.rows?.[0];
   const blocked = ['rolsuper','rolcreatedb','rolcreaterole','rolreplication',
     'rolbypassrls','schema_create','identity_insert','consent_insert',

@@ -39,54 +39,63 @@ module.exports = {
     config.adapter = name => new RedisAdapter(name, redisClient);
     this.dpopRedis = redisClient;
 
-    // See https://github.com/panva/node-oidc-provider/blob/main/recipes/client_based_origins.md
-    config.clientBasedCORS = (ctx, origin, client) => {
-      // TODO validate CORS based on client
-      return true;
-    };
+    try {
+      // See https://github.com/panva/node-oidc-provider/blob/main/recipes/client_based_origins.md
+      config.clientBasedCORS = (ctx, origin, client) => {
+        // TODO validate CORS based on client
+        return true;
+      };
 
-    this.oidc = new Provider(this.settings.baseUrl, config);
+      this.oidc = new Provider(this.settings.baseUrl, config);
 
-    // Allow provider to interpret reverse proxy headers.
-    this.oidc.proxy = true;
+      // Allow provider to interpret reverse proxy headers.
+      this.oidc.proxy = true;
 
-    await this.broker.call('api.addRoute', {
-      route: {
-        name: 'oidc-config',
-        path: '/.well-known/openid-configuration',
-        aliases: {
-          'GET /': 'solid-oidc.proxyConfig'
+      await this.broker.call('api.addRoute', {
+        route: {
+          name: 'oidc-config',
+          path: '/.well-known/openid-configuration',
+          aliases: {
+            'GET /': 'solid-oidc.proxyConfig'
+          }
         }
-      }
-    });
+      });
 
-    const { pathname: basePath } = new URL(this.settings.baseUrl);
+      const { pathname: basePath } = new URL(this.settings.baseUrl);
 
-    await this.broker.call('api.addRoute', {
-      route: {
-        name: 'oidc-login-completed',
-        path: path.join(basePath, '/.oidc/login-completed'),
-        authentication: true,
-        bodyParsers: {
-          json: true
-        },
-        aliases: {
-          'POST /': 'solid-oidc.loginCompleted'
+      await this.broker.call('api.addRoute', {
+        route: {
+          name: 'oidc-login-completed',
+          path: path.join(basePath, '/.oidc/login-completed'),
+          authentication: true,
+          bodyParsers: {
+            json: true
+          },
+          aliases: {
+            'POST /': 'solid-oidc.loginCompleted'
+          }
         }
-      }
-    });
+      });
 
-    // The OIDC provider route must be added after all other routes, otherwise it gets overwritten
-    // TODO find out why ! Probably due to the fact it is only a middleware (adding dummy aliases doesn't help)
-    await delay(10000);
+      // The OIDC provider route must be added after all other routes, otherwise it gets overwritten
+      // TODO find out why ! Probably due to the fact it is only a middleware (adding dummy aliases doesn't help)
+      await delay(10000);
 
-    await this.broker.call('api.addRoute', {
-      route: {
-        name: 'solid-oidc',
-        path: path.join(basePath, '/.oidc/auth'),
-        use: [this.oidc.callback()]
-      }
-    });
+      await this.broker.call('api.addRoute', {
+        route: {
+          name: 'solid-oidc',
+          path: path.join(basePath, '/.oidc/auth'),
+          use: [this.oidc.callback()]
+        }
+      });
+    } catch (error) {
+      // A failed OIDC route registration must not leave an orphan Redis
+      // socket or provider reference across service restart attempts.
+      this.oidc = null;
+      if (this.dpopRedis === redisClient) this.dpopRedis = null;
+      redisClient.disconnect();
+      throw error;
+    }
   },
   actions: {
     // See https://moleculer.services/docs/0.13/moleculer-web.html#Authentication

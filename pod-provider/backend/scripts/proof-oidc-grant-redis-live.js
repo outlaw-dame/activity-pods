@@ -6,6 +6,10 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const Redis = require('ioredis');
 const RedisAdapter = require('../config/oidc-adapter');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const path = require('node:path');
+const execFileAsync = promisify(execFile);
 const { MAX_GRANT_TOKENS } = require('../config/oidc-grant-index-policy');
 
 if (process.env.NODE_ENV !== 'test' ||
@@ -80,6 +84,41 @@ async function main() {
     e => e.code === 'OIDC_GRANT_ALREADY_REVOKED'
   );
 
+  // Four separate Node processes with independent Redis connections all
+  // contend for the same grant. Redis, not process-local JavaScript state,
+  // must enforce the cap across every worker.
+  const sharedGrant = 'grant-mp-' + crypto.randomUUID();
+  const workers = await Promise.all(Array.from({ length: 4 }, async (_, i) => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      path.join(__dirname, 'proof-oidc-grant-worker.js'),
+      sharedGrant, String(i), '150'
+    ], {
+      env: { ...process.env, ATPROTO_OIDC_REDIS_WORKER: 'confirmed' },
+      timeout: 12000, maxBuffer: 32 * 1024
+    });
+    return JSON.parse(stdout.trim());
+  }));
+  assert.equal(workers.reduce((sum, w) => sum + w.accepted, 0), MAX_GRANT_TOKENS);
+  assert.equal(workers.reduce((sum, w) => sum + w.rejected, 0), 600 - MAX_GRANT_TOKENS);
+  assert.equal(await redis.llen('grant:' + sharedGrant), MAX_GRANT_TOKENS);
+  await adapter.revokeByGrantId(sharedGrant);
+  assert.equal(await redis.llen('grant:' + sharedGrant), 0);
+  await assert.rejects(
+    adapter.upsert('worker-replay', { ...basePayload, grantId: sharedGrant }, 1800),
+    e => e.code === 'OIDC_GRANT_ALREADY_REVOKED'
+  );
+
+  // Simulate a process killed after committing the revocation marker but
+  // before deleting all token keys. A client must not regain access merely
+  // because the cleanup worker disappeared.
+  const interrupted = 'grant-interrupted-' + crypto.randomUUID();
+  await adapter.upsert('interrupted-token', { ...basePayload, grantId: interrupted }, 1800);
+  await redis.set('grant-revoked:' + interrupted, '1', 'EX', 86400);
+  assert.equal(await adapter.find('interrupted-token'), undefined);
+  assert.equal(await redis.exists('AccessToken:interrupted-token'), 1);
+  await adapter.revokeByGrantId(interrupted);
+  assert.equal(await redis.exists('AccessToken:interrupted-token'), 0);
+
   // Existing deployments can have older, oversized token lists. Revoke
   // those incrementally, without issuing an unbounded LRANGE 0 -1.
   const legacy = 'legacy-' + crypto.randomUUID();
@@ -99,6 +138,9 @@ async function main() {
     success: true, name: 'oidc-grant-index-real-redis',
     concurrentAttempts: results.length, accepted: fulfilled, rejected: rejected.length,
     limitPerGrant: MAX_GRANT_TOKENS,
+    multiProcessWorkers: workers.length,
+    multiProcessAccepted: workers.reduce((sum, w) => sum + w.accepted, 0),
+    multiProcessRejected: workers.reduce((sum, w) => sum + w.rejected, 0),
     revokedLegacyTokens: list.length, durationMs,
     heapUsedBytes: process.memoryUsage().heapUsed
   }));

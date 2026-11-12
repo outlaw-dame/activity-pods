@@ -69,7 +69,7 @@ async function tamperRdfAndVerifyBlocked(authority) {
     method:'POST',headers:{authorization:auth,'content-type':'application/sparql-update'},
     body:update,signal:AbortSignal.timeout(5000)
   });
-  assert.equal(response.status,200,'Privileged SPARQL fixture must be writable');
+  assert.equal(response.ok,true,'Privileged SPARQL fixture must be writable');
   const pg=await authority.getConsent({owner:webid,app});
   assert.equal(pg.state,'blocked',
     'SPARQL may forge RDF projection, but it cannot restore PG authorization');

@@ -58,8 +58,8 @@ function setup() {
   const ctx = {
     params: { resource, resourceUri: grant },
     meta: { webId: owner },
-    call: async (name, params) => {
-      calls.push({ name, params });
+    call: async (name, params, options) => {
+      calls.push({ name, params, options });
       if (name === 'triplestore.query' && params.dataset === 'settings') return datasetRow;
       if (name === 'triplestore.query' && params.dataset === 'alice') {
         return [{
@@ -141,6 +141,9 @@ test('native grant mutation first durably blocks the exact per-user consent revi
     'triplestore.query'
   ]);
   assert.match(calls[2].params.query, /LIMIT 2/);
+  assert.ok(calls.every(x => x.options && Number.isInteger(x.options.timeout) &&
+    x.options.timeout > 0 && x.options.timeout <= 5000),
+  'Each Moleculer call has a bounded timeout inside the shared operation budget');
   assert.ok(!calls.some(x => x.name.startsWith('auth.account') || x.name.includes('.list')));
   assert.ok(calls.filter(x => x.name === 'triplestore.update')
     .every(x => x.params.dataset === 'alice' && x.params.webId === 'system'));

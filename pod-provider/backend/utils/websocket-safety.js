@@ -5,6 +5,7 @@
 // per-connection memory must be measured before enabling it.
 const MAX_INBOUND_BYTES = 256 * 1024;
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+const MAX_AGGREGATE_BUFFERED_BYTES = 64 * 1024 * 1024;
 const MAX_CONNECTIONS = 2048;
 const HEARTBEAT_MS = 30000;
 const MAX_ASYNC_MESSAGES = 8;
@@ -69,8 +70,29 @@ function canBufferMessage(socket, payload) {
     outboundSize(payload) <= MAX_BUFFERED_BYTES &&
     socket.bufferedAmount + outboundSize(payload) <= MAX_BUFFERED_BYTES;
 }
+// A single gateway-wide outbound quota. Reservations are released exactly
+// once, regardless of send callback, close, or service shutdown ordering.
+function createSendBudget(limit = MAX_AGGREGATE_BUFFERED_BYTES) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Invalid WS budget');
+  let reservedBytes = 0;
+  return Object.freeze({
+    reserve(bytes) {
+      if (!Number.isSafeInteger(bytes) || bytes < 0 ||
+          bytes > limit - reservedBytes) return null;
+      reservedBytes += bytes;
+      let released = false;
+      return () => {
+        if (!released) {
+          released = true;
+          reservedBytes -= bytes;
+        }
+      };
+    },
+    get usedBytes() { return reservedBytes; }
+  });
+}
 module.exports = {
-  MAX_INBOUND_BYTES,MAX_BUFFERED_BYTES,MAX_CONNECTIONS,HEARTBEAT_MS,
+  MAX_INBOUND_BYTES,MAX_BUFFERED_BYTES,MAX_AGGREGATE_BUFFERED_BYTES,MAX_CONNECTIONS,HEARTBEAT_MS,
   MAX_ASYNC_MESSAGES,canonicalOrigin,allowedOrigins,isAllowedOrigin,
-  canAcceptConnection,outboundSize,canBufferMessage
+  canAcceptConnection,outboundSize,canBufferMessage,createSendBudget
 };

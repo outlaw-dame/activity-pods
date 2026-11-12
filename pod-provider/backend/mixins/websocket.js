@@ -1,7 +1,8 @@
 const { WebSocketServer, WebSocket } = require('ws');
 const {
   MAX_INBOUND_BYTES, MAX_CONNECTIONS, HEARTBEAT_MS, MAX_ASYNC_MESSAGES,
-  allowedOrigins, isAllowedOrigin, canAcceptConnection, canBufferMessage
+  allowedOrigins, isAllowedOrigin, canAcceptConnection, canBufferMessage,
+  outboundSize, createSendBudget
 } = require('../utils/websocket-safety');
 const http = require('http');
 const urlJoin = require('url-join');
@@ -31,6 +32,8 @@ module.exports = {
     this.connections = [];
     this.connectionIndexes = new Map();
     this.pendingWsUpgrades = 0;
+    this.wsSendBudget = createSendBudget();
+    this.wsPendingSends = new Map();
     this.wsAllowedOrigins = null;
     if (!this.settings.baseUrl) throw new Error('The websocket api mixin requires the `baseUrl` setting.');
   },
@@ -71,6 +74,12 @@ module.exports = {
       this.wss.close();
       this.wss = null;
     }
+    // Release outstanding reservations even when ws send callbacks never
+    // fire (e.g. TCP reset or forced shutdown).
+    for (const reservations of this.wsPendingSends.values()) {
+      for (const release of reservations) release();
+    }
+    this.wsPendingSends.clear();
     this.connections.length = 0;
     this.connectionIndexes.clear();
     this.pendingWsUpgrades = 0;
@@ -171,14 +180,32 @@ module.exports = {
       // connection.send(). A slow client cannot retain unlimited outbound
       // messages or consume the memory budget of healthy peers.
       const rawSend = webSocket.send.bind(webSocket);
+      const reservations = new Set();
+      this.wsPendingSends.set(webSocket, reservations);
       webSocket.send = (payload, ...args) => {
-        if (!canBufferMessage(webSocket, payload)) {
+        const bytes = outboundSize(payload);
+        const release = canBufferMessage(webSocket, payload) ?
+          this.wsSendBudget.reserve(bytes) : null;
+        if (!release) {
           const callback = args.find(value => typeof value === 'function');
           if (callback) callback(new Error('WebSocket outbound queue limit'));
           webSocket.terminate();
           return;
         }
-        return rawSend(payload, ...args);
+        reservations.add(release);
+        const callback = args.length && typeof args[args.length - 1] === 'function'
+          ? args.pop() : null;
+        const done = error => {
+          release();
+          reservations.delete(release);
+          if (callback) callback(error);
+        };
+        try {
+          return rawSend(payload, ...args, done);
+        } catch (error) {
+          done(error);
+          throw error;
+        }
       };
 
       // Create a new connection object (passed to all event handlers).
@@ -242,6 +269,9 @@ module.exports = {
           this.connectionIndexes.set(last, index);
         }
         this.connectionIndexes.delete(connection);
+        for (const release of reservations) release();
+        reservations.clear();
+        this.wsPendingSends.delete(webSocket);
       });
 
       this.connectionIndexes.set(connection, this.connections.length);

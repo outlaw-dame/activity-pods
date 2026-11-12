@@ -5,7 +5,7 @@ const path = require('node:path');
 const {
   MAX_INBOUND_BYTES, MAX_CONNECTIONS, MAX_BUFFERED_BYTES,
   canonicalOrigin, allowedOrigins, isAllowedOrigin,
-  canAcceptConnection, canBufferMessage, outboundSize
+  canAcceptConnection, canBufferMessage, outboundSize,createSendBudget
 } = require('../utils/websocket-safety');
 
 test('WebSocket origin policy accepts configured origins and denies cross-site cookie upgrades', () => {
@@ -70,4 +70,23 @@ test('gateway reuses one ws server, disconnects idle clients, and never logs the
   expect(source).toContain('if (inflightMessages >= MAX_ASYNC_MESSAGES)');
   expect(source).not.toContain('this.connections = this.connections.filter(');
   expect(source).not.toContain('New WebSocket registered with URI');
+});
+
+test('global WebSocket outgoing budget accounts for all connections and releases once', () => {
+  const quota = createSendBudget(1024);
+  const first = quota.reserve(700);
+  expect(first).toEqual(expect.any(Function));
+  expect(quota.reserve(400)).toBeNull();
+  const second = quota.reserve(324);
+  expect(second).toEqual(expect.any(Function));
+  expect(quota.usedBytes).toBe(1024);
+  first();
+  first();
+  expect(quota.usedBytes).toBe(324);
+  const third = quota.reserve(700);
+  expect(third).toEqual(expect.any(Function));
+  second();
+  third();
+  expect(quota.usedBytes).toBe(0);
+  expect(quota.reserve(-1)).toBeNull();
 });

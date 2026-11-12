@@ -48,3 +48,15 @@ heap/RSS, heartbeats, connection churn, backlog and dropped events.
 Confirm Cloudflare/edge WebSocket upgrade and idle policies before
 production rollout. For high fan-out, consider topic-aware sharding and
 subscription authorization, not replacing `ws` merely for speed.
+
+
+## Aggregate outbound memory
+
+All WebSocket sends also reserve bytes against a **64 MiB total gateway
+outbound queue budget** before entering the `ws` sender. A reservation
+is released when the write callback fires or when the socket closes,
+whichever happens first. Forced shutdown releases any remaining pending
+reservations. This is a conservative queue budget across the full
+2,048-connection process, not 2 MiB multiplied by every connection.
+The budget does not include OS TCP buffers, inbound parsers or
+application state; those still require real RSS profiling.

@@ -70,8 +70,8 @@ function approvedApps() {
 function resourceMembershipQuery(containerUri, resourceUri) {
   safeIri(containerUri, { httpsOnly: true });
   safeIri(resourceUri, { httpsOnly: true });
-  const container = containerUri.replace(/\\/+$/u, '');
-  const resource = resourceUri.replace(/\\/+$/u, '');
+  const container = containerUri.replace(/[/]+$/u, '');
+  const resource = resourceUri.replace(/[/]+$/u, '');
   return 'ASK WHERE { VALUES ?container { <' + container + '> <' + container +
     '/> } VALUES ?child { <' + resource + '> <' + resource +
     '/> } ?container <http://www.w3.org/ns/ldp#contains> ?child . }';
@@ -81,7 +81,7 @@ function isOwnedStorageUri(uri, owner) {
   if (typeof uri !== 'string' || uri.length > 4096) return false;
   try {
     const parsed = new URL(uri);
-    const storageRoot = owner.replace(/\\/+$/u, '') + '/data/';
+    const storageRoot = owner.replace(/[/]+$/u, '') + '/data/';
     return parsed.href === uri && !parsed.username && !parsed.password &&
       !parsed.search && !parsed.hash && uri.startsWith(storageRoot);
   } catch {

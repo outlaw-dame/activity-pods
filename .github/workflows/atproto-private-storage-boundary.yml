@@ -1,0 +1,37 @@
+name: ATProto private storage deployment boundary
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/docker-compose.yml'
+      - 'pod-provider/backend/scripts/proof-private-compose-boundary.js'
+      - '.github/workflows/atproto-private-storage-boundary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  private-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Inspect resolved Compose network and administrative access
+        env:
+          LETSENCRYPT_EMAIL: ci@example.invalid
+          SEMAPPS_JENA_PASSWORD: ci-disposable-secret-never-use-this-in-production
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile admin -f pod-provider/docker-compose.yml \
+            config --format json > /tmp/paper-private-compose.json
+          node --check pod-provider/backend/scripts/proof-private-compose-boundary.js
+          node pod-provider/backend/scripts/proof-private-compose-boundary.js \
+            /tmp/paper-private-compose.json
+          rm -f /tmp/paper-private-compose.json

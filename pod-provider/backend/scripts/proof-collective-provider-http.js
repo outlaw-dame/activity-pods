@@ -11,6 +11,8 @@
  */
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { consentSubject, bootstrapConsentQuery, readConsentQuery } =
+  require('../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs');
 
 const provider = 'https://paper-e2e.test:3443';
 const application = 'https://app-e2e.test:3443/app';
@@ -47,6 +49,29 @@ async function query(dataset, sparql) {
   if (!response.ok) throw new Error('SPARQL query failed (' + response.status + '): ' + text.slice(0, 450));
   return JSON.parse(text).results.bindings;
 }
+async function update(dataset, sparql) {
+  const response = await fetch(fuseki.replace(/\/$/u, '') +
+    '/' + encodeURIComponent(dataset) + '/update', {
+    method: 'POST',
+    headers: {
+      authorization: admin,
+      'content-type': 'application/sparql-update'
+    },
+    body: sparql,
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!response.ok) {
+    throw new Error('Disposable Fuseki rejected consent update: HTTP ' + response.status);
+  }
+}
+
+async function protectedConsent(username, webId) {
+  const subjectUri = consentSubject(webId, application);
+  const rows = await query(username, readConsentQuery({ subjectUri }));
+  assert.equal(rows.length, 1, 'Exactly one protected SAI consent state is required');
+  return rows[0];
+}
+
 async function ledger(principal) {
   const hash = crypto.createHash('sha256')
     .update(JSON.stringify([principal, application, 'apods:CreateGroup']))
@@ -176,10 +201,38 @@ async function main() {
   assert(rights.some(row =>
     row.right.value === 'http://activitypods.org/ns/core#ManageMembers'),
     'Native SAI ManageMembers right not persisted');
+  let protectedGrant = null;
+  if (process.env.ATPROTO_NATIVE_SAI_LIVE_PROOF_ENABLED === 'confirmed') {
+    assert.equal(process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED, 'true');
+    assert.equal(process.env.APODS_ATPROTO_SAI_FENCED_APPS, application);
+    const grants = await query(username,
+      'PREFIX interop: <http://www.w3.org/ns/solid/interop#> ' +
+      'SELECT DISTINCT ?grant WHERE { ?grant a interop:AccessGrant ; ' +
+      'interop:grantedBy <' + webId + '> ; interop:grantee <' + application + '> . } LIMIT 3');
+    assert.equal(grants.length, 1, 'Expected exactly one live native SAI AccessGrant');
+    protectedGrant = grants[0].grant.value;
+    const subjectUri = consentSubject(webId, application);
+    await update(username, bootstrapConsentQuery({
+      subjectUri, grantUri: protectedGrant
+    }));
+    const active = await protectedConsent(username, webId);
+    assert.equal(active.status.value, 'active');
+    assert.equal(active.revision.value, '1');
+    assert.equal(active.grant.value, protectedGrant);
+  }
+
   const revision1 = await ledger(webId);
   assert(revision1 >= 2, 'Expected registration and grant mutation revisions');
 
   await doSai('upgrade-app', token, []);
+  if (protectedGrant) {
+    const blocked = await protectedConsent(username, webId);
+    assert.equal(blocked.status.value, 'blocked',
+      'Native SAI upgrade must block repository consent BEFORE deleting the AccessGrant');
+    assert.equal(blocked.revision.value, '2',
+      'Revocation must advance exactly one durable consent revision');
+    assert.equal(blocked.grant.value, protectedGrant);
+  }
   assert.equal((await authorizationRows(username, webId)).length, 0,
     'Upgrade denying Group rights must remove original SAI authorization');
   const revision2 = await ledger(webId);
@@ -207,6 +260,7 @@ async function main() {
     proof: 'real-provider-https-sai-http-persistence',
     webId, // Public test-only WebID; never print token/password
     registrationRevisions: [revision1, revision2, revision3, revision4],
+    nativeAtprotoConsentRevocationVerified: Boolean(protectedGrant),
     issuer: discovery.data.issuer,
     caveat: 'Native Solid-OIDC discovery and session signup; full authorization-code browser ceremony not included'
   }));

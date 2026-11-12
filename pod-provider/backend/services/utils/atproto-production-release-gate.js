@@ -18,6 +18,13 @@ const NATIVE_PROTECTED_STORAGE_RELEASED = false;
 function assertNativeProtectedStorageReleased(env = process.env) {
   const disposableTest = env.NODE_ENV === 'test' &&
     env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE === 'confirmed';
+  if (env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED === 'true' &&
+      env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED !== 'true') {
+    throw new Error('Distributed SAI owner proof requires native SAI authorization');
+  }
+  if (env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED === 'true' && !disposableTest) {
+    throw new Error('Distributed SAI owner proof is not released outside disposable tests');
+  }
   if (env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED === 'true' &&
       !NATIVE_PROTECTED_STORAGE_RELEASED && !disposableTest) {
     throw new Error(

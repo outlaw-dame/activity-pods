@@ -62,4 +62,23 @@ function hasAuthorizedOwnerParent(ctx, { owner, app }) {
     entry.requestID === ctx.requestID;
 }
 
-module.exports = { authorizeOwnerSaiAction, hasAuthorizedOwnerParent };
+
+async function authorizeOwnerSaiActionForBroker(ctx, scope) {
+  if (process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED !== 'true') {
+    return authorizeOwnerSaiAction(ctx, scope);
+  }
+  // No Redis connection is opened when the feature is disabled.
+  return require('./atproto-sai-distributed-owner-runtime').issueDistributedOwnerProof(ctx, scope);
+}
+
+async function hasAuthorizedOwnerParentForBroker(ctx, scope) {
+  if (process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED !== 'true') {
+    return hasAuthorizedOwnerParent(ctx, scope);
+  }
+  return require('./atproto-sai-distributed-owner-runtime').verifyDistributedOwnerProof(ctx, scope);
+}
+
+module.exports = {
+  authorizeOwnerSaiAction, hasAuthorizedOwnerParent,
+  authorizeOwnerSaiActionForBroker, hasAuthorizedOwnerParentForBroker
+};

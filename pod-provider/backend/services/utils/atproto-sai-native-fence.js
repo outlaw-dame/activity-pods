@@ -1,7 +1,7 @@
 'use strict';
 
 const { MoleculerError } = require('moleculer').Errors;
-const { hasAuthorizedOwnerParent } = require('./atproto-sai-owner-context');
+const { hasAuthorizedOwnerParentForBroker } = require('./atproto-sai-owner-context');
 const {
   buildCanonicalPodAccountLookup, parseCanonicalPodAccount
 } = require('../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs');
@@ -139,7 +139,8 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
   // calls are accepted only while the already-authorized parent SAI action
   // is on the call stack for this exact owner/application pair.
   const directOwner = ctx.meta?.webId === owner && !ctx.meta?.impersonatedUser;
-  const ownerAction = hasAuthorizedOwnerParent(ctx, { owner, app });
+  const ownerAction = directOwner ? false :
+    await hasAuthorizedOwnerParentForBroker(ctx, { owner, app });
   if (!directOwner && !ownerAction) {
     throw new MoleculerError(
       'Only the Pod owner can change this repository authorization',

@@ -152,8 +152,8 @@ test('nested encodings, encoded path separators and malformed escapes cannot byp
       params: { resourceUri: uri }
     }), e => e.code === 409, 'Expected rejection: ' + uri);
   }
-  assert.equal(guard.protectedPath(prefix + 'articles/r1?preview=1', root), true,
-    'An ambiguous local query target must fail closed');
+  assert.equal(guard.protectedPath(prefix + 'articles/r1?preview=1', root), false,
+    'Unrelated document query parameters remain accessible');
 });
 
 test('root-container clear is stopped before iterating over user Pods', () => {

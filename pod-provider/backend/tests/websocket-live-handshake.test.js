@@ -122,6 +122,23 @@ describe('live ws gateway handshake and lifecycle', () => {
     expect(f.service.wss.clients.size).toBe(0);
   });
 
+  test('stalled route middleware cannot retain pending upgrade slots',async()=>{
+    // Route authorization may wait on Redis or the database. Its pending
+    // connection must still count against the global capacity and time out.
+    f.service.wsUpgradeTimeoutMs = 125;
+    f.service.httpHandler = () => new Promise(() => {});
+    const attempts = Array.from({length:8}, () =>
+      connect(f.origin).then(() => false, () => true)
+    );
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(f.service.pendingWsUpgrades).toBeGreaterThan(0);
+    expect(f.service.pendingWsUpgrades).toBeLessThanOrEqual(8);
+    expect(await Promise.all(attempts)).toEqual(Array(8).fill(true));
+    expect(f.service.pendingWsUpgrades).toBe(0);
+    expect(f.service.connections).toHaveLength(0);
+    expect(f.service.wss.clients.size).toBe(0);
+  });
+
   test('shutdown detaches upgrade handlers and closes live WebSockets',async()=>{
     const ws=await connect(f.origin);
     expect(f.server.listenerCount('upgrade')).toBe(1);

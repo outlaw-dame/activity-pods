@@ -48,3 +48,24 @@ Independent PLC DID resolution and key-document verification, Solid-OIDC/SAI del
 7. Enable production only after exact-head CI, multi-replica crash tests, security review, performance/cost and rollback approval.
 
 This intentionally avoids the developer fork's unsigned fallback, generic master-token impersonation, process-local canonical repository, duplicate bridge and best-effort event publisher.
+
+
+## Provider-authority bridge gate (stacked draft PR #141)
+
+The non-activated 'provider-authority.mjs' and 'provider-moleculer.mjs' now connect this signed genesis proof to the *existing* ActivityPods provider contracts **without adding a production service or a second signer**.
+
+- Source-of-truth split: protected Jena identitybindings own canonical WebID = ActivityPub actor, managed DID/handle, current key references and PDS identity. PostgreSQL owns the signed repository commit, MST blocks and native-event outbox. Neither side is silently overwritten on divergence.
+- The provider adapter requires one authoritative current identitybinding for the exact account/DID/handle, a distinct rotation key, a managed local source, an independently resolved handle-to-DID match, the current PLC document's signing-key multibase, and matching PDS endpoint. A public caller cannot provide the signer, signing key, DID document or PDS authority.
+- The only signing operation is 'signing.signAtprotoCommit' using ActivityPods key custody, after the trusted store builds the exact unsigned v3 commit; 'signing.getAtprotoPublicKey' returns public material only. The trusted Moleculer broker calls use a separate metadata context and never propagate the bridge's one-purpose capability into other services.
+- The bridge action surface is internal only: 'bootstrapAndVerify', 'verifyReady' and read-only 'inspectRecovery'. It requires caller 'atproto-provisioning' AND a dedicated 32+ character provider capability. It also requires the disposable environment marker and always rejects NODE_ENV=production. No API alias or service-loader registration is added.
+- Genesis signatures are canonical low-S per https://atproto.com/specs/cryptography. Read-back rejects noncanonical high-S signatures. The stored commit/MST/CAR/outbox are independently verified on each read-back, with a second identity check to reject mid-operation drift.
+- Once PostgreSQL is committed but before RDF's repoRootCid/repoRev projection is recorded, 'inspectRecovery' reports recoveryRequired=true. The adapter **does not** blindly repair RDF, because distributed identitybinding CAS, revocation fencing and coordinated multi-replica reconciliation still need an independently reviewed protocol. 'verifyReady' fails closed until the RDF projection matches the signed PostgreSQL root and revision.
+- The dedicated disposable PG18 workflow runs the original 8-way concurrency/transaction/CAR/reference tests and the provider bridge tests sequentially, including IDOR input rejection, PLC key drift, unsigned/mismatched signing, idempotent replay, recovery inspection and non-activated Moleculer authorization.
+
+### Still blocking production integration
+
+1. Explicitly review and safely register the Moleculer factory in a dedicated provider runtime after the current #134 and #140 signup readiness contract branches have been reconciled. Wire only a provider-minted capability; do not trust incoming request metadata. The current fixture-only store intentionally cannot be used in production.
+2. Create a production-grade PostgreSQL schema/migration, least-privilege SQL role, replayable multi-replica saga and CAS/fencing of Jena binding updates. Production identity readiness must not rely on the current read-then-write gap.
+3. Connect Solid-OIDC/SAI delegated grants and verify revocation cannot be bypassed. New account bootstrap also needs a carefully defined provider registration authority (as distinct from user-initiated writes).
+4. Implement outbox publish/ack/retry with at-least-once delivery and deterministic idempotency; implement non-empty MST writes, repository reads/XRPC, relay interoperability, deletion, rotation and live DID PLC acceptance.
+5. Confirm acceptable latency of repeated independent PLC/DNS verification (cache only with bounded staleness and revocation strategy), database costs, exact-head CI and disaster recovery. Do not activate this draft merely because proof tests pass.

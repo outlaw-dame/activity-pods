@@ -308,7 +308,8 @@ module.exports = {
 
       // 4. canonicalAccountId fallback – cannot map to AP URI without more info
       this.logger.warn('[CanonicalNotificationApi] Could not resolve actor URI – insufficient actor ref fields', {
-        actorRef
+        hasDid: typeof actorRef.did === 'string',
+        hasHandle: typeof actorRef.handle === 'string'
       });
       return null;
     },

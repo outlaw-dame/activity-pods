@@ -60,3 +60,24 @@ test('inbound sidecar route has a pre-parser payload cap', () => {
   );
   expect(source).toContain("limit: '512kb'");
 });
+
+test('inbox errors do not reflect arbitrary backend exception messages', async () => {
+  const host = harness();
+  const params = {
+    targetInbox: 'https://paper.example.test/alice/inbox',
+    activity: { id: 'https://remote.example/activity/2', type: 'Create',
+      actor: 'https://remote.example/alice' },
+    verifiedActorUri: 'https://remote.example/alice',
+    receivedAt: Date.now(), remoteIp: '203.0.113.12'
+  };
+  for (const error of [
+    Object.assign(new Error('secret: db user alice'), { code: 404 }),
+    Object.assign(new Error('secret: db password'), { code: 500 })
+  ]) {
+    const ctx = { params, meta: {}, call: jest.fn(async () => { throw error; }) };
+    const answer = await service.actions.receive.call(host, ctx);
+    expect(JSON.stringify(answer)).not.toContain('secret');
+    expect(JSON.stringify(host.logger.error.mock.calls)).not.toContain('secret');
+    expect(ctx.meta.$statusCode).toBe(error.code);
+  }
+});

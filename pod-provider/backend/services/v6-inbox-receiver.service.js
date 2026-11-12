@@ -135,18 +135,17 @@ module.exports = {
         return { success: true };
       } catch (err) {
         this.logger.error('[SidecarInbox] Failed to deliver activity', {
-          error: err.message,
-          activityId: activity.id,
-          targetInbox: normalizedTargetInbox
+          errorCode: err?.type || err?.code || 'INBOX_POST_FAILED',
+          activityId: activity.id
         });
 
         if (err.code === 404 || err.type === 'NOT_FOUND') {
           ctx.meta.$statusCode = 404;
-          return { success: false, error: 'not_found', message: err.message };
+          return { success: false, error: 'not_found', message: 'Local inbox not found' };
         }
 
         ctx.meta.$statusCode = 500;
-        return { success: false, error: 'processing_error', message: err.message };
+        return { success: false, error: 'processing_error', message: 'Inbound activity processing failed' };
       }
     }
   },

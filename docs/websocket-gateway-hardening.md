@@ -24,8 +24,9 @@ unbounded frames and message handling, rather than the choice of library.
   bookkeeping uses a `Set` so removal is constant-time; gateway shutdown
   closes its listener and active sockets.
 - Per connection, at most eight asynchronous incoming handlers and
-  256 messages in a ten-second window. A connection whose queued outbound
-  bytes exceed 1 MiB is closed instead of retaining an unbounded backlog.
+  256 messages in a ten-second window. Outgoing frames are capped at
+  256 KiB, and any send that would push buffered bytes over 1 MiB closes
+  the slow connection rather than retaining an unbounded backlog.
   The `connection.send` callback retains the correct underlying socket
   receiver.
 - Handshake errors, callback errors and closed sockets cannot leave

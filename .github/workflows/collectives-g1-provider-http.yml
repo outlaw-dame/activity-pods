@@ -114,19 +114,19 @@ jobs:
             exec -T -e FUSEKI_URL=http://fuseki_test:3030 backend \
               node scripts/proof-collective-provider-http.js
 
-      - name: Verify native Solid-OIDC interactive PKCE login and signed user token
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
-            exec -T -e ATPROTO_DPOP_LIVE_PROOF_ENABLED=confirmed backend \
-              node scripts/proof-collective-provider-oidc.js
-
       - name: Verify bounded grant tracking and revocation against real Redis
         run: |
           set -euo pipefail
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
             exec -T -e ATPROTO_CAPACITY_PROOF_DISPOSABLE=confirmed backend \
             node scripts/proof-oidc-grant-redis-live.js
+
+      - name: Verify native Solid-OIDC interactive PKCE login and signed user token
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            exec -T -e ATPROTO_DPOP_LIVE_PROOF_ENABLED=confirmed backend \
+              node scripts/proof-collective-provider-oidc.js
 
       - name: Diagnostics on failure
         if: failure()

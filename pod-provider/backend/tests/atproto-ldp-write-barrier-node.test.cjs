@@ -136,6 +136,45 @@ test('loopback development URLs are fenced and invalid provider origins fail clo
   ), e => e.code === 503 && e.type === 'ATPROTO_LDP_FENCE_CONFIG_INVALID');
 });
 
+test('nested encodings, encoded path separators and malformed escapes cannot bypass the fence', () => {
+  on();
+  for (const uri of [
+    prefix + '%2569dentity-bindings/r1',
+    prefix + '%252569dentity-bindings/r1',
+    prefix + 'articles%2Fidentity-bindings/r1',
+    prefix + 'articles%252Fidentity-bindings/r1',
+    prefix + 'identity-bindings/%broken',
+    prefix + 'identity-bindings/r1?query=unsafe',
+    prefix + 'identity-bindings/r1#section'
+  ]) {
+    assert.equal(guard.protectedPath(uri, root), true, 'Expected protected: ' + uri);
+    assert.throws(() => ldp.hooksResource.before.patch({
+      params: { resourceUri: uri }
+    }), e => e.code === 409, 'Expected rejection: ' + uri);
+  }
+  assert.equal(guard.protectedPath(prefix + 'articles/r1?preview=1', root), true,
+    'An ambiguous local query target must fail closed');
+});
+
+test('root-container clear is stopped before iterating over user Pods', () => {
+  on();
+  assert.throws(() => ldp.hooksContainer.before.clear({
+    params: { containerUri: root }
+  }), e => e.code === 409);
+});
+
+test('the disabled barrier retains the ordinary write path without holding per-user state', () => {
+  off();
+  for (let i = 0; i < 1500; i++) {
+    assert.doesNotThrow(() => guard.assertNotManagedLdpMutation({
+      params: {
+        resourceUri: prefix + 'identity-bindings/r' + i,
+        containerUri: prefix + 'identity-bindings/'
+      }
+    }, root));
+  }
+});
+
 test('barriers are installed at the LdpService subservice hooks, not only ControlledContainerMixin', () => {
   assert.equal(typeof ldp.hooksResource.before.delete, 'function');
   assert.equal(typeof ldp.hooksResource.before.patch, 'function');

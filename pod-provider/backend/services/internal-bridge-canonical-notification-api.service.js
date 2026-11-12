@@ -29,7 +29,7 @@ const VALID_KINDS = new Set([
 
 const NOTIFICATION_KINDS = new Set(['ReactionAdd', 'ShareAdd', 'FollowAdd', 'PostCreate', 'DirectMessage']);
 
-const VALID_PROTOCOLS = new Set(['activitypub', 'atproto']);
+const VALID_PROTOCOLS = new Set(['activitypub', 'atproto', 'activitypods']);
 
 const AS_CONTEXT = 'https://www.w3.org/ns/activitystreams';
 
@@ -171,6 +171,13 @@ module.exports = {
           throw new MoleculerError('Missing or invalid actor object', 400, 'INVALID_INPUT');
         }
 
+        // The PostgreSQL ledger has a fixed 64-recipient bound; reject
+        // oversized mentions before any actor or object-owner lookup.
+        if (params.mentions !== undefined && (!Array.isArray(params.mentions) ||
+            params.mentions.length > 64)) {
+          throw new MoleculerError('Canonical mention list exceeds recipient budget',
+            400, 'INVALID_INPUT');
+        }
         const createdAt = String(params.createdAt || '').trim();
         if (!createdAt || !this.isValidIso8601(createdAt)) {
           throw new MoleculerError('Missing or invalid createdAt (must be ISO 8601)', 400, 'INVALID_INPUT');
@@ -200,7 +207,8 @@ module.exports = {
             ctx.meta.$statusCode = stored.duplicate ? 409 : 202;
             return {
               ok: true, durable: true, duplicate: stored.duplicate,
-              delivered: false, queuedRecipients: stored.recipients
+              delivered: false, queuedRecipients: stored.recipients,
+              canonicalIntentId
             };
           } catch (error) {
             // A database failure MUST NOT return 202, even when a prior

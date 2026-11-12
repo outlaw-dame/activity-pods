@@ -8,7 +8,7 @@ const { MoleculerError } = require('moleculer').Errors;
 const { SingleResourceContainerMixin } = require('@semapps/ldp');
 const { ACTIVITY_TYPES } = require('@semapps/activitypub');
 const CONFIG = require('../../config/config');
-const { authorizeOwnerSaiAction } = require('../utils/atproto-sai-owner-context');
+const { authorizeOwnerSaiActionForBroker } = require('../utils/atproto-sai-owner-context');
 
 module.exports = {
   name: 'auth-agent',
@@ -72,7 +72,7 @@ module.exports = {
       const webId = ctx.meta.webId;
       const account = await ctx.call('auth.account.findByWebId', { webId });
       ctx.meta.dataset = account.username;
-      const releaseOwnerContext = authorizeOwnerSaiAction(ctx, { owner: webId, app: appUri });
+      const releaseOwnerContext = await authorizeOwnerSaiActionForBroker(ctx, { owner: webId, app: appUri });
       try {
         // Force to get through network
         const app = await ctx.call('ldp.remote.getNetwork', { resourceUri: appUri });
@@ -123,7 +123,7 @@ module.exports = {
 
         return appRegistrationUri;
       } finally {
-        releaseOwnerContext();
+        await releaseOwnerContext();
       }
 
     },
@@ -133,7 +133,7 @@ module.exports = {
       const webId = ctx.meta.webId;
       const account = await ctx.call('auth.account.findByWebId', { webId });
       ctx.meta.dataset = account.username;
-      const releaseOwnerContext = authorizeOwnerSaiAction(ctx, { owner: webId, app: appUri });
+      const releaseOwnerContext = await authorizeOwnerSaiActionForBroker(ctx, { owner: webId, app: appUri });
       try {
         // Force to get through network
         const app = await ctx.call('ldp.remote.getNetwork', { resourceUri: appUri });
@@ -174,7 +174,7 @@ module.exports = {
 
         return appRegistrationUri;
       } finally {
-        releaseOwnerContext();
+        await releaseOwnerContext();
       }
 
     },
@@ -184,7 +184,7 @@ module.exports = {
       const webId = ctx.meta.webId;
       const account = await ctx.call('auth.account.findByWebId', { webId });
       ctx.meta.dataset = account.username;
-      const releaseOwnerContext = authorizeOwnerSaiAction(ctx, { owner: webId, app: appUri });
+      const releaseOwnerContext = await authorizeOwnerSaiActionForBroker(ctx, { owner: webId, app: appUri });
       try {
         const app = await ctx.call('applications.get', { appUri, webId });
         const appRegistration = await ctx.call('app-registrations.getForApp', { appUri, podOwner: webId });
@@ -214,7 +214,7 @@ module.exports = {
           }
         }
       } finally {
-        releaseOwnerContext();
+        await releaseOwnerContext();
       }
 
     }

@@ -34,7 +34,7 @@ function str(value, max) {
 }
 function validateBatch({ intentId, kind, protocol, recipients }) {
   if (!str(intentId, 512) || !str(kind, 64) ||
-      !['activitypub', 'atproto'].includes(protocol) ||
+      !['activitypub', 'atproto', 'activitypods'].includes(protocol) ||
       !Array.isArray(recipients) || recipients.length > MAX_RECIPIENTS) {
     throw invalid('PG_NOTIFY_INPUT_INVALID');
   }
@@ -215,7 +215,8 @@ function createCanonicalNotificationLedger({ pool } = {}) {
           [key(intentKey),key(recipientKey),workerToken,count,dead?'dead':'pending',delay]
         );
         if (dead) await client.query(
-          'INSERT INTO '+SCHEMA+'.quarantine (intent_key,recipient_key,reason_code,attempts) VALUES ($1,$2,$3,$4)',
+          'INSERT INTO '+SCHEMA+'.quarantine (intent_key,recipient_key,reason_code,attempts) ' +
+          'VALUES ($1,$2,$3,$4) ON CONFLICT (intent_key,recipient_key) DO NOTHING',
           [key(intentKey),key(recipientKey),reasonCode,count]
         );
         return { dead, attempts: count, retryDelayMs: dead?null:delay };

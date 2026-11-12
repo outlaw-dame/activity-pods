@@ -62,4 +62,28 @@ function hasAuthorizedOwnerParent(ctx, { owner, app }) {
     entry.requestID === ctx.requestID;
 }
 
-module.exports = { authorizeOwnerSaiAction, hasAuthorizedOwnerParent };
+
+// Owner authorization is only shared for explicitly protected managed-repo
+// clients. Unrelated Solid apps retain the existing local behavior with zero
+// Redis reads and writes, even when the disposable integration is enabled.
+function usesSharedOwnerProof(scope) {
+  if (process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED !== 'true') return false;
+  const raw = process.env.APODS_ATPROTO_SAI_FENCED_APPS || '';
+  return raw.length <= 8192 &&
+    raw.split(',').some(item => item.trim() === scope?.app);
+}
+
+async function authorizeOwnerSaiActionForBroker(ctx, scope) {
+  if (!usesSharedOwnerProof(scope)) return authorizeOwnerSaiAction(ctx, scope);
+  return require('./atproto-sai-distributed-owner-runtime').issueDistributedOwnerProof(ctx, scope);
+}
+
+async function hasAuthorizedOwnerParentForBroker(ctx, scope) {
+  if (!usesSharedOwnerProof(scope)) return hasAuthorizedOwnerParent(ctx, scope);
+  return require('./atproto-sai-distributed-owner-runtime').verifyDistributedOwnerProof(ctx, scope);
+}
+
+module.exports = {
+  authorizeOwnerSaiAction, hasAuthorizedOwnerParent,
+  authorizeOwnerSaiActionForBroker, hasAuthorizedOwnerParentForBroker
+};

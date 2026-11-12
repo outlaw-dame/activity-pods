@@ -51,7 +51,8 @@ test('durable notification bridge acknowledges only after successful PG commit',
   const h=host(),ctx={params,meta:{}};
   const result=await api.actions.ingest.handler.call(h,ctx);
   expect(result).toEqual({
-    ok:true,durable:true,duplicate:false,delivered:false,queuedRecipients:1
+    ok:true,durable:true,duplicate:false,delivered:false,queuedRecipients:1,
+    canonicalIntentId:params.canonicalIntentId
   });
   expect(ctx.meta.$statusCode).toBe(202);
   expect(h.notificationLedger.enqueue).toHaveBeenCalledWith({
@@ -141,4 +142,21 @@ test('untrusted redirect inbox never reaches federation and stays retryable',asy
   expect(broker.call).toHaveBeenCalledTimes(1);
   expect(ledger.fail).toHaveBeenCalledTimes(1);
   expect(ledger.finish).not.toHaveBeenCalled();
+});
+
+test('ActivityPods-native canonical notifications retain their origin protocol',async()=>{
+  const h=host(),ctx={params:{...params,sourceProtocol:'activitypods'},meta:{}};
+  const result=await api.actions.ingest.handler.call(h,ctx);
+  expect(result.canonicalIntentId).toBe(params.canonicalIntentId);
+  expect(h.notificationLedger.enqueue).toHaveBeenCalledWith(
+    expect.objectContaining({protocol:'activitypods'})
+  );
+});
+test('oversized mention fanout fails before querying local actors',async()=>{
+  const h=host();
+  const ctx={params:{...params,mentions:Array(65).fill(recipient)},meta:{}};
+  await expect(api.actions.ingest.handler.call(h,ctx))
+    .rejects.toMatchObject({code:400});
+  expect(h.resolveLocalRecipients).not.toHaveBeenCalled();
+  expect(h.notificationLedger.enqueue).not.toHaveBeenCalled();
 });

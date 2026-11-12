@@ -5,6 +5,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 const MAX_FRAME_BYTES = 64 * 1024;
 const MAX_CONNECTIONS = 2048;
 const MAX_BUFFERED_BYTES = 1024 * 1024;
+const MAX_OUTBOUND_FRAME_BYTES = 256 * 1024;
 const MAX_ACTIVE_HANDLERS = 8;
 const MAX_MESSAGES_PER_10S = 256;
 const HEARTBEAT_MS = 30000;
@@ -191,12 +192,21 @@ module.exports = {
         webSocket,
         send: (...args) => {
           if (webSocket.readyState !== WebSocket.OPEN) return;
-          if (webSocket.bufferedAmount > MAX_BUFFERED_BYTES) {
+          const data = args[0];
+          const bytes = typeof data === 'string' ? Buffer.byteLength(data)
+            : typeof data === 'number' ? Buffer.byteLength(String(data))
+            : Buffer.isBuffer(data) || ArrayBuffer.isView(data) ? data.byteLength
+            : data instanceof ArrayBuffer ? data.byteLength : NaN;
+          // A frame can consume more memory than the entire existing send
+          // backlog. Enforce BOTH the single-frame and queued-byte limits.
+          if (!Number.isSafeInteger(bytes) || bytes > MAX_OUTBOUND_FRAME_BYTES) {
+            webSocket.close(1009, 'Message too large');
+            return;
+          }
+          if (webSocket.bufferedAmount + bytes > MAX_BUFFERED_BYTES) {
             webSocket.close(1013, 'Slow client');
             return;
           }
-          // The legacy unbound webSocket.send loses its receiver when
-          // called as connection.send; invoke on the socket explicitly.
           return webSocket.send(...args);
         }
       };

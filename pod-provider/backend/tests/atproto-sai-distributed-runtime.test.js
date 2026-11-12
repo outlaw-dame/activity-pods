@@ -17,7 +17,8 @@ const markerKeys=[
   'APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED',
   'APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED',
   'APODS_SAI_DISTRIBUTED_OWNER_REDIS_URL',
-  'APODS_SAI_DISTRIBUTED_OWNER_HMAC_KEY'
+  'APODS_SAI_DISTRIBUTED_OWNER_HMAC_KEY',
+  'APODS_ATPROTO_SAI_FENCED_APPS'
 ];
 const original=Object.fromEntries(markerKeys.map(k=>[k,process.env[k]]));
 let liveStore;
@@ -41,6 +42,7 @@ beforeEach(async()=>{
   process.env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE='confirmed';
   process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED='true';
   process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED='true';
+  process.env.APODS_ATPROTO_SAI_FENCED_APPS=app;
   process.env.APODS_SAI_DISTRIBUTED_OWNER_REDIS_URL='redis://127.0.0.1:6379/15';
   process.env.APODS_SAI_DISTRIBUTED_OWNER_HMAC_KEY=
     crypto.randomBytes(32).toString('base64url');
@@ -87,6 +89,25 @@ test('production and untrusted Redis hosts fail before creating a connection',as
   await expect(issueDistributedOwnerProof(parent(),{owner,app}))
     .rejects.toMatchObject({code:'SAI_DISTRIBUTED_CONFIG_INVALID'});
   expect(Redis).not.toHaveBeenCalled();
+});
+test('unrelated Solid apps never open Redis in distributed test mode',async()=>{
+  const unrelated='https://paper.example.test/unrelated-app';
+  const ctx=parent('unrelated-application');
+  const release=await authorizeOwnerSaiActionForBroker(ctx,{
+    owner,app:unrelated
+  });
+  expect(Redis).not.toHaveBeenCalled();
+  const child={requestID:ctx.requestID,meta:{
+    webId:'system',apodsNativeSaiOwnerProof:ctx.meta.apodsNativeSaiOwnerProof
+  }};
+  expect(await hasAuthorizedOwnerParentForBroker(child,{
+    owner,app:unrelated
+  })).toBe(false);
+  // The cross-replica proof is deliberately absent. On a same-node SAI
+  // action, the old bounded nonce remains valid for unrelated apps.
+  const {hasAuthorizedOwnerParent}=require('../services/utils/atproto-sai-owner-context');
+  expect(hasAuthorizedOwnerParent(child,{owner,app:unrelated})).toBe(true);
+  await release();
 });
 test('owner context cannot issue proof to app impersonation',async()=>{
   const ctx=parent();ctx.meta.impersonatedUser=owner;

@@ -30,6 +30,7 @@ process.env.APODS_SAI_DISTRIBUTED_OWNER_REDIS_URL=uri.toString();
 process.env.APODS_ATPROTO_SAI_OWNER_DISTRIBUTED_ENABLED='true';
 process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED='true';
 process.env.APODS_ATPROTO_TEST_STORAGE_DISPOSABLE='confirmed';
+process.env.APODS_ATPROTO_SAI_FENCED_APPS='https://app-e2e.test:3443/clients/paper';
 
 const owner='https://paper-e2e.test:3443/alice';
 const app='https://app-e2e.test:3443/clients/paper';

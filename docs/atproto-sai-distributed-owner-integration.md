@@ -5,7 +5,8 @@
 The native `auth-agent.registerApp`, `upgradeApp`, and `removeApp`
 continue verifying the actual Pod owner through the provider's
 normal Solid-OIDC authentication and SAI workflow. They now call an
-async proof adapter. When the new flag is **off**, this delegates to the
+async proof adapter. When the new flag is **off**, or an application is not in the
+approved native-ATProto SAI app allowlist, this delegates to the
 original bounded process-local nonce and makes no Redis connection.
 When enabled in a disposable test, the owner action issues a
 cryptographically signed, scoped proof in Redis. Nested SAI

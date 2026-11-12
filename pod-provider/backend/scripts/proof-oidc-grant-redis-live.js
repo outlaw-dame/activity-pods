@@ -133,6 +133,23 @@ async function main() {
   assert.equal(await redis.llen('grant:' + legacy), 0);
   assert.equal(await redis.exists(list[0]), 0);
   assert.equal(await redis.exists(list[list.length - 1]), 0);
+  // Estimate the storage footprint of the actual DPoP replay-key format.
+  // MEMORY USAGE reports Redis allocation for the sample keys, not the
+  // process's complete RSS or allocator fragmentation. It cannot be used
+  // as a cloud pricing quote.
+  const sampleKeys = Array.from({ length: 32 }, () =>
+    'atproto:dpop:replay:' + crypto.randomBytes(32).toString('hex')
+  );
+  for (const key of sampleKeys) {
+    assert.equal(await redis.set(key, '1', 'EX', 130, 'NX'), 'OK');
+  }
+  const used = await Promise.all(sampleKeys.map(k => redis.memory('USAGE', k)));
+  assert(used.every(bytes => Number.isSafeInteger(bytes) && bytes > 0));
+  const replaySampleBytesPerKey = Math.round(
+    used.reduce((sum, n) => sum + n, 0) / used.length
+  );
+  await redis.del(...sampleKeys);
+
   const durationMs = Math.round(performance.now() - started);
   console.log(JSON.stringify({
     success: true, name: 'oidc-grant-index-real-redis',
@@ -142,6 +159,9 @@ async function main() {
     multiProcessAccepted: workers.reduce((sum, w) => sum + w.accepted, 0),
     multiProcessRejected: workers.reduce((sum, w) => sum + w.rejected, 0),
     revokedLegacyTokens: list.length, durationMs,
+    replaySampleBytesPerKey,
+    modeledReplayMegabytesAt1000Rps:
+      Number((replaySampleBytesPerKey * 1000 * 130 / 1048576).toFixed(2)),
     heapUsedBytes: process.memoryUsage().heapUsed
   }));
 }

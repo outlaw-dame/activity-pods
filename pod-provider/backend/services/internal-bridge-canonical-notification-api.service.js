@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { Errors: WebErrors } = require('moleculer-web');
 const CONFIG = require('../config/config');
+const { mapWithConcurrency } = require('../utils/activitypub-delivery-planner');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,6 +55,7 @@ module.exports = {
   created() {
     // In-memory idempotency set. Capped at dedupeMaxEntries to prevent unbounded growth.
     this.processedIds = new Set();
+    this.inFlightIds = new Set();
   },
 
   async started() {
@@ -139,60 +141,60 @@ module.exports = {
           throw new MoleculerError('Missing or invalid createdAt (must be ISO 8601)', 400, 'INVALID_INPUT');
         }
 
-        // --------------- Idempotency check ---------------
+        // Only completed events are duplicates. Never acknowledge an in-flight
+        // delivery as processed: a worker crash or a failed Pod call must remain
+        // replayable. This set is local to one replica, not durable authority.
         if (this.processedIds.has(canonicalIntentId)) {
           ctx.meta.$statusCode = 409;
           return { ok: true, duplicate: true };
         }
-
-        // --------------- Ignore non-notification kinds early ---------------
-        if (!NOTIFICATION_KINDS.has(kind)) {
-          this.processedIds.add(canonicalIntentId);
-          this.trimDedupeSet();
-          ctx.meta.$statusCode = 202;
-          return { ok: true, delivered: false, recipients: [], duplicate: false, reason: 'non-notification kind' };
+        if (this.inFlightIds.has(canonicalIntentId) || this.inFlightIds.size >= 128) {
+          throw new MoleculerError('Bridge delivery is already in progress or at capacity',
+            503, 'BRIDGE_DELIVERY_BUSY');
         }
-
-        // --------------- Resolve recipients and deliver ---------------
-        let delivered = false;
-        let deliveredRecipients = [];
-
+        this.inFlightIds.add(canonicalIntentId);
         try {
+          if (!NOTIFICATION_KINDS.has(kind)) {
+            this.processedIds.add(canonicalIntentId);
+            this.trimDedupeSet();
+            ctx.meta.$statusCode = 202;
+            return { ok: true, delivered: false, recipients: [], duplicate: false, reason: 'non-notification kind' };
+          }
+
           const actorUri = await this.resolveActorUri(ctx, params.actor);
           const localRecipients = await this.resolveLocalRecipients(ctx, params);
-
-          if (localRecipients.length > 0 && actorUri) {
-            deliveredRecipients = await this.deliverToLocalInboxes(ctx, params, localRecipients, actorUri);
-            delivered = deliveredRecipients.length > 0;
+          if (localRecipients.length > 0 && !actorUri) {
+            throw new Error('Canonical notification actor could not be resolved');
           }
-        } catch (err) {
-          // Log but don't fail — the sidecar treats non-2xx as an error and won't commit offset
-          this.logger.error('[CanonicalNotificationApi] Delivery error', {
-            canonicalIntentId,
-            kind,
-            error: err?.message || String(err)
+          const deliveredRecipients = localRecipients.length
+            ? await this.deliverToLocalInboxes(ctx, params, localRecipients, actorUri)
+            : [];
+          // Never persist completed status after an exception or partial
+          // delivery. Existing in-memory dedupe is only an optimization;
+          // cross-replica/exactly-once durability remains a separate gate.
+          this.processedIds.add(canonicalIntentId);
+          this.trimDedupeSet();
+          this.logger.info('[CanonicalNotificationApi] Canonical notification processed', {
+            canonicalIntentId, kind, sourceProtocol,
+            delivered: deliveredRecipients.length > 0,
+            recipientCount: deliveredRecipients.length
           });
+          ctx.meta.$statusCode = 202;
+          return {
+            ok: true,
+            delivered: deliveredRecipients.length > 0,
+            recipients: deliveredRecipients,
+            duplicate: false
+          };
+        } catch (err) {
+          this.logger.error('[CanonicalNotificationApi] Delivery failed and remains replayable', {
+            canonicalIntentId, kind, code: err?.code || err?.type || 'BRIDGE_DELIVERY_FAILED'
+          });
+          throw new MoleculerError('Canonical notification delivery not complete',
+            503, 'BRIDGE_DELIVERY_RETRYABLE');
+        } finally {
+          this.inFlightIds.delete(canonicalIntentId);
         }
-
-        // Mark as processed even if delivery partially failed, to prevent duplicate processing
-        this.processedIds.add(canonicalIntentId);
-        this.trimDedupeSet();
-
-        this.logger.info('[CanonicalNotificationApi] Canonical notification processed', {
-          canonicalIntentId,
-          kind,
-          sourceProtocol,
-          delivered,
-          recipientCount: deliveredRecipients.length
-        });
-
-        ctx.meta.$statusCode = 202;
-        return {
-          ok: true,
-          delivered,
-          recipients: deliveredRecipients,
-          duplicate: false
-        };
       }
     }
   },
@@ -247,7 +249,9 @@ module.exports = {
     // ---------------------------------------------------------------------------
 
     trimDedupeSet() {
-      const max = this.settings.dedupeMaxEntries;
+      const configured = this.settings.dedupeMaxEntries;
+      const max = Number.isSafeInteger(configured) && configured > 0
+        ? Math.min(configured, 10000) : 10000;
       while (this.processedIds.size > max) {
         const oldest = this.processedIds.values().next().value;
         this.processedIds.delete(oldest);
@@ -359,20 +363,22 @@ module.exports = {
         });
       }
 
-      const locals = [];
-      for (const actorUri of candidates) {
+      const candidateUris = [...candidates];
+      let lookupErrors = 0;
+      const checks = await mapWithConcurrency(candidateUris, 4, async actorUri => {
         try {
-          const isLocal = await ctx.call('activitypub.actor.isLocal', { actorUri });
-          if (isLocal) locals.push(actorUri);
+          return await ctx.call('activitypub.actor.isLocal', { actorUri }, { timeout: 5000 })
+            ? actorUri : null;
         } catch (err) {
+          lookupErrors++;
           this.logger.warn('[CanonicalNotificationApi] isLocal check failed', {
-            actorUri,
-            error: err?.message || String(err)
+            actorUri, code: err?.code || err?.type || 'LOOKUP_FAILED'
           });
+          return null;
         }
-      }
-
-      return locals;
+      });
+      if (lookupErrors) throw new Error('Local notification recipient resolution incomplete');
+      return checks.filter(Boolean);
     },
 
     // ---------------------------------------------------------------------------
@@ -537,62 +543,37 @@ module.exports = {
     // ---------------------------------------------------------------------------
 
     async deliverToLocalInboxes(ctx, payload, localRecipients, actorUri) {
-      const delivered = [];
-
-      for (const recipientWebId of localRecipients) {
+      let failures = 0;
+      // The old serial loop performed two broker calls for every recipient.
+      // Bounded parallelism lowers latency without allocating an unbounded
+      // Promise array or oversubscribing the Pod-cell service fabric.
+      const results = await mapWithConcurrency(localRecipients, 4, async recipientWebId => {
         try {
-          // Get local actor document to find their inbox URI
-          const actorDoc = await ctx.call('activitypub.actor.get', {
-            actorUri: recipientWebId,
-            webId: 'system'
-          });
-
-          if (!actorDoc) {
-            this.logger.warn('[CanonicalNotificationApi] Local actor not found', { recipientWebId });
-            continue;
+          const actorDoc = await ctx.call('activitypub.actor.get',
+            { actorUri: recipientWebId, webId: 'system' }, { timeout: 5000 });
+          const inboxUri = actorDoc?.inbox;
+          if (!this.isHttpUrl(inboxUri)) {
+            throw new Error('Local actor has no trusted inbox');
           }
-
-          const inboxUri = actorDoc.inbox;
-          if (!inboxUri || !this.isHttpUrl(inboxUri)) {
-            this.logger.warn('[CanonicalNotificationApi] Local actor has no resolvable inbox', {
-              recipientWebId,
-              inbox: inboxUri
-            });
-            continue;
-          }
-
           const activity = this.buildBridgeActivity(payload, recipientWebId, actorUri);
-
-          // Post to inbox. meta.webId = actorUri ensures the actor check in inbox.post passes.
-          // skipSignatureValidation is safe here because this is an internal API call
-          // from a trusted bridge service that has already authenticated with the bearer token.
-          await ctx.call(
-            'activitypub.inbox.post',
-            { collectionUri: inboxUri, ...activity },
-            { meta: { webId: actorUri, skipSignatureValidation: true } }
-          );
-
-          delivered.push(recipientWebId);
-
-          this.logger.debug('[CanonicalNotificationApi] Delivered bridge activity to inbox', {
-            recipientWebId,
-            inboxUri,
-            kind: payload.kind,
-            actorUri
-          });
+          await ctx.call('activitypub.inbox.post',
+            { ...activity, collectionUri: inboxUri },
+            { meta: { webId: actorUri, skipSignatureValidation: true }, timeout: 5000 });
+          return recipientWebId;
         } catch (err) {
-          this.logger.error('[CanonicalNotificationApi] Failed to deliver to inbox', {
-            recipientWebId,
-            kind: payload.kind,
-            error: err?.message || String(err),
-            code: err?.code,
-            type: err?.type
+          failures++;
+          this.logger.error('[CanonicalNotificationApi] Local inbox delivery failed', {
+            recipientWebId, kind: payload.kind,
+            code: err?.code || err?.type || 'DELIVERY_FAILED'
           });
-          // Continue to next recipient; partial delivery is better than none
+          return null;
         }
-      }
-
-      return delivered;
+      });
+      // Do not return a durable acceptance on partial delivery. A retry
+      // can duplicate already-emitted transient notifications until the
+      // future per-recipient durable idempotency ledger is implemented.
+      if (failures) throw new Error('One or more bridge inbox deliveries failed');
+      return results.filter(Boolean);
     }
   }
 };

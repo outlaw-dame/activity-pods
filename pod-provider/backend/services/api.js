@@ -13,6 +13,15 @@ module.exports = {
     // deadline beyond the benchmark client's non-replayable request timeout.
     httpServerTimeout: Number(process.env.APODS_HTTP_SERVER_TIMEOUT_MS || 300000),
     baseUrl: CONFIG.BASE_URL,
+    // WebSocket Origin is not covered by the HTTP CORS policy. Browser
+    // handshakes must match one of these exact origins; additional trusted
+    // Solid frontends can be configured explicitly.
+    wsAllowedOrigins: [
+      CONFIG.BASE_URL,
+      CONFIG.FRONTEND_URL,
+      ...(process.env.APODS_WS_ALLOWED_ORIGINS || '').split(',')
+    ].map(value => typeof value === 'string' ? value.trim() : '')
+      .filter(Boolean),
     port: CONFIG.PORT,
     cors: {
       origin: '*',

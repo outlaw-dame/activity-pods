@@ -111,7 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
-            exec -T -e FUSEKI_URL=http://fuseki_test:3030 backend \
+            exec -T -e FUSEKI_URL=http://fuseki_test:3030 \
+              -e ATPROTO_NATIVE_SAI_LIVE_PROOF_ENABLED=confirmed backend \
               node scripts/proof-collective-provider-http.js
 
       - name: Verify bounded grant tracking and revocation against real Redis

@@ -15,7 +15,7 @@ const rootCid = 'bafyre' + 'a'.repeat(53);
 const rev = '2222222222222';
 const scope = Object.freeze({
   accountId, appUri, grantUri, did, epoch: '1',
-  operation: 'project', rootCid, rev
+  operation: 'project', projectionFence: '1', rootCid, rev
 });
 const consent = consentSubject(accountId, appUri);
 
@@ -29,7 +29,9 @@ test('provider HMAC ticket is 30-second, operation and exact immutable-head scop
     { ...scope, rootCid: 'bafyre' + 'b'.repeat(53) },
     { ...scope, rev: '3333333333333' },
     { ...scope, epoch: '2' },
-    { ...scope, operation: 'revoke', rootCid: null, rev: null },
+    { ...scope, projectionFence: '2' },
+    { ...scope, projectionFence: null },
+    { ...scope, operation: 'revoke', projectionFence: null, rootCid: null, rev: null },
     { ...scope, appUri: 'https://evil.example/app' },
     { ...scope, grantUri: 'https://evil.example/grant' },
     { ...scope, did: 'did:plc:' + 'b'.repeat(24) }
@@ -37,6 +39,15 @@ test('provider HMAC ticket is 30-second, operation and exact immutable-head scop
     assert.throws(() => authority.verify(signed, mismatch),
       e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
   }
+  // A recycled v1 operation ticket is missing independent PG recovery
+  // fencing and cannot authorize any v2 project operation.
+  assert.throws(() => authority.issue({
+    ...scope, projectionFence: undefined
+  }), e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
+  const second = authority.issue({ ...scope, epoch: '1', projectionFence: '2' });
+  assert.equal(authority.verify(second, { ...scope, projectionFence: '2' }).projectionFence, '2');
+  assert.throws(() => authority.verify(second, scope),
+    e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
   const tampered = signed.slice(0,-1) + (signed.endsWith('A') ? 'B' : 'A');
   assert.throws(() => authority.verify(tampered, scope), e =>
     e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');

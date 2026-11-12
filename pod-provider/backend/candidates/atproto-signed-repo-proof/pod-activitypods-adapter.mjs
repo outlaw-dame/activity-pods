@@ -61,7 +61,7 @@ function containsExactly(values, requested) {
   return entries.length > 0 && entries.length <= 32 &&
     entries.some(x => scalar(x) === requested);
 }
-function scope({ accountId, did, appUri, grantUri, epoch, operation, rootCid = null, rev = null }) {
+function scope({ accountId, did, appUri, grantUri, epoch, operation, projectionFence = null, rootCid = null, rev = null }) {
   canonicalUrl(accountId);
   canonicalUrl(appUri);
   canonicalUrl(grantUri);
@@ -70,10 +70,17 @@ function scope({ accountId, did, appUri, grantUri, epoch, operation, rootCid = n
       !['bootstrap', 'project', 'revoke'].includes(operation)) {
     deny('POD_PROJECTION_SCOPE_INVALID', 'Invalid protected repository scope');
   }
-  if (operation === 'project' && (!CID.test(rootCid || '') || !TID.test(rev || ''))) {
-    deny('POD_PROJECTION_SCOPE_INVALID', 'Project ticket must bind the verified signed repository root and revision');
+  if (operation === 'project') {
+    if (!CID.test(rootCid || '') || !TID.test(rev || '') ||
+        typeof projectionFence !== 'string' || !FENCE.test(projectionFence) ||
+        BigInt(projectionFence) > MAX) {
+      deny('POD_PROJECTION_SCOPE_INVALID',
+        'Project authority requires exact signed root, revision and PG recovery lease fence');
+    }
+  } else if (projectionFence !== null || rootCid !== null || rev !== null) {
+    deny('POD_PROJECTION_SCOPE_INVALID', 'Non-project operations must not carry a repository lease fence');
   }
-  return Object.freeze({ accountId, did, appUri, grantUri, epoch, operation, rootCid, rev });
+  return Object.freeze({ accountId, did, appUri, grantUri, epoch, operation, projectionFence, rootCid, rev });
 }
 function checkBinding(binding, location, did) {
   if (!binding || binding.id !== location.resourceUri ||
@@ -85,12 +92,12 @@ function checkBinding(binding, location, did) {
     deny('POD_PROJECTION_IDENTITY_DRIFT', 'Canonical LDP identity association differs');
   }
 }
-function checkProjected(binding, expected, epoch) {
+function checkProjected(binding, expected, projectionFence) {
   checkBinding(binding, expected.location, expected.did);
   if (binding.repoInitialized !== true ||
       binding.repoRootCid !== expected.rootCid ||
       binding.repoRev !== expected.rev ||
-      binding.repoProjectionFence !== epoch) {
+      binding.repoProjectionFence !== projectionFence) {
     deny('POD_PROJECTION_READBACK_MISMATCH', 'Protected LDP read-back does not match CAS');
   }
 }
@@ -105,6 +112,11 @@ function grantResource(result, resourceUri) {
  * The issuer of 'operationTickets' stays in trusted provider code. 'call'
  * invokes actual ActivityPods Moleculer actions with fresh, independently
  * verified credentials, rather than trusting inherited ctx.meta.
+ *
+ * `epoch` here is the current SAI consent revision; `projectionFence` is
+ * the independently increasing PostgreSQL recovery lease_epoch. These are
+ * distinct: a crashed worker may retry with a higher PG fence while the
+ * same SAI grant remains authorized at the original consent revision.
  *
  * The expectedRepoShapeTree must be an explicitly configured, installed
  * per-app SAI DataGrant shape; it is NOT inferred from arbitrary input.
@@ -178,10 +190,22 @@ export function createPodActivityPodsProjection({
     // freshness. Neither ctx.meta.webId nor ctx.meta.impersonatedUser is proof.
     const verified = await invoke('jwk.verifyToken', { token });
     const time = Math.floor(now() / 1000);
-    const audienceOk = verified?.aud === appUri ||
-      (Array.isArray(verified?.aud) && verified.aud.length === 1 && verified.aud[0] === appUri);
+    // Solid-OIDC tokens must include BOTH the client and the "solid"
+    // audience. An app-only ID token is not a conformant Solid-OIDC ID token.
+    // An independently verified DPoP request is still required before live
+    // activation; the cnf claim alone is not proof of possession.
+    const audiences = verified?.aud;
+    const audienceOk = Array.isArray(audiences) &&
+      audiences.length >= 2 && audiences.length <= 8 &&
+      audiences.every(x => typeof x === 'string' && x.length > 0) &&
+      new Set(audiences).size === audiences.length &&
+      audiences.includes(appUri) && audiences.includes('solid');
+    const boundKeyOk = typeof verified?.cnf?.jkt === 'string' &&
+      /^[A-Za-z0-9_-]{43}$/u.test(verified.cnf.jkt);
     if (!verified || verified.iss !== expectedIssuer || !audienceOk ||
         verified.azp !== appUri || verified.webid !== accountId ||
+        typeof verified.sub !== 'string' || !verified.sub ||
+        !boundKeyOk ||
         !Number.isInteger(verified.iat) || !Number.isInteger(verified.exp) ||
         verified.iat > time + 5 || verified.iat < time - 300 ||
         verified.exp <= time) {
@@ -269,9 +293,10 @@ export function createPodActivityPodsProjection({
     return Object.freeze({ accountId, status: 'active', epoch: '1' });
   }
   async function project({
-    accountId, did, appUri, grantUri, epoch, ticket, oidcToken, rootCid, rev
+    accountId, did, appUri, grantUri, epoch, projectionFence, ticket, oidcToken, rootCid, rev
   }) {
-    const s = scope({ accountId, did, appUri, grantUri, epoch, operation: 'project', rootCid, rev });
+    const s = scope({ accountId, did, appUri, grantUri, epoch, operation: 'project',
+      projectionFence, rootCid, rev });
     authorize(ticket, s);
     const location = await locate(accountId);
     await oidc(oidcToken, accountId, appUri);
@@ -285,20 +310,21 @@ export function createPodActivityPodsProjection({
       dataset: location.dataset, webId: 'system',
       query: buildFencedRepoProjectionSparql({
         resourceUri: location.resourceUri, graphUri,
-        accountId, did, rootCid, rev, fence: epoch,
+        accountId, did, rootCid, rev, fence: projectionFence,
         consentFence: { subjectUri: prior.subjectUri, grantUri, revision: epoch }
       })
     });
     // Never trust Fuseki HTTP 2xx as CAS success: LDP read-back must match,
     // the durable consent must still be active and the SAI grant still exist.
-    checkProjected(await binding(location, did), { location, did, rootCid, rev }, epoch);
+    checkProjected(await binding(location, did), { location, did, rootCid, rev }, projectionFence);
     const after = await consent(location, appUri, grantUri);
     if (after.status !== 'active' || after.revision !== epoch) {
       deny('POD_CONSENT_NOT_ACTIVE', 'Revoked SAI grant after RDF write');
     }
     await sai(location, appUri, grantUri);
     await oidc(oidcToken, accountId, appUri);
-    return Object.freeze({ projected: true, accountId, did, rootCid, rev, epoch });
+    return Object.freeze({ projected: true, accountId, did, rootCid, rev,
+      consentRevision: epoch, projectionFence });
   }
   async function revoke({ accountId, did, appUri, grantUri, epoch, ticket }) {
     const s = scope({ accountId, did, appUri, grantUri, epoch, operation: 'revoke' });
@@ -323,12 +349,13 @@ export function createPodActivityPodsProjection({
     }
     return Object.freeze({ revoked: true, accountId, epoch: after.revision });
   }
-  async function check({ accountId, did, appUri, grantUri, epoch, oidcToken, rootCid, rev }) {
-    scope({ accountId, did, appUri, grantUri, epoch, operation: 'project', rootCid, rev });
+  async function check({ accountId, did, appUri, grantUri, epoch, projectionFence, oidcToken, rootCid, rev }) {
+    scope({ accountId, did, appUri, grantUri, epoch, operation: 'project',
+      projectionFence, rootCid, rev });
     const location = await locate(accountId);
     await oidc(oidcToken, accountId, appUri);
     await sai(location, appUri, grantUri);
-    checkProjected(await binding(location, did), { location, did, rootCid, rev }, epoch);
+    checkProjected(await binding(location, did), { location, did, rootCid, rev }, projectionFence);
     const active = await consent(location, appUri, grantUri);
     if (active.status !== 'active' || active.revision !== epoch) {
       deny('POD_CONSENT_NOT_ACTIVE', 'Revoked grant cannot imply repository readiness');
@@ -337,7 +364,8 @@ export function createPodActivityPodsProjection({
     // also independently verify the signed CAR/MST/DID key, native outbox
     // and durable recovered lease at the exact head. Do not expose a
     // misleading ready:true result from this independent adapter.
-    return Object.freeze({ projectionVerified: true, accountId, did, epoch });
+    return Object.freeze({ projectionVerified: true, accountId, did,
+      consentRevision: epoch, projectionFence });
   }
   return Object.freeze({ locate, bootstrapConsent, project, revoke, check });
 }

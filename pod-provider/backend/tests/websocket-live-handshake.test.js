@@ -139,6 +139,19 @@ describe('live ws gateway handshake and lifecycle', () => {
     expect(f.service.wss.clients.size).toBe(0);
   });
 
+  test('shutdown destroys stalled pre-upgrade sockets without counter underflow',async()=>{
+    f.service.httpHandler=()=>new Promise(()=>{});
+    const attempts=Array.from({length:4},()=>connect(f.origin).then(()=>false,()=>true));
+    await new Promise(resolve=>setTimeout(resolve,30));
+    expect(f.service.pendingWsUpgrades).toBeGreaterThan(0);
+    expect(f.service.wsUpgradeReservations.size).toBeGreaterThan(0);
+    mixin.stopped.call(f.service);
+    expect(await Promise.all(attempts)).toEqual(Array(4).fill(true));
+    await new Promise(resolve=>setTimeout(resolve,20));
+    expect(f.service.pendingWsUpgrades).toBe(0);
+    expect(f.service.wsUpgradeReservations.size).toBe(0);
+  });
+
   test('shutdown detaches upgrade handlers and closes live WebSockets',async()=>{
     const ws=await connect(f.origin);
     expect(f.server.listenerCount('upgrade')).toBe(1);

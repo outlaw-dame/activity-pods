@@ -58,7 +58,10 @@ await expectError({expectedRootCid:'bafy'+'a'.repeat(50)},'PDS_PROOF_LATEST_COMM
 await expectError({expectedPdsUrl:'http://127.0.0.1:4000'},'PDS_PROOF_INVALID_ORIGIN');
 await expectError({expectedPdsUrl:'https://user:pass@pds.example'},'PDS_PROOF_INVALID_ORIGIN');
 await expectError({expectedPdsUrl:'https://pds.example/redirect'},'PDS_PROOF_INVALID_ORIGIN');
-await expectError({handle:'bob.pds.example'},'PDS_PROOF_DID_DOCUMENT_MISMATCH');
+await expectError({handle:'bob.pds.example'},'PDS_PROOF_HANDLE_MISMATCH');
+await expectError({
+  handle:'bob.pds.example',resolveHandle:async()=>did
+},'PDS_PROOF_DID_DOCUMENT_MISMATCH');
 await expectError({fetchImpl:async()=>new Response('',{status:302,headers:{location:'https://evil.example/'}})},
   'PDS_PROOF_RESPONSE_INVALID');
 const changedKey=await Secp256k1Keypair.create();

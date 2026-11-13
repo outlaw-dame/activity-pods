@@ -14,6 +14,16 @@ module.exports = {
         username: 'string|min:1'
       },
       handler(ctx) {
+        // Production cannot use a process-local map as a durable account
+        // lifecycle. The isolated PostgreSQL candidate must be integrated
+        // as a single-writer, crash-safe replacement before promotion.
+        if (process.env.NODE_ENV === 'production') {
+          throw new MoleculerError(
+            'Durable PostgreSQL account provisioning state is required',
+            503,
+            'ACCOUNT_PROVISIONING_DURABLE_STORE_REQUIRED'
+          );
+        }
         const provisioningId = `prov-${crypto.randomUUID()}`;
         const now = new Date().toISOString();
 

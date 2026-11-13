@@ -41,7 +41,13 @@ function identitySnapshot(a) {
 }
 function validateAccount(account, did, pdsOrigin) {
   if (!account) failure('RepoNotFound', 404);
-  if (account.did !== did || typeof account.webId !== 'string' ||
+  let webId;
+  try { webId = new URL(account.webId); }
+  catch { failure('PDS_CANDIDATE_IDENTITY_MISMATCH'); }
+  if (webId.protocol !== 'https:' || !webId.hostname ||
+      webId.href !== account.webId || webId.username || webId.password ||
+      webId.hash || webId.search ||
+      account.did !== did || typeof account.webId !== 'string' ||
       account.webId !== account.activityPubActorId ||
       account.atprotoSource !== 'local' || account.atprotoManaged !== true ||
       account.pdsUrl !== pdsOrigin || typeof account.handle !== 'string') {
@@ -173,6 +179,7 @@ export function createReadOnlySyncXrpc({
         'content-type': result.kind === 'car' ?
           'application/vnd.ipld.car' : 'application/json; charset=utf-8',
         'cache-control': 'no-store',
+        'access-control-allow-origin': '*',
         'x-content-type-options': 'nosniff'
       });
       return res.end(result.kind === 'car' ?
@@ -188,6 +195,7 @@ export function createReadOnlySyncXrpc({
         res.writeHead(status, {
           'content-type': 'application/json; charset=utf-8',
           'cache-control': 'no-store',
+          'access-control-allow-origin': '*',
           'x-content-type-options': 'nosniff'
         });
       }

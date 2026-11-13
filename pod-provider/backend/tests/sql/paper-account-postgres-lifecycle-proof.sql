@@ -67,7 +67,7 @@ BEGIN
       state='completed',
       atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
       pds_repo_root_cid='bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      pds_repo_rev='3kskdumj2wv',
+      pds_repo_rev='3kskdumj2wvab',
       signed_repo_proof_digest=decode(repeat('77',32),'hex'),
       pds_sync_proof_digest=decode(repeat('88',32),'hex')
     WHERE operation_id=op;
@@ -84,7 +84,7 @@ BEGIN
     operation_id,did,root_cid,repo_rev,signing_key_did,car_bytes,car_sha256
   ) VALUES (
     op,'did:plc:abcdefghijklmnopqrstuvwx',
-    'bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa','3kskdumj2wv',
+    'bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa','3kskdumj2wvab',
     'did:key:z' || repeat('1',40),
     decode(repeat('ab',64),'hex'),decode(repeat('77',32),'hex')
   );
@@ -92,7 +92,7 @@ BEGIN
     state='identities_ready',
     atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
     pds_repo_root_cid='bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    pds_repo_rev='3kskdumj2wv',
+    pds_repo_rev='3kskdumj2wvab',
     signed_repo_proof_digest=decode(repeat('77',32),'hex'),
     pds_sync_proof_digest=decode(repeat('88',32),'hex'),
     version=version+1

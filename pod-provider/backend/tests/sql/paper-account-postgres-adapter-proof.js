@@ -107,6 +107,15 @@ async function main() {
     'ACCOUNT_LEDGER_EXISTING_ACCOUNT_CHECK_UNAVAILABLE');
   const input=base('accountcandidatealice','candidate-key-1');
   assert.equal((await a.reserve(input)).state,'reserved');
+  const initialRecovery=await b.inspectForReconciliation(input);
+  assert.equal(initialRecovery.state,'reserved');
+  assert.equal(initialRecovery.signedGenesisStaged,false);
+  assert.equal(initialRecovery.reconciliationRequired,true);
+  assert.equal(initialRecovery.retryIdentityCreation,false);
+  await reject(b.inspectForReconciliation({...input,leaseToken:newId()}),
+    'ACCOUNT_LEDGER_RECOVERY_OUTCOME_UNKNOWN');
+  await reject(b.inspectForReconciliation({...input,operationKind:'legacy_migration'}),
+    'ACCOUNT_LEDGER_NEW_SIGNUP_ONLY');
   await reject(a.reserve(input),'ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
   await reject(a.reserve({...input,requestDigest:h('changed')}),'ACCOUNT_LEDGER_IDEMPOTENCY_MISMATCH');
   await reject(a.markAccountCreated({
@@ -122,6 +131,10 @@ async function main() {
   const staged=await a.stageSignedGenesis({...input,genesis});
   assert.equal(staged.staged,true);
   assert.equal(staged.replay,false);
+  const stagedRecovery=await b.inspectForReconciliation(input);
+  assert.equal(stagedRecovery.state,'account_created');
+  assert.equal(stagedRecovery.signedGenesisStaged,true);
+  assert.equal(stagedRecovery.retryIdentityCreation,false);
   assert.equal((await b.stageSignedGenesis({...input,genesis})).replay,true);
   const different=await generateSignedGenesis({
     did,signer:{keyDid:key.did(),sign:bytes=>key.sign(bytes)}
@@ -152,6 +165,10 @@ async function main() {
   });
   await reject(wrongSolid.complete(input),'ACCOUNT_LEDGER_SOLID_NOT_VERIFIED');
   assert.equal((await a.complete(input)).state,'completed');
+  const completedRecovery=await b.inspectForReconciliation(input);
+  assert.equal(completedRecovery.state,'completed');
+  assert.equal(completedRecovery.reconciliationRequired,false);
+  assert.equal(completedRecovery.retryIdentityCreation,false);
   const stored=await pa.query(
     'SELECT car_sha256,car_bytes FROM paper_account_candidate.signed_genesis WHERE operation_id=$1',
     [input.operationId]

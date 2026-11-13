@@ -156,6 +156,11 @@ module.exports = {
         } : {})
       };
       try {
+        // Validate the complete, raw client shape BEFORE the protocols
+        // overlay can shadow an existing DID/WebID or legacy migration
+        // field. Normalization must never erase evidence of an attempted
+        // import from this new-signup-only API.
+        assertUnifiedRequest(params);
         assertUnifiedRequest(requested);
       } catch (error) {
         throw new MoleculerError(error.message, 400, error.code);

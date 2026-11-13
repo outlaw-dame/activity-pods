@@ -9,6 +9,8 @@ describe('unified account: one authoritative signup and no fake production PDS',
   let broker;
   let signups;
   let atprotoRepeat;
+  let markPhase;
+  let finalize;
   const input = {
     username: 'alice', email: 'alice@example.test', password: 'correct-horse-example',
     profile: { displayName: 'Alice' }
@@ -24,14 +26,16 @@ describe('unified account: one authoritative signup and no fake production PDS',
     atprotoRepeat = jest.fn(async () => {
       throw new Error('Repeated PLC provisioning is prohibited');
     });
+    markPhase = jest.fn(() => ({ ok: true }));
+    finalize = jest.fn(() => ({ ok: true }));
     broker = new ServiceBroker({ logger: false });
     broker.createService({ name: 'provider-capabilities', actions: {
       assertAccountProvisioningGrant: () => ({ allowed: true })
     }});
     broker.createService({ name: 'account-provisioning-state', actions: {
       begin: () => ({ provisioningId: 'prov-test' }),
-      markPhase: () => ({ ok: true }),
-      finalize: () => ({ ok: true })
+      markPhase,
+      finalize
     }});
     broker.createService({ name: 'accounts', actions: { create: signups } });
     broker.createService({ name: 'webid-provisioning', actions: {
@@ -85,6 +89,36 @@ describe('unified account: one authoritative signup and no fake production PDS',
       meta: { accountProvisioning: { capabilityId: 'provider.account.provisioning' } }
     })).rejects.toMatchObject({ code: 503 });
     expect(atprotoRepeat).not.toHaveBeenCalled();
+  });
+  it('marks uncertain state instead of failed when signup RPC may have committed a PLC operation', async () => {
+    signups.mockRejectedValueOnce(new Error('Transport closed after PLC submission'));
+    await expect(broker.call('unified-account.create', input, {
+      meta: { accountProvisioning: { capabilityId: 'provider.account.provisioning' } }
+    })).rejects.toMatchObject({
+      code: 503, type: 'ACCOUNT_PROVISIONING_UNCERTAIN',
+      data: { retryable: false }
+    });
+    expect(markPhase).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'canonical_account', status: 'reconciliation_required'
+    }));
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'reconciliation_required'
+    }));
+    expect(atprotoRepeat).not.toHaveBeenCalled();
+  });
+  it('preserves the same uncertain state when persisted DID contradicts signup evidence', async () => {
+    signups.mockResolvedValueOnce({
+      canonicalAccountId: webId, signupProvisioning: {
+        webId, actorId: webId, did: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
+        atprotoHandle: 'alice.pods.example', repoInitialized: true
+      }
+    });
+    await expect(broker.call('unified-account.create', input, {
+      meta: { accountProvisioning: { capabilityId: 'provider.account.provisioning' } }
+    })).rejects.toMatchObject({ type: 'ACCOUNT_PROVISIONING_UNCERTAIN', code: 503 });
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'reconciliation_required'
+    }));
   });
   it('does not treat metadata placeholders as real PDS bootstrap in production', async () => {
     const former = process.env.NODE_ENV;

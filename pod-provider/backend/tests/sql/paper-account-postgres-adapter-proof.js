@@ -36,6 +36,8 @@ async function main() {
     await import('../../candidates/atproto-repo-genesis.mjs');
   const { verifyPdsReadiness } =
     await import('../../candidates/atproto-pds-readiness.mjs');
+  const { createProviderHandleResolver } =
+    await import('../../candidates/provider-handle-resolver.mjs');
   const did='did:plc:abcdefghijklmnopqrstuvwx';
   const handle='alice.pds.example';
   const pds='https://pds.example',plc='https://plc.example';
@@ -63,6 +65,11 @@ async function main() {
     assert(response, 'unexpected external fixture URL');
     return response.clone();
   };
+  const resolveHandle=createProviderHandleResolver({
+    providerDomain:'pds.example', allowFixture:true,
+    lookupTxt:async name=>name==='_atproto.'+handle
+      ? [['did='+did]] : []
+  });
   const authoritativeCall=async (action,params)=>{
     switch(action){
       case 'auth.account.findByUsername':
@@ -90,7 +97,7 @@ async function main() {
     verifyGenesis:verifySignedGenesisEvidence,
     verifyPds:opts=>verifyPdsReadiness({
       ...opts,plcDirectoryUrl:plc,fetchImpl:mockFetch,
-      resolveHandle:async candidate=>candidate===handle ? did : null
+      resolveHandle
     })
   });
   const a=factory(pa),b=factory(pb);

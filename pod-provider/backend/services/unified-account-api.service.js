@@ -1,3 +1,4 @@
+const { assertUnifiedRequest } = require('../utils/unified-identity-policy');
 const { Errors } = require('moleculer');
 const { MoleculerError } = Errors;
 const crypto = require('crypto');
@@ -29,6 +30,7 @@ module.exports = {
   actions: {
     async create(ctx) {
       let provisioningGrant = null;
+      let accountCreationStarted = false;
 
       try {
         const accountParams = this.normalizeAccountCreateParams(ctx.params || {});
@@ -60,6 +62,10 @@ module.exports = {
           return provisioningGrant.idempotency.response;
         }
 
+        // The RPC can commit a WebID or PLC side effect and then time out.
+        // From this point forward, no catch handler may mark the reservation
+        // definitively failed or release it for a second identity creation.
+        accountCreationStarted = true;
         ctx.meta.$statusCode = 201;
         const result = await ctx.call('unified-account.create', accountParams, {
           meta: {
@@ -68,18 +74,47 @@ module.exports = {
           }
         });
 
+        // An account may already be provisioned when this acknowledgment is
+        // lost. Do not return 201 or release its idempotency reservation as
+        // "failed": either action could cause a second DID on retry.
         try {
-          await ctx.call('provider-capabilities.completeAccountProvisioning', {
+          const committed = await ctx.call('provider-capabilities.completeAccountProvisioning', {
             grant: provisioningGrant,
             response: result,
             statusCode: ctx.meta.$statusCode || 201
           });
+          // A lost/expired reservation must never be interpreted as
+          // successful durable completion. For opt-in idempotency, the
+          // completed record must be visible to the authoritative store.
+          if (provisioningGrant.idempotencyKey &&
+              (committed?.ok !== true || committed.stored !== true)) {
+            throw new Error('Account completion reservation was not persisted');
+          }
         } catch (stateErr) {
-          this.logger.warn(`[UnifiedAccount] Failed to store provisioning idempotency completion: ${stateErr.message}`);
+          this.logger.error('[UnifiedAccount] Durable completion acknowledgement was not confirmed');
+          throw new MoleculerError(
+            'Account state requires reconciliation before a retry',
+            503,
+            'ACCOUNT_COMPLETION_UNCERTAIN',
+            { retryable: false }
+          );
         }
 
         return result;
       } catch (e) {
+        if (accountCreationStarted) {
+          // The underlying lifecycle may have succeeded before failing at
+          // the transport layer. Keep the reservation in-progress until the
+          // authoritative store reconciles WebID, AP, PLC and PDS.
+          const uncertainType = e.type === 'ACCOUNT_COMPLETION_UNCERTAIN'
+            ? e.type : 'ACCOUNT_PROVISIONING_UNCERTAIN';
+          throw new MoleculerError(
+            'Account provisioning outcome needs reconciliation before a retry',
+            503,
+            uncertainType,
+            { retryable: false }
+          );
+        }
         if (provisioningGrant && provisioningGrant.idempotency?.replay !== true) {
           try {
             await ctx.call('provider-capabilities.failAccountProvisioning', {
@@ -112,6 +147,19 @@ module.exports = {
     normalizeAccountCreateParams(params) {
       const accountParams = { ...params };
       const protocols = params.protocols && typeof params.protocols === 'object' ? params.protocols : null;
+      const requested = {
+        ...accountParams,
+        ...(protocols ? {
+          solid: protocols.solid ?? accountParams.solid,
+          activitypub: protocols.activitypub ?? accountParams.activitypub,
+          atproto: protocols.atproto ?? accountParams.atproto
+        } : {})
+      };
+      try {
+        assertUnifiedRequest(requested);
+      } catch (error) {
+        throw new MoleculerError(error.message, 400, error.code);
+      }
 
       if (protocols) {
         if (Object.prototype.hasOwnProperty.call(protocols, 'solid')) {
@@ -133,7 +181,7 @@ module.exports = {
           const atprotoConfig = atproto && typeof atproto === 'object' ? atproto : { enabled: atproto === true };
           accountParams.atproto = {
             ...(accountParams.atproto || {}),
-            enabled: atprotoConfig.enabled === true,
+            enabled: atprotoConfig.enabled !== false,
             requestedHandle:
               atprotoConfig.handle || atprotoConfig.requestedHandle || accountParams.atproto?.requestedHandle,
             didMethod: this.normalizeDidMethod(atprotoConfig.didMethod || accountParams.atproto?.didMethod),
@@ -160,9 +208,7 @@ module.exports = {
     },
 
     normalizeDidMethod(value) {
-      if (value === 'did:plc') return 'plc';
-      if (value === 'did:web') return 'web';
-      return value;
+      return value === 'did:plc' ? 'plc' : value;
     },
 
     requestedProtocolsFromAccountParams(params) {

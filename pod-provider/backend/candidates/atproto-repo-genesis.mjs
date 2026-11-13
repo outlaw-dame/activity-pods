@@ -62,8 +62,15 @@ export async function generateSignedGenesis({ did, signer, revOverride } = {}) {
       decoded.prev === null && decoded.rev === commit.rev &&
       decoded.sig instanceof Uint8Array && decoded.sig.byteLength === 64,
     'REPO_GENESIS_INVALID_COMMIT');
-  assert(await verifyCommitSig(decoded, signer.keyDid),
-    'REPO_GENESIS_SIGNATURE_NOT_VERIFIED');
+  let signatureVerified = false;
+  try {
+    signatureVerified = await verifyCommitSig(decoded, signer.keyDid);
+  } catch (_) {
+    // Official cryptographic verifiers may throw for invalid r/s scalars
+    // rather than return false; both outcomes must fail closed.
+    signatureVerified = false;
+  }
+  assert(signatureVerified === true, 'REPO_GENESIS_SIGNATURE_NOT_VERIFIED');
   const car = await blocksToCarFile(commit.cid, commit.newBlocks);
   assert(car.byteLength > 0 && car.byteLength <= MAX_GENESIS_CAR_BYTES,
     'REPO_GENESIS_SIZE_LIMIT');

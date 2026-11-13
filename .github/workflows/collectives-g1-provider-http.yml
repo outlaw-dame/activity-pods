@@ -11,6 +11,8 @@ on:
       - 'pod-provider/backend/services/sai/app-registrations.js'
       - 'pod-provider/backend/services/sai/auth-agent.js'
       - 'pod-provider/backend/services/solid/solid-oidc.js'
+      - 'pod-provider/backend/config/oidc-cors-policy.js'
+      - 'pod-provider/backend/tests/oidc-cors-policy.test.js'
       - 'pod-provider/backend/services/collective-consent-fence.service.js'
       - 'pod-provider/backend/services/utils/collective-access-policy.js'
       - '.github/workflows/collectives-g1-provider-http.yml'

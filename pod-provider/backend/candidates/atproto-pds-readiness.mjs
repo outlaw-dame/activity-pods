@@ -97,7 +97,8 @@ function canonicalDidDoc(doc,did,handle,pds) {
  */
 export async function verifyPdsReadiness({
   did,handle,expectedPdsUrl,plcDirectoryUrl='https://plc.directory',
-  expectedRootCid,expectedRev,fetchImpl=fetch,allowFixture=false
+  expectedRootCid,expectedRev,fetchImpl=fetch,allowFixture=false,
+  resolveHandle
 }={}) {
   const fixture=allowFixture===true&&process.env.NODE_ENV!=='production';
   if(!DID.test(did||'')||!HANDLE.test(handle||'')) fail('PDS_PROOF_INVALID_IDENTITY');
@@ -108,6 +109,34 @@ export async function verifyPdsReadiness({
     fail('PDS_PROOF_INVALID_EXPECTATION');
   }
   if(typeof fetchImpl!=='function') fail('PDS_PROOF_INVALID_TRANSPORT');
+  // The DID document claiming at://handle is necessary but insufficient.
+  // The handle must independently resolve back to this DID, through an
+  // authorized DNS TXT or HTTPS well-known resolver. Never rely solely on
+  // a PDS's own resolveHandle response, nor resolve arbitrary hostnames
+  // directly from an untrusted new-signup request in this module.
+  if(typeof resolveHandle!=='function') fail('PDS_PROOF_HANDLE_RESOLVER_REQUIRED');
+  const handleController=new AbortController();
+  const handleTimer=setTimeout(()=>handleController.abort(),5000);
+  handleTimer.unref?.();
+  let resolvedDid;
+  try {
+    resolvedDid=await Promise.race([
+      Promise.resolve().then(()=>resolveHandle(handle,{signal:handleController.signal})),
+      new Promise((_,reject)=>{
+        handleController.signal.addEventListener('abort',()=>{
+          reject(Object.assign(new Error('PDS_PROOF_HANDLE_LOOKUP_TIMEOUT'),{
+            code:'PDS_PROOF_HANDLE_LOOKUP_TIMEOUT'
+          }));
+        },{once:true});
+      })
+    ]);
+  } catch (_) {
+    fail('PDS_PROOF_HANDLE_RESOLUTION_UNAVAILABLE');
+  } finally {
+    clearTimeout(handleTimer);
+    handleController.abort();
+  }
+  if(resolvedDid!==did) fail('PDS_PROOF_HANDLE_MISMATCH');
   const doc=json(await getBounded(
     fetchImpl,`${plc}/${encodeURIComponent(did)}`,'application/did+ld+json, application/json',MAX_DOC
   ));

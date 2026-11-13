@@ -1,0 +1,243 @@
+## Scope: newly registered accounts only
+
+This implementation applies **exclusively to accounts created after the new
+unified-account onboarding flow is activated**. It does not migrate, import,
+re-key, backfill, link, overwrite or adopt any existing ActivityPods/Solid,
+ActivityPub, Bonfire or AT Protocol account. Existing accounts and their
+current authentication paths must continue operating unchanged.
+
+The public and internal new-account create policies reject attempts to
+supply an existing WebID, ActivityPub actor ID, `did:plc`, `did:web`,
+existing account reference, migration/import/linking request, or forced AT
+Protocol reprovisioning. Rejection occurs before an authorized app's
+provisioning reservation and before the signup RPC begins. New-account
+handles may be requested; existing signing authority may not be imported.
+
+When this candidate is activated later, reconciliation is allowed only for
+a *previously reserved new signup operation* with its same authorized
+idempotency key. Recovery must **not** search for legacy identities and
+adopt them into the new ledger. Migrating existing identities is a separate
+project with explicit account-owner consent, key custody design, compatibility
+testing, and a distinct operational rollback plan.
+
+# Unified account identity contract — mandatory WebID + ActivityPub + did:plc
+
+**Release status: PR proof; no live data migrated.** This contract applies to
+new account creation through the unified-account API and to the legacy
+production signup path. It does **not** change existing WebIDs, DIDs,
+usernames, PDS repositories or signing keys.
+
+A completed new account must have:
+
+1. A canonical HTTPS **WebID** that is also the **ActivityPub actor ID**.
+   The provider's internal account record identifier may remain distinct
+   from the public WebID; identity binding must remain unique and durable.
+2. A **did:plc** AT Protocol identity (not did:web), with identity mapping,
+   generated/managed keys in the existing secure key container and an
+   initialized ATProto PDS repository. The ATProto handle is a separate
+   mutable identifier, not a replacement for the DID.
+3. Existing public actor inbox/outbox/key metadata and WebID/Pod ACL
+   bootstrap. A DID alone does not imply a working ATProto account.
+
+The new account API rejects `solid.enabled=false`,
+`activitypub.enabled=false`, `atproto.enabled=false`, boolean
+`protocols` opt-outs and `atproto.didMethod=web` BEFORE account
+provisioning. The unified service enforces the contract again even for
+internal calls. If did:plc creation, PDS repo initialization or AP/WebID
+binding fails, the request must not be reported as a completed account.
+Production legacy `auth.signup` does not honor the older
+`APODS_AUTO_PROVISION_ATPROTO_ON_SIGNUP=false` bypass; this remains
+usable only by explicitly isolated non-production federation fixtures,
+which must never be represented as full account onboarding.
+
+## November 2026 implementation findings and safety fences
+
+The current `accounts.create` delegates to `auth.signup`. That action already
+performs the authoritative WebID, ActivityPub and optional ATProto phases.
+Re-invoking ATProto from the unified-account facade can create fresh signing
+keys and duplicate or conflict with submitted PLC operations. The facade now
+uses `signupProvisioning` evidence returned by `auth.signup`, performs a
+read-only AP actor readiness check, and checks the protected identity binding
+instead of repeating ATProto provisioning. A missing or inconsistent binding
+fails closed. It does not return or persist the login JWT in the account API.
+
+**Critical ATProto limitation:** `atproto-provisioning.initializeRepoState`
+currently writes a placeholder root CID and revision into the RDF identity
+binding; it does not create an actual signed repository commit/CAR on a
+working PDS. This PR now rejects this path in production even if a legacy
+binding already contains `repoInitialized=true`. Real PLC submission is a
+separate step and is not evidence of an initialized PDS. Production
+provisioning is explicitly blocked pending independently verified PDS
+repository creation and consistency, not silently declared complete.
+The production `auth.signup` endpoint now rejects before creating any account,
+WebID, signing key or PLC genesis operation while that repository adapter is
+missing. Existing account login is unchanged. This fail-fast gate must only
+be replaced by reviewed and verified real PDS bootstrap integration; an
+environment variable or boolean binding is not sufficient evidence.
+
+**Unknown RPC outcomes:** the API sets an irreversible-work boundary before
+invoking `unified-account.create`. If the call times out, throws after
+partial work, or returns but the completion ledger cannot confirm storage,
+it now returns `ACCOUNT_PROVISIONING_UNCERTAIN` or
+`ACCOUNT_COMPLETION_UNCERTAIN` without declaring the claim failed or
+allowing a new identity to be issued. Both paths have regression coverage.
+This conservatively preserves the reservation until explicit reconciliation,
+not indefinitely retried automatic signup.
+
+**Critical durability limitation:** `provider-capabilities` idempotency and
+`account-provisioning-state` phases currently use per-process Maps. Both
+must reject production reservations/starts, because a second Moleculer cell
+or restart can lose the only record of irreversible account creation. If an
+account has already been created and storing its completion fails, the API
+now returns `ACCOUNT_COMPLETION_UNCERTAIN`, does not report 201, and does
+not release the reservation as safely retryable.
+
+### PostgreSQL account control-plane candidate (not activated)
+
+- `pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql`
+  defines a **separate account lifecycle** schema with unique
+  provider-scoped username, provider/app/idempotency digest and optional
+  keyed-email-HMAC constraints. It does not replace the live
+  `@semapps/auth` accounts dataset or Group PostgreSQL control plane.
+- `pod-provider/backend/candidates/account-postgres-lifecycle.js` is an
+  explicitly injected, non-autoloaded pool adapter with transactional
+  `reserve → account_created → identities_ready → completed` transitions.
+  Unknown commits, stale leases and claims with an existing operation
+  **require reconciliation**, never automatic second DID issuance.
+- `paper-account-postgres-lifecycle.yml` runs disposable PostgreSQL
+  18 schema and transaction proofs. They assert username/idempotency
+  collisions, reject placeholder-PDS completion, coordinate two concurrent
+  clients on the same username, and demonstrate reservation survival after
+  a database restart. The **actual non-activated Node adapter** is also
+  exercised with two independent PostgreSQL connection pools in
+  `paper-account-postgres-adapter-proof.js`: reserve, transition,
+  completion, replay, expired/mismatched lease and conflict failure.
+  SHA `a477208` passed the SQL/adapter CI (run 43366957068).
+  These tests do not yet prove true PLC/PDS side effects, crash injection,
+  backup PITR or production authority integration.
+- No passwords, bearer tokens, recovery keys or raw email are kept in
+  this lifecycle table. Email, client idempotency keys and canonical request
+  fingerprints must be domain-separated **HMAC-SHA-256 under an external
+  provider-held key**, not unkeyed SHA-256 of low-entropy inputs. Key
+  versioning, rotation/replay continuity and key recovery remain mandatory
+  design work before activating this adapter.
+
+**Current new-signup authority bridge and evidence (November 13):**
+`new-signup-postgres-authority.js` binds the nonactivated ledger to the
+existing SemApps indexed `auth.account.findByUsername` lookup and the
+`solid-new-signup-proof.js` verifier. Only an operation tagged
+`new_signup` is permitted; SQL independently checks the same operation
+kind. A username already present in the legacy auth dataset is refused,
+not imported. A completed new signup can replay only its own matching
+idempotency digest, without repeating existing-username preflight or
+calling PLC again. Failure to check existing accounts fails closed.
+
+The PostgreSQL account candidate stores only immutable bounded
+digest/length evidence for the new signup's signed genesis CAR, rather
+than duplicating the repository blocks in a second authority. The
+canonical PDS repository storage must durably own the actual blocks.
+The candidate verifies the live PDS's latest-commit/CAR evidence
+against the resolved DID document before moving to
+`identities_ready`. The live-proof fingerprint includes the verified
+remote CAR digest as well as the staged genesis digest, even when
+both CARs have different valid block ordering. For `completed`, the new Solid verifier requires
+the exact canonical WebID, local ActivityPub actor, same `did:plc`,
+an existing SemApps account and complete local Solid resource bootstrap.
+A read-only `inspectForReconciliation` operation uses one indexed
+PostgreSQL lookup by provider/app/HMAC/lease; it never authorizes
+automatic identity recreation, even after an unknown database commit.
+
+The **real PDS server**, durable blockstore, identity-proof persistence,
+provider-held HMAC key rotation, real PLC submission replay, Solid-OIDC/SAI
+consent and live provisioning single-writer cutover are still not activated.
+The PostgreSQL proof uses disposable PostgreSQL and controlled PDS/PLC
+XRPC responses. A separate new CI proof now also starts **real loopback
+HTTP listeners** for PDS and PLC and verifies a genuinely signed v3 CAR
+over actual GET requests. Both proofs have hostile mismatch, oversize and
+unsafe redirect cases. They are test fixtures: no production PDS blockstore,
+public PLC submission, real user, or account migration is involved.
+The bounded SQL proof does not establish production throughput or cost
+metrics. See the exact-head workflow results in PR #134.
+
+**Bidirectional AT Protocol handle authority:** the new-signup verifier
+requires a DID document claim `at://handle` AND an independent resolution
+of that handle back to the same DID. The provider-controlled DNS TXT
+resolver queries only `_atproto.<new-account-handle>` within the configured
+provider domain, enforces record/response bounds and a lookup deadline,
+rejects conflicting or malformed DID records, and never follows an
+untrusted HTTPS URL from a signup field. Existing/custom handles remain
+outside this initial rollout. Fixture-only HTTP origins are confined to
+loopback; production rejects private and loopback origins and requires
+independently enforced DNS/egress filtering against rebinding.
+
+This check follows the official handle specification:
+https://atproto.com/specs/handle . Its existence does not replace
+real PDS credential, repository writing, Blob, service-auth or complete
+account lifecycle integration.
+
+**One PostgreSQL account authority at activation:** the repository already
+contains the older, also nonactivated `paper_account_candidate.accounts`
+lifecycle candidate (with its `transitions` ledger). This PR's
+`paper_account_candidate.operations` reservation/recovery ledger must
+eventually join **that one canonical account lifecycle**, not become a
+second account database or independently writable account registry.
+Disposable PostgreSQL 18 CI now loads both schema definitions together
+to prove they can coexist without an accidental duplicate namespace.
+That is a migration-compatibility test, **not** approval to enable two
+concurrent account reservation writers. The later production migration
+must choose a single atomic reservation/account transaction and one
+provider-authorized writer, enforce cross-table username uniqueness,
+and retire redundant candidate paths before activation.
+
+**Next required integration order:** a single authenticated provider
+provisioning grant and durable PostgreSQL claim; reuse the existing
+`auth.signup` authority for **future new registrations only**, replacing
+only their operational lifecycle; no existing identity migration occurs;
+checkpoint each completed side effect with exact operation ID; explicitly
+create and verify Pod/SAI/ACL resources; submit PLC once with reconciled
+directory state; bootstrap a real signed PDS repo; seal the WebID=AP actor
+and DID binding; atomically confirm completion. Test SIGKILL and unknown
+COMMIT, conflicting same-name requests, expired leases, failed PLC/PDS,
+actual Solid-OIDC consent revocation, database failover and PostgreSQL
+backup/restore before activating a new account path.
+
+PostgreSQL will own account/reservation transactions only **after** the
+single-writer migration gate. Jena remains canonical for Pod RDF and
+enforced Solid data rights. Separate read-only projections must not add a
+second mutable authority. The planned Group PostgreSQL migration remains
+a distinct consent-fenced cutover.
+
+ 
+## Reliability and migration acceptance (still required)
+
+- All phases (account reservation, Pod+WebID, AP, did:plc/PDS and
+  identity-binding storage) need an **idempotent durable lifecycle**;
+  crashing between phases must not cause a second DID, orphan a key or
+  leave a reused username independently provisioned. Use the existing
+  provisioning-state and identity binding services as the initial
+  integration points.
+- Test two concurrent signups for the same username and email,
+  repeated operation UUID, SIGKILL before and after did:plc submission,
+  PDS unavailable/slow, real PLC directory key and DID resolution,
+  same public actor URI after restart, full SAI/WAC and Solid-OIDC
+  readiness, durable restore and account deletion/export.
+- The previously failing distributed Solid bootstrap was corrected and
+  ActivityPods PR #136 merged after exact-head W3 1/2/4-replica acceptance
+  (run 43423753079). Revalidation against the squashed merge commit remains
+  a separate federation-sidecar CI pin. This does NOT substitute for
+  application-level Solid-OIDC consent, SAI revocation or new-account
+  PostgreSQL/PDS cutover acceptance.
+- Never put private signing keys or credentials in PostgreSQL shadow
+  profiles. If PostgreSQL later becomes the canonical auth-account
+  store, keep external WebID/AP/DID identifiers invariant through a
+  single-writer migration as described in
+  `docs/activitypods-postgres-account-and-groups-decision.md`.
+
+The code in this PR establishes **synchronous success invariants** but
+does not yet deliver the multi-node durable recovery/PLC-directory
+acceptance above. Keep production release/rollout dependent on the
+verified provisioning state machine, not only unit tests.
+
+References: https://atproto.com/specs/did-plc
+https://atproto.com/specs/atp
+https://solid.github.io/solid-oidc/

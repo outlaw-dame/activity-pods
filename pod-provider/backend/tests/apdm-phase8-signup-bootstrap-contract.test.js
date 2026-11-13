@@ -19,16 +19,22 @@ const MUTED_SOURCE = fs.readFileSync(
 const PHASE8_COMPOSE = fs.readFileSync(path.join(__dirname, '../../docker-compose-phase8.yml'), 'utf8');
 
 describe('APDM Phase 8 signup bootstrap contract', () => {
-  test('ATProto opt-out gates only ATProto after Tier 1 key and ActivityPub provisioning', () => {
+  test('production requires did:plc/PDS after Tier 1 key and ActivityPub provisioning; only isolated fixtures may defer it', () => {
     const keyWait = AUTH_SOURCE.indexOf('await this._waitForKeyContainerWithTimeout(ctx, webId);');
     const activityPubProvision = AUTH_SOURCE.indexOf("activitypub-provisioning.provisionForAccount");
-    const atprotoGate = AUTH_SOURCE.indexOf('if (this.settings.atproto.autoProvisionOnSignup)');
+    const mandatoryGate = AUTH_SOURCE.indexOf("process.env.NODE_ENV === 'production' ||");
     const atprotoProvision = AUTH_SOURCE.indexOf("atproto-provisioning.provisionForAccount");
+    const identityAssertion = AUTH_SOURCE.indexOf('assertUnifiedResult({');
+    const returnToken = AUTH_SOURCE.indexOf("auth.jwt.generateServerSignedToken");
 
     expect(keyWait).toBeGreaterThan(-1);
     expect(activityPubProvision).toBeGreaterThan(keyWait);
-    expect(atprotoGate).toBeGreaterThan(activityPubProvision);
-    expect(atprotoProvision).toBeGreaterThan(atprotoGate);
+    expect(mandatoryGate).toBeGreaterThan(activityPubProvision);
+    expect(AUTH_SOURCE).toContain('if (mandatoryAtproto) {');
+    expect(atprotoProvision).toBeGreaterThan(mandatoryGate);
+    expect(AUTH_SOURCE).toContain("didMethod: 'plc'");
+    expect(identityAssertion).toBeGreaterThan(atprotoProvision);
+    expect(returnToken).toBeGreaterThan(identityAssertion);
   });
 
   test('one internal action owns the full production-equivalent local bootstrap barrier', () => {

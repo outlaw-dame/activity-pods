@@ -1,6 +1,14 @@
 name: Backend checks
 
 on:
+  # Exact-head validation for the currently nonactivated unified-signup
+  # candidate. Its contents-API commits do not consistently dispatch PR CI.
+  push:
+    branches:
+      - feat/unified-mandatory-plc-identity
+    paths:
+      - 'pod-provider/backend/**'
+      - '.github/workflows/backend.yml'
   pull_request:
     paths:
       - 'pod-provider/backend/**'
@@ -112,7 +120,7 @@ jobs:
             -- \
             jest --testEnvironment=node \
               --roots=pod-provider/backend/tests \
-              --testPathIgnorePatterns='hashtag-conformance-matrix.test.js|create-unified-account.test.js'
+              --testPathIgnorePatterns='hashtag-conformance-matrix.test.js'
 
       - name: Run offline ATProto multibase smoke test
         run: yarn test:atproto:multibase

@@ -46,7 +46,19 @@ module.exports = {
           username,
           email: email || account?.email || null,
           createdAt: account?.createdAt || new Date().toISOString(),
-          status: account?.disabled ? 'disabled' : 'active'
+          status: account?.disabled ? 'disabled' : 'active',
+          // auth.signup already runs the authoritative WebID/AP/AT lifecycle.
+          // Retain its non-secret completion evidence for the unified facade;
+          // never pass its login token to this provisioning API.
+          signupProvisioning: {
+            webId: signupResult.webId,
+            actorId: signupResult.activityPubActorId || null,
+            activityPubHandle: signupResult.activityPubHandle || null,
+            did: signupResult.atprotoDid || null,
+            atprotoHandle: signupResult.atprotoHandle || null,
+            atprotoPdsUrl: signupResult.atprotoPdsUrl || null,
+            repoInitialized: signupResult.atprotoRepoInitialized === true
+          }
         };
       }
     }

@@ -1,0 +1,122 @@
+name: Paper Account PostgreSQL Lifecycle Candidate
+
+on:
+  # The GitHub App's contents commits can be pushed without reliably
+  # scheduling a pull_request synchronize run. Validate the exact candidate
+  # SHA on scoped branch pushes as well; this is not production activation.
+  push:
+    branches:
+      - feat/unified-mandatory-plc-identity
+    paths:
+      - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
+      - 'pod-provider/backend/tests/sql/**'
+      - 'pod-provider/backend/candidates/**'
+      - 'pod-provider/backend/utils/unified-identity-policy.js'
+      - '.github/workflows/paper-account-postgres-lifecycle.yml'
+  pull_request:
+    paths:
+      - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
+      - 'pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql'
+      - 'pod-provider/backend/tests/sql/paper-account-postgres-concurrency-proof.sh'
+      - 'pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js'
+      - 'pod-provider/backend/candidates/account-postgres-lifecycle.js'
+      - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
+      - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
+      - 'pod-provider/backend/candidates/provider-handle-resolver.mjs'
+      - 'pod-provider/backend/utils/unified-identity-policy.js'
+      - '.github/workflows/paper-account-postgres-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-postgres:
+    name: PostgreSQL 18 lifecycle constraints
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+      - name: Start isolated PostgreSQL 18 database
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name paper-account-pg-test \
+            -e POSTGRES_PASSWORD=disposable-ci-only \
+            -e POSTGRES_DB=paper_account_disposable \
+            -p 127.0.0.1:15432:5432 \
+            postgres:18
+          # pg_isready can briefly report healthy while initdb's temporary
+          # postmaster is stopping. Require a *real query* against the final
+          # database, then recheck after one second before starting DDL.
+          for attempt in $(seq 1 90); do
+            if docker exec -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+                psql -X -Atqc 'SELECT 1' -U postgres -d paper_account_disposable \
+                2>/dev/null | grep -qx 1; then
+              sleep 1
+              if docker exec -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+                  psql -X -Atqc 'SELECT 1' -U postgres -d paper_account_disposable \
+                  2>/dev/null | grep -qx 1; then exit 0; fi
+            fi
+            sleep 1
+          done
+          docker logs paper-account-pg-test 2>&1 | tail -n 70
+          exit 1
+      - name: Verify candidate schema and fail-closed transitions
+        run: |
+          set -euo pipefail
+          # Integration proof: the preexisting nonactivated canonical-account
+          # lifecycle and the new-signup operational ledger must be able to
+          # share the schema without a destructive/repeated CREATE SCHEMA.
+          # This does NOT activate two account authorities.
+          docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
+            < pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql
+          docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
+            < pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql
+          docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
+            < pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql
+      - name: Concurrent reservations and restart durability
+        run: |
+          set -euo pipefail
+          bash pod-provider/backend/tests/sql/paper-account-postgres-concurrency-proof.sh
+          docker restart paper-account-pg-test >/dev/null
+          ready=false
+          for attempt in $(seq 1 90); do
+            if docker exec -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+                psql -X -Atqc "SELECT count(*) FROM paper_account_candidate.operations WHERE username_key='same_concurrent_name';" \
+                -U postgres -d paper_account_disposable 2>/dev/null | grep -qx 1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+          echo 'account_pg_restart_durability_passed'
+
+      - name: Verify live adapter + signed CAR across two PostgreSQL pools
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/paper-account-pg-proof"
+          mkdir -p "$proof/candidates" "$proof/utils" "$proof/tests/sql"
+          cp pod-provider/backend/candidates/account-postgres-lifecycle.js "$proof/candidates/"
+          cp pod-provider/backend/candidates/solid-new-signup-proof.js "$proof/candidates/"
+          cp pod-provider/backend/candidates/new-signup-postgres-authority.js "$proof/candidates/"
+          cp pod-provider/backend/candidates/atproto-repo-genesis.mjs "$proof/candidates/"
+          cp pod-provider/backend/candidates/atproto-pds-readiness.mjs "$proof/candidates/"
+          cp pod-provider/backend/candidates/provider-handle-resolver.mjs "$proof/candidates/"
+          cp pod-provider/backend/utils/unified-identity-policy.js "$proof/utils/"
+          cp pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js "$proof/tests/sql/"
+          # All dependencies are ephemeral CI-only, not in the deployed Pod.
+          npm install --prefix "$proof" --no-save --ignore-scripts --no-audit --no-fund \
+            pg@8.16.3 moleculer@0.14.19 \
+            @atproto/repo@0.11.5 @atproto/crypto@0.5.7 @atproto/lex-cbor@0.1.10 >/dev/null
+          node "$proof/tests/sql/paper-account-postgres-adapter-proof.js"
+
+      - name: Remove disposable database
+        if: always()
+        run: docker rm -f paper-account-pg-test >/dev/null 2>&1 || true

@@ -1,3 +1,5 @@
+const { assertUnifiedResult } = require('../../utils/unified-identity-policy');
+const { mustPreserveFailedSignup } = require('../../utils/account-signup-rollback-policy');
 const path = require('path');
 const urlJoin = require('url-join');
 const {
@@ -36,6 +38,17 @@ module.exports = {
   },
   actions: {
     async signup(ctx) {
+      // This version cannot construct a real signed PDS repository: the
+      // ATProto adapter still writes a placeholder CID/revision. Refuse
+      // production signups BEFORE creating accounts, keys or irreversible
+      // PLC directory operations. Existing login/refresh paths are untouched.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'New accounts require verified signed PDS repository provisioning',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+        );
+      }
       const { username, email, password, ...rest } = ctx.params;
 
       ctx.meta.skipObjectsWatcher = true;
@@ -101,26 +114,45 @@ module.exports = {
             }
           });
 
-          if (this.settings.atproto.autoProvisionOnSignup) {
+          // Production accounts must never succeed without their did:plc
+          // and PDS repository, even when legacy fixture toggles are set.
+          const mandatoryAtproto = process.env.NODE_ENV === 'production' ||
+            this.settings.atproto.autoProvisionOnSignup;
+          if (mandatoryAtproto) {
             atprotoProvisioning = await ctx.call('atproto-provisioning.provisionForAccount', {
               canonicalAccountId: webId,
               webId,
               requestedHandle: accountData.username || username,
               activityPubActorId: activityPubProvisioning?.actorId || webId,
               activityPubHandle: activityPubProvisioning?.handle || null,
-              didMethod: this.settings.atproto.didMethod,
+              didMethod: 'plc',
               profile: {
                 displayName: rest?.name || accountData?.username || username,
                 ...(rest?.summary ? { summary: rest.summary } : {})
               }
             });
+            try {
+              assertUnifiedResult({
+                webId, actorId: activityPubProvisioning?.actorId,
+                did: atprotoProvisioning?.did,
+                repoInitialized: atprotoProvisioning?.repoInitialized
+              });
+            } catch (error) {
+              throw new MoleculerError(error.message, 503, error.code);
+            }
           }
         } catch (e) {
           const provisioningStage = this.settings.atproto.autoProvisionOnSignup
             ? 'ActivityPub/ATProto provisioning'
             : 'ActivityPub provisioning';
           this.logger.error(`[Auth] ${provisioningStage} failed for ${webId}: ${e.message}`);
-          await this._cleanupPartialAtprotoArtifacts(ctx, webId);
+          // A submitted PLC genesis cannot be rolled back by deleting local
+          // binding/key records. Keep all evidence for explicit reconciliation.
+          if (!this._mustPreserveFailedSignup()) {
+            await this._cleanupPartialAtprotoArtifacts(ctx, webId);
+          } else {
+            this.logger.error('[Auth] Signup failed after identity creation; preserving keys, binding and account for reconciliation');
+          }
           throw new MoleculerError(
             `${provisioningStage} failed during signup: ${e.message}`,
             Number.isFinite(Number(e.code)) ? Number(e.code) : 500,
@@ -147,6 +179,14 @@ module.exports = {
             : {})
         };
       } catch (e) {
+        // Once identity bootstrap starts, a failure may have occurred after
+        // an irreversible DID/PLC submission or asynchronous Solid resource
+        // creation. Releasing the username or destroying keys would make
+        // duplicate identities possible on a retry.
+        if (webId && this._mustPreserveFailedSignup()) {
+          this.logger.error('[Auth] Keeping failed signup state reserved pending reconciliation');
+          throw e;
+        }
         if (webId) await this._cleanupPartialAtprotoArtifacts(ctx, webId).catch(() => {});
         await ctx.call('auth.account.remove', { id: accountData['@id'] });
         throw e;
@@ -257,7 +297,17 @@ module.exports = {
       }
     },
 
+    _mustPreserveFailedSignup() {
+      return mustPreserveFailedSignup();
+    },
     async _cleanupPartialAtprotoArtifacts(ctx, webId) {
+      if (this._mustPreserveFailedSignup()) {
+        throw new MoleculerError(
+          'Cannot destructively clean up potentially submitted PLC identity',
+          503,
+          'ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED'
+        );
+      }
       try {
         await ctx.call('identitybindings.remove', { canonicalAccountId: webId });
       } catch (err) {

@@ -70,8 +70,7 @@ module.exports = {
     // Allow mock-mode DID creation (sha256-derived did:plc, did:web with
     // dev-only TLDs). MUST be false in production environments where DIDs
     // need to be resolvable on plc.directory or via real DNS+HTTPS.
-    allowMockAtprotoIdentity:
-      process.env.APODS_ATPROTO_ALLOW_MOCK_IDENTITY === 'true' || process.env.NODE_ENV !== 'production',
+    allowMockAtprotoIdentity: process.env.NODE_ENV !== 'production',
     plcSubmissionEnabled: process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION === 'true'
   },
 
@@ -665,6 +664,16 @@ module.exports = {
     },
 
     async initializeRepoState(_ctx, { canonicalAccountId, did, handle }) {
+      // This adapter only writes a placeholder CID/revision to the identity
+      // binding; it does NOT create or sign a real ATProto repository commit.
+      // Never turn placeholder metadata into production account readiness.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Real signed PDS repository initialization is not implemented in this adapter',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+        );
+      }
       await _ctx.call('identitybindings.upsertRepoBootstrap', {
         canonicalAccountId,
         did,
@@ -685,6 +694,16 @@ module.exports = {
     },
 
     async verifyProvisionedState(ctx, { canonicalAccountId, binding, didMethod }) {
+      // Existing placeholder binding flags cannot establish a functioning
+      // repository. Until actual PDS commit/CAR verification is integrated,
+      // fail closed even if a previous instance set repoInitialized=true.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Signed AT Protocol repository existence has not been verified',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+        );
+      }
       if (!binding?.atSigningKeyRef || !binding?.atRotationKeyRef) {
         throw new MoleculerError('Identity binding is missing AT key refs', 500, 'ATPROTO_BINDING_INVALID');
       }

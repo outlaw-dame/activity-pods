@@ -1,0 +1,65 @@
+name: Paper ATProto Signed Repository Genesis Candidate
+
+on:
+  push:
+    branches:
+      - feat/unified-mandatory-plc-identity
+    paths:
+      - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
+      - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
+      - 'pod-provider/backend/candidates/provider-handle-resolver.mjs'
+      - 'pod-provider/backend/tests/atproto-signed-genesis-proof.mjs'
+      - 'pod-provider/backend/tests/atproto-pds-readiness-proof.mjs'
+      - 'pod-provider/backend/tests/atproto-provider-handle-resolver-proof.mjs'
+      - 'pod-provider/backend/tests/atproto-pds-live-loopback-proof.mjs'
+      - '.github/workflows/paper-atproto-signed-genesis.yml'
+  pull_request:
+    paths:
+      - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
+      - 'pod-provider/backend/tests/atproto-signed-genesis-proof.mjs'
+      - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
+      - 'pod-provider/backend/candidates/provider-handle-resolver.mjs'
+      - 'pod-provider/backend/tests/atproto-pds-readiness-proof.mjs'
+      - 'pod-provider/backend/tests/atproto-provider-handle-resolver-proof.mjs'
+      - 'pod-provider/backend/tests/atproto-pds-live-loopback-proof.mjs'
+      - '.github/workflows/paper-atproto-signed-genesis.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-car:
+    name: Official ATProto signed v3 commit and CAR proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install isolated pinned official ATProto libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/paper-atproto-proof"
+          mkdir -p "$proof/candidates" "$proof/tests"
+          cp pod-provider/backend/candidates/atproto-repo-genesis.mjs "$proof/candidates/"
+          cp pod-provider/backend/tests/atproto-signed-genesis-proof.mjs "$proof/tests/"
+          cp pod-provider/backend/candidates/atproto-pds-readiness.mjs "$proof/candidates/"
+          cp pod-provider/backend/candidates/provider-handle-resolver.mjs "$proof/candidates/"
+          cp pod-provider/backend/tests/atproto-pds-readiness-proof.mjs "$proof/tests/"
+          cp pod-provider/backend/tests/atproto-provider-handle-resolver-proof.mjs "$proof/tests/"
+          cp pod-provider/backend/tests/atproto-pds-live-loopback-proof.mjs "$proof/tests/"
+          npm install --prefix "$proof" --no-save --ignore-scripts --no-audit --no-fund \
+            @atproto/repo@0.11.5 @atproto/crypto@0.5.7 @atproto/lex-cbor@0.1.10
+      - name: Verify full signed CAR with separate key callback
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/paper-atproto-proof/tests/atproto-signed-genesis-proof.mjs"
+          node "$RUNNER_TEMP/paper-atproto-proof/tests/atproto-pds-readiness-proof.mjs"
+          node "$RUNNER_TEMP/paper-atproto-proof/tests/atproto-provider-handle-resolver-proof.mjs"
+          node "$RUNNER_TEMP/paper-atproto-proof/tests/atproto-pds-live-loopback-proof.mjs"

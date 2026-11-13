@@ -2,8 +2,9 @@ const crypto = require('crypto');
 const urlJoin = require('url-join');
 const { ControlledContainerMixin } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
-const { sanitizeSparqlQuery } = require('@semapps/triplestore');
 const { MoleculerError } = require('moleculer').Errors;
+const { assertUnfencedIdentityBindingMutation } = require('../utils/identitybinding-fence-policy');
+const { buildIndexPageQuery, validCursor } = require('../utils/identitybinding-index-query');
 
 const APODS = 'http://activitypods.org/ns/core#';
 
@@ -25,6 +26,7 @@ const PREDICATES = {
   repoInitialized: `${APODS}repoInitialized`,
   repoRootCid: `${APODS}repoRootCid`,
   repoRev: `${APODS}repoRev`,
+  repoProjectionFence: `${APODS}repoProjectionFence`,
   createdAt: `${APODS}createdAt`,
   updatedAt: `${APODS}updatedAt`
 };
@@ -110,6 +112,11 @@ module.exports = {
         const now = new Date().toISOString();
         const { bindingWebId, slug, resourceUri } = await this._resolveBindingLocation(canonicalAccountId, ctx);
         const existing = await this._getBindingResourceOrNull(resourceUri, ctx);
+
+        // Legacy full-resource PUT would discard the atomic RDF fence or
+        // overwrite a newer signed repo projection. Do not mutate fenced
+        // bindings through an unfenced method.
+        this._assertUnfencedMutation(existing, 'upsert');
 
         const existingValue = key => (existing ? this._readField(existing, key) : null);
         const existingBoolean = key => this._coerceBoolean(existingValue(key));
@@ -239,8 +246,7 @@ module.exports = {
       async handler(ctx) {
         const atprotoDid = String(ctx.params.atprotoDid).trim();
         const binding = await this._findByDidWithSparql(ctx, atprotoDid);
-        if (binding) return binding;
-        return this._findByBindingField(ctx, 'atprotoDid', atprotoDid);
+        return binding;
       }
     },
 
@@ -251,8 +257,7 @@ module.exports = {
       async handler(ctx) {
         const handle = String(ctx.params.atprotoHandle).trim().toLowerCase();
         const binding = await this._findByHandleWithSparql(ctx, handle);
-        if (binding) return binding;
-        return this._findByBindingField(ctx, 'atprotoHandle', handle);
+        return binding;
       }
     },
 
@@ -289,6 +294,18 @@ module.exports = {
           return { removed: false, canonicalAccountId };
         }
 
+        // Account deletion and signup rollback must not silently remove a
+        // projected, fenced repository identity. Deletion needs coordinated
+        // PG native-repo state transition and protected Jena CAS.
+        const protectedBinding = await this._getBindingResourceOrNull(resourceUri, ctx);
+        if (!protectedBinding) {
+          throw new MoleculerError(
+            'Identity binding disappeared between existence and guarded deletion checks',
+            409,
+            'IDENTITY_BINDING_MUTATION_RACE'
+          );
+        }
+        this._assertUnfencedMutation(protectedBinding, 'remove');
         await this.actions.delete({ resourceUri, webId: 'system' }, { parentCtx: ctx });
         await this._removeBindingIndex(ctx, canonicalAccountId).catch(err => {
           // Index cleanup is best-effort; LDP resource is the source of truth.
@@ -299,6 +316,18 @@ module.exports = {
     }
   },
   methods: {
+    _assertUnfencedMutation(resource, operation) {
+      try {
+        assertUnfencedIdentityBindingMutation(resource, operation);
+      } catch (error) {
+        throw new MoleculerError(
+          error.message,
+          Number(error.status) || 409,
+          error.code || 'IDENTITY_BINDING_MUTATION_INVALID'
+        );
+      }
+    },
+
     async _resolveBindingLocation(canonicalAccountId, ctx) {
       const bindingWebId = canonicalAccountId;
       const containerUri = await this.actions.getContainerUri({ webId: bindingWebId }, { parentCtx: ctx });
@@ -358,9 +387,54 @@ module.exports = {
         repoInitialized: this._coerceBoolean(get('repoInitialized')) ?? false,
         repoRootCid: get('repoRootCid') || null,
         repoRev: get('repoRev') || null,
+        repoProjectionFence: this._readCanonicalRepoFence(resource),
         createdAt: get('createdAt') || null,
         updatedAt: get('updatedAt') || null
       };
+    },
+
+    /**
+     * Reject duplicate, noncanonical or malformed RDF fence terms. Returning
+     * an arbitrary first array member would let a stale/hostile graph appear
+     * ready. The canonical LDP resource, never the settings index, is read.
+     */
+    _readCanonicalRepoFence(resource) {
+      if (!resource || typeof resource !== 'object') return null;
+      const keys = [
+        'repoProjectionFence',
+        'apods:repoProjectionFence',
+        PREDICATES.repoProjectionFence
+      ].filter(key => Object.prototype.hasOwnProperty.call(resource, key));
+      if (keys.length === 0) return null;
+      if (keys.length !== 1) {
+        throw new MoleculerError('Ambiguous RDF repository projection epoch', 409,
+          'IDENTITY_BINDING_FENCE_INCONSISTENT');
+      }
+      let value = resource[keys[0]];
+      if (Array.isArray(value)) {
+        if (value.length !== 1) {
+          throw new MoleculerError('Duplicate RDF projection epochs', 409,
+            'IDENTITY_BINDING_FENCE_INCONSISTENT');
+        }
+        value = value[0];
+      }
+      if (value && typeof value === 'object') {
+        const declaredType = value['@type'] || value.type;
+        if (declaredType && !['http://www.w3.org/2001/XMLSchema#integer',
+          'http://www.w3.org/2001/XMLSchema#long', 'xsd:integer', 'xsd:long'].includes(declaredType)) {
+          throw new MoleculerError('Unsupported RDF projection epoch datatype', 409,
+            'IDENTITY_BINDING_FENCE_INCONSISTENT');
+        }
+        value = value['@value'] ?? value.value;
+      }
+      const epoch = typeof value === 'number' && Number.isSafeInteger(value)
+        ? String(value) : value;
+      if (typeof epoch !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(epoch) ||
+          BigInt(epoch) > 9223372036854775807n) {
+        throw new MoleculerError('Invalid RDF repository projection epoch', 409,
+          'IDENTITY_BINDING_FENCE_INCONSISTENT');
+      }
+      return epoch;
     },
 
     _readField(resource, key) {
@@ -428,20 +502,36 @@ module.exports = {
                        a ${INDEX_TYPE} ;
                        apods:canonicalAccountId ?canonicalAccountId .
             }
-            LIMIT 1
+            LIMIT 2
           `,
           dataset: 'settings',
           webId: 'system'
         });
       } catch (err) {
-        this.logger.debug('Selective identity index lookup failed', {
+        // A broken index is a bounded availability error, not permission to
+        // enumerate every account and issue N+1 cross-Pod Moleculer calls.
+        this.logger.warn('Selective identity index lookup unavailable', {
           field,
           error: err instanceof Error ? err.message : String(err)
         });
-        return null;
+        throw new MoleculerError('Identity binding index unavailable', 503, 'IDENTITY_BINDING_INDEX_UNAVAILABLE');
       }
 
-      const canonicalAccountId = this._readQueryBinding(rows?.[0], 'canonicalAccountId');
+      if (!Array.isArray(rows) || rows.length > 2) {
+        throw new MoleculerError('Malformed identity lookup index result', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
+      // DID and handle must be globally unique. LIMIT 1 silently selected an
+      // arbitrary person if two stale/malicious index entries claimed it.
+      if (rows.length > 1) {
+        throw new MoleculerError('Ambiguous identity index ownership', 409,
+          'IDENTITY_BINDING_INDEX_COLLISION');
+      }
+      const canonicalAccountId = this._readQueryBinding(rows[0], 'canonicalAccountId');
+      if (rows.length === 1 && !canonicalAccountId) {
+        throw new MoleculerError('Malformed identity lookup index identity', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
       if (!canonicalAccountId) return null;
 
       // The LDP binding is authoritative. Do not downgrade an infrastructure or
@@ -537,82 +627,6 @@ ${insertBody}
       );
     },
 
-    async _findByBindingField(ctx, field, expectedValue) {
-      const webIds = await this._listAccountWebIds(ctx);
-      for (const webId of webIds) {
-        if (!webId) continue;
-
-        const canonicalCandidates = this._canonicalCandidatesFromWebId(webId);
-        for (const canonicalAccountId of canonicalCandidates) {
-          const binding = await ctx.call(
-            'identitybindings.getByCanonicalAccountId',
-            { canonicalAccountId },
-            { parentCtx: ctx }
-          );
-
-          if (!binding?.[field]) continue;
-
-          const actualValue = field === 'atprotoHandle' ? String(binding[field]).toLowerCase() : String(binding[field]);
-
-          if (actualValue === expectedValue) {
-            return binding;
-          }
-        }
-      }
-
-      return null;
-    },
-
-    async _listAccountWebIds(ctx) {
-      try {
-        const results = await ctx.call('triplestore.query', {
-          query: `
-            PREFIX semapps: <http://semapps.org/ns/core#>
-            SELECT DISTINCT ?webId
-            WHERE {
-              ?account semapps:webId ?webId .
-            }
-          `,
-          dataset: 'settings',
-          webId: 'system'
-        });
-
-        return (results || [])
-          .map(row => this._readQueryBinding(row, 'webId'))
-          .filter(value => typeof value === 'string' && value.length > 0);
-      } catch (err) {
-        this.logger.debug('Account webId enumeration via settings dataset failed', {
-          error: err.message
-        });
-      }
-
-      const rawAccounts = await ctx.call('auth.account.find', {
-        query: {},
-        pagination: false,
-        pageSize: 10000
-      });
-
-      const accounts = this._normalizeAccountResults(rawAccounts);
-      return (accounts || [])
-        .map(account => (typeof account?.webId === 'string' ? account.webId : null))
-        .filter(Boolean);
-    },
-
-    _normalizeAccountResults(rawAccounts) {
-      if (Array.isArray(rawAccounts)) return rawAccounts;
-      if (Array.isArray(rawAccounts?.rows)) return rawAccounts.rows;
-      if (Array.isArray(rawAccounts?.['hydra:member'])) return rawAccounts['hydra:member'];
-      return [];
-    },
-
-    _canonicalCandidatesFromWebId(webId) {
-      const candidates = new Set([webId]);
-      candidates.add(webId.replace(/\/profile\/card#me$/, ''));
-      candidates.add(webId.replace(/#me$/, ''));
-      candidates.add(webId.replace(/\/?profile\/card#me$/, ''));
-      return Array.from(candidates).filter(Boolean);
-    },
-
     _readQueryBinding(row, key) {
       const value = row?.[key];
       if (typeof value === 'string' || typeof value === 'boolean') return value;
@@ -632,16 +646,10 @@ ${insertBody}
       if (!cursor) return null;
 
       try {
-        const parsed = JSON.parse(Buffer.from(String(cursor), 'base64url').toString('utf8'));
-        if (
-          typeof parsed?.updatedAt !== 'string' ||
-          parsed.updatedAt.length === 0 ||
-          typeof parsed?.canonicalAccountId !== 'string' ||
-          parsed.canonicalAccountId.length === 0
-        ) {
-          throw new Error('invalid');
-        }
-        return parsed;
+        if (typeof cursor !== 'string' || cursor.length > 4096 ||
+            !/^[A-Za-z0-9_-]+$/u.test(cursor)) throw new Error('Invalid cursor encoding');
+        const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        return validCursor(parsed);
       } catch (_err) {
         throw new MoleculerError('Invalid cursor', 400, 'INVALID_CURSOR');
       }
@@ -657,35 +665,9 @@ ${insertBody}
       ).toString('base64url');
     },
 
-    async _queryBindingsWithSparql(ctx) {
+    async _queryBindingsWithSparql(ctx, { cursor = null, limit = 101 } = {}) {
       const results = await ctx.call('triplestore.query', {
-        query: sanitizeSparqlQuery`
-            PREFIX apods: <${APODS}>
-            SELECT ?binding ?canonicalAccountId ?webId ?activityPubActorId ?activityPubHandle
-                   ?atprotoDid ?atprotoHandle ?atprotoSource ?atprotoManaged ?atprotoPdsUrl
-                   ?atSigningKeyRef ?atRotationKeyRef ?status
-                   ?repoInitialized ?repoRootCid ?repoRev ?createdAt ?updatedAt
-            WHERE {
-              ?binding a apods:AtprotoIdentityBindingIndex .
-              OPTIONAL { ?binding apods:canonicalAccountId ?canonicalAccountId . }
-              OPTIONAL { ?binding apods:webId ?webId . }
-              OPTIONAL { ?binding apods:activityPubActorId ?activityPubActorId . }
-              OPTIONAL { ?binding apods:activityPubHandle ?activityPubHandle . }
-              OPTIONAL { ?binding apods:atprotoDid ?atprotoDid . }
-              OPTIONAL { ?binding apods:atprotoHandle ?atprotoHandle . }
-              OPTIONAL { ?binding apods:atprotoSource ?atprotoSource . }
-              OPTIONAL { ?binding apods:atprotoManaged ?atprotoManaged . }
-              OPTIONAL { ?binding apods:atprotoPdsUrl ?atprotoPdsUrl . }
-              OPTIONAL { ?binding apods:atSigningKeyRef ?atSigningKeyRef . }
-              OPTIONAL { ?binding apods:atRotationKeyRef ?atRotationKeyRef . }
-              OPTIONAL { ?binding apods:status ?status . }
-              OPTIONAL { ?binding apods:repoInitialized ?repoInitialized . }
-              OPTIONAL { ?binding apods:repoRootCid ?repoRootCid . }
-              OPTIONAL { ?binding apods:repoRev ?repoRev . }
-              OPTIONAL { ?binding apods:createdAt ?createdAt . }
-              OPTIONAL { ?binding apods:updatedAt ?updatedAt . }
-            }
-          `,
+        query: buildIndexPageQuery({ cursor, limit }),
         dataset: 'settings',
         webId: 'system'
       });
@@ -716,54 +698,36 @@ ${insertBody}
     async _listBindingsWithSparql(ctx, { since, limit }) {
       const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
       const cursor = this._parseCursor(since);
-      let bindings = [];
-
+      let rows;
       try {
-        bindings = await this._queryBindingsWithSparql(ctx);
-      } catch (err) {
-        this.logger.warn('Optimized identity binding enumeration failed, falling back', {
-          error: err.message
+        // The expensive ordering and keyset filter run in Fuseki, not in
+        // Node.js. Only one bounded query is issued per page.
+        rows = await this._queryBindingsWithSparql(ctx, {
+          cursor,
+          limit: safeLimit + 1
         });
-
-        const webIds = await this._listAccountWebIds(ctx);
-
-        for (const webId of webIds) {
-          if (!webId) continue;
-
-          try {
-            const binding = await ctx.call(
-              'identitybindings.getByCanonicalAccountId',
-              { canonicalAccountId: webId },
-              { parentCtx: ctx }
-            );
-            if (binding) bindings.push(binding);
-          } catch (_err) {
-            // Ignore missing or unreadable bindings during enumeration.
-          }
-        }
+      } catch (err) {
+        this.logger.warn('Identity binding page query unavailable', {
+          error: err instanceof Error ? err.message : String(err)
+        });
+        throw new MoleculerError('Identity binding index unavailable', 503, 'IDENTITY_BINDING_INDEX_UNAVAILABLE');
       }
 
-      const items = bindings
-        .filter(binding => binding?.canonicalAccountId && binding?.updatedAt)
-        .sort((a, b) => {
-          const updatedAtCompare = String(a.updatedAt).localeCompare(String(b.updatedAt));
-          if (updatedAtCompare !== 0) return updatedAtCompare;
-          return String(a.canonicalAccountId).localeCompare(String(b.canonicalAccountId));
-        })
-        .filter(binding => {
-          if (!cursor) return true;
-          return (
-            String(binding.updatedAt) > cursor.updatedAt ||
-            (String(binding.updatedAt) === cursor.updatedAt &&
-              String(binding.canonicalAccountId) > cursor.canonicalAccountId)
-          );
-        })
-        .slice(0, safeLimit);
+      // An index corruption or duplicate optional values must NOT silently
+      // expand an unbounded fallback over every user's Pod.
+      if (!Array.isArray(rows) || rows.length > safeLimit + 1 ||
+          rows.some(b => !b.canonicalAccountId || !b.updatedAt) ||
+          new Set(rows.map(b => b.canonicalAccountId)).size !== rows.length) {
+        throw new MoleculerError('Identity binding index contains inconsistent results', 503,
+          'IDENTITY_BINDING_INDEX_INCONSISTENT');
+      }
+      const hasNextPage = rows.length > safeLimit;
+      const items = rows.slice(0, safeLimit);
       const last = items[items.length - 1];
 
       return {
         items,
-        nextCursor: last ? this._encodeCursor(last) : since || null
+        nextCursor: hasNextPage && last ? this._encodeCursor(last) : null
       };
     }
   }

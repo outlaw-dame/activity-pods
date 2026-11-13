@@ -35,6 +35,7 @@ services:
       - '3000:3000'
     environment:
       NODE_ENV: test
+      APODS_ATPROTO_TEST_STORAGE_DISPOSABLE: 'confirmed'
       SEMAPPS_SPARQL_ENDPOINT: http://fuseki_test:3030/
       SEMAPPS_QUEUE_SERVICE_URL: redis://redis:6379/11
       SEMAPPS_REDIS_TRANSPORTER_URL: redis://redis:6379/12

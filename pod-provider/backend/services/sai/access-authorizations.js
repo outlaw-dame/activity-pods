@@ -1,5 +1,6 @@
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
+const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
 
 // Provider-owned social Group capability grants are NOT WebACL permissions
 // on a person's Pod collections/files. These rights are enforced by the
@@ -350,22 +351,30 @@ module.exports = {
       // This is deny-first only. There is intentionally no unsafe automatic
       // regrant until all SAI and account mutation paths are serialized.
       async post(ctx) {
-        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
         const resource = ctx.params.resource || {};
+        await beforeSaiMutation(ctx, 'access-authorizations', resource, 'post');
+        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
         const rights = arrayOf(resource['apods:hasSpecialRights']);
         if (!rights.some(isGroupRight)) return;
         await beginGroupMutation(ctx, resource);
       },
       async delete(ctx) {
-        if (process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED !== 'true') return;
-        // Read authoritative persisted authorization: callers cannot decide
-        // whether their own deletion requires a barrier.
+        const groupFenceEnabled = process.env.PROVIDER_COLLECTIVES_CONSENT_BRIDGE_ENABLED === 'true';
+        const repoFenceEnabled = process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED === 'true';
+        if (!groupFenceEnabled && !repoFenceEnabled) return;
+
+        // Read the persisted authorization once for both fences. The caller
+        // cannot choose which existing permissions need revocation.
         const resource = await ctx.call('access-authorizations.get', {
           resourceUri: ctx.params.resourceUri, webId: 'system'
         });
-        if (!arrayOf(resource?.['apods:hasSpecialRights'])
-          .some(isGroupRight)) return;
-        await beginGroupMutation(ctx, resource);
+        if (repoFenceEnabled) {
+          await beforeSaiMutation(ctx, 'access-authorizations', resource, 'delete');
+        }
+        if (groupFenceEnabled &&
+            arrayOf(resource?.['apods:hasSpecialRights']).some(isGroupRight)) {
+          await beginGroupMutation(ctx, resource);
+        }
       }
     },
     after: {

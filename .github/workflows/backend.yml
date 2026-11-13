@@ -16,6 +16,12 @@ on:
       - '.github/workflows/backend.yml'
   workflow_dispatch:
 
+# Never accumulate an unbounded queue of expensive PG/Jena and backend builds
+# for superseded commits on the same PR. Other PRs stay isolated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

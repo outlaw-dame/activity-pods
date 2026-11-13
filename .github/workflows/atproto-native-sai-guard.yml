@@ -1,0 +1,52 @@
+name: ATProto native SAI revocation gate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/atproto-native-sai-guard.yml'
+      - 'pod-provider/backend/services/sai/access-authorizations.js'
+      - 'pod-provider/backend/services/sai/data-authorizations.js'
+      - 'pod-provider/backend/services/sai/access-grants.js'
+      - 'pod-provider/backend/services/sai/data-grants.js'
+      - 'pod-provider/backend/services/utils/atproto-sai-native-fence.js'
+      - 'pod-provider/backend/services/utils/atproto-ldp-write-barrier.js'
+      - 'pod-provider/backend/services/core/ldp.js'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/pod-consent-fence.*'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/pod-account-lookup.*'
+      - 'pod-provider/backend/tests/atproto-sai-native-fence-node.test.cjs'
+      - 'pod-provider/backend/tests/atproto-ldp-write-barrier-node.test.cjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-grant-hooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check native hooks and run fail-closed revocation tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            pod-provider/backend/services/sai/access-authorizations.js \
+            pod-provider/backend/services/sai/data-authorizations.js \
+            pod-provider/backend/services/sai/access-grants.js \
+            pod-provider/backend/services/sai/data-grants.js \
+            pod-provider/backend/services/utils/atproto-sai-native-fence.js \
+            pod-provider/backend/services/utils/atproto-ldp-write-barrier.js \
+            pod-provider/backend/services/core/ldp.js \
+            pod-provider/backend/candidates/atproto-signed-repo-proof/pod-consent-fence.cjs \
+            pod-provider/backend/candidates/atproto-signed-repo-proof/pod-account-lookup.cjs \
+            pod-provider/backend/tests/atproto-sai-native-fence-node.test.cjs \
+            pod-provider/backend/tests/atproto-ldp-write-barrier-node.test.cjs; do
+              node --check "$file"
+          done
+          node --test pod-provider/backend/tests/atproto-sai-native-fence-node.test.cjs pod-provider/backend/tests/atproto-ldp-write-barrier-node.test.cjs

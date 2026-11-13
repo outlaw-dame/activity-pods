@@ -30,12 +30,14 @@ services:
     container_name: fuseki
     volumes:
       - ./data/fuseki:/fuseki:z
+    # Expose only on the local Docker host. Other services reach Fuseki via
+    # the internal compose network; none should publish admin SPARQL publicly.
     ports:
-      - '3030:3030'
+      - '127.0.0.1:3030:3030'
     expose:
       - '3030'
     environment:
-      ADMIN_PASSWORD: 'admin'
+      ADMIN_PASSWORD: ${SEMAPPS_JENA_PASSWORD:?Set a unique Fuseki admin password in deployment secrets}
       # Preserve the image's documented 1200 MiB default while allowing
       # operators to tune from observed JVM + host page-cache pressure.
       JVM_ARGS: '${FUSEKI_JVM_ARGS:--Xmx1200M}'
@@ -54,22 +56,25 @@ services:
     image: dockage/mailcatcher
     container_name: mailcatcher
     ports:
-      - '1080:1080'
-      - '1025:1025'
+      - '127.0.0.1:1080:1080'
+      - '127.0.0.1:1025:1025'
     restart: on-failure
 
   redis:
-    image: redis
+    # Fresh-install baseline only. Back up and rehearse restore before
+    # replacing a persisted Redis 7 volume; never downgrade an 8.2 dataset.
+    image: redis:8.2.11-alpine
     container_name: redis
     expose:
       - '6379'
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - ./data/redis:/data:z
-    command: ['redis-server', '--appendonly', 'yes']
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec', '--maxmemory-policy', 'noeviction']
 
   arena:
+    profiles: ['admin']
     image: activitypods/arena
     container_name: arena
     restart: always
@@ -78,23 +83,22 @@ services:
     depends_on:
       - redis
     ports:
-      - '4567:4567'
+      - '127.0.0.1:4567:4567'
     expose:
       - '4567'
     environment:
       REDIS_HOST: 'redis'
 
   tripleadmin:
+    profiles: ['admin']
     image: mguihal/tripleadmin
     container_name: tripleadmin
     depends_on:
       - fuseki
     ports:
-      - '3033:3033'
-    extra_hosts:
-      - 'localhost:host-gateway'
+      - '127.0.0.1:3033:3033'
     environment:
-      - TRIPLEADMIN_HOST=http://localhost:3030/
+      - TRIPLEADMIN_HOST=http://fuseki:3030/
       - TRIPLEADMIN_USERNAME=admin
 
 volumes:

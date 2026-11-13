@@ -1,0 +1,51 @@
+name: Solid-OIDC Redis grant revocation and capacity
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/solid-oidc-redis-grant-revocation.yml'
+      - 'pod-provider/backend/config/oidc-adapter.js'
+      - 'pod-provider/backend/config/oidc-grant-index-policy.js'
+      - 'pod-provider/backend/scripts/proof-oidc-grant-redis-live.js'
+      - 'pod-provider/backend/scripts/proof-oidc-grant-worker.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grant-revocation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      redis:
+        image: redis:8.2.11-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate source syntax
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/config/oidc-adapter.js
+          node --check pod-provider/backend/config/oidc-grant-index-policy.js
+          node --check pod-provider/backend/scripts/proof-oidc-grant-redis-live.js
+          node --check pod-provider/backend/scripts/proof-oidc-grant-worker.js
+      - name: Install isolated open-source client libraries
+        run: |
+          set -euo pipefail
+          npm install --prefix /tmp/oidc-redis-grants \
+            --ignore-scripts --no-audit --no-fund --no-save \
+            ioredis@5.4.2 node-fetch@2.7.0 lodash@4.17.21
+      - name: Exercise atomic grants on disposable Redis 8.2 with four workers
+        env:
+          NODE_PATH: /tmp/oidc-redis-grants/node_modules
+          NODE_ENV: test
+          ATPROTO_CAPACITY_PROOF_DISPOSABLE: confirmed
+          SEMAPPS_REDIS_OIDC_PROVIDER_URL: redis://127.0.0.1:6379/13
+        run: node pod-provider/backend/scripts/proof-oidc-grant-redis-live.js

@@ -427,6 +427,44 @@ function createAccountPostgresLifecycleCandidate({
       });
     },
 
+    /**
+     * Read-only crash/unknown-COMMIT inspection by the exact authorized
+     * signup operation, provider, client, request HMAC and lease. An absent
+     * record is UNKNOWN, never authority to mint a replacement identity.
+     * No account-wide scan or external side effect occurs in this method.
+     */
+    async inspectForReconciliation(input) {
+      validateReserve(input);
+      if (input.operationKind !== 'new_signup') {
+        fail('ACCOUNT_LEDGER_NEW_SIGNUP_ONLY', 400);
+      }
+      const found = await pool.query(
+        `SELECT op.operation_id,op.state,op.canonical_webid,op.atproto_did,
+                op.version,(op.lease_expires_at > clock_timestamp()) AS lease_active,
+                (g.operation_id IS NOT NULL) AS genesis_staged
+         FROM ${TABLE} AS op
+         LEFT JOIN paper_account_candidate.signed_genesis AS g
+           ON g.operation_id=op.operation_id
+         WHERE op.operation_id=$1::uuid AND op.lease_token=$2::uuid
+           AND op.provider_id=$3 AND op.app_client_id=$4
+           AND op.idempotency_digest=$5 AND op.request_digest=$6
+           AND op.username_key=$7 LIMIT 1`,
+        [input.operationId,input.leaseToken,input.providerId,input.appClientId,
+          input.idempotencyDigest,input.requestDigest,input.usernameKey]
+      );
+      if (found.rowCount !== 1) {
+        fail('ACCOUNT_LEDGER_RECOVERY_OUTCOME_UNKNOWN', 503);
+      }
+      const row = found.rows[0];
+      return Object.freeze({
+        ...publicResult(row),
+        leaseActive: row.lease_active === true,
+        signedGenesisStaged: row.genesis_staged === true,
+        reconciliationRequired: row.state !== 'completed',
+        retryIdentityCreation: false
+      });
+    },
+
     async requireReconciliation(input) {
       baseInput(input);
       return transaction(pool, async client => {

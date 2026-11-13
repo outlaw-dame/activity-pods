@@ -9,6 +9,7 @@ on:
       - feat/unified-mandatory-plc-identity
     paths:
       - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
       - 'pod-provider/backend/tests/sql/**'
       - 'pod-provider/backend/candidates/**'
       - 'pod-provider/backend/utils/unified-identity-policy.js'
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
       - 'pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql'
       - 'pod-provider/backend/tests/sql/paper-account-postgres-concurrency-proof.sh'
       - 'pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js'
@@ -64,6 +66,13 @@ jobs:
       - name: Verify candidate schema and fail-closed transitions
         run: |
           set -euo pipefail
+          # Integration proof: the preexisting nonactivated canonical-account
+          # lifecycle and the new-signup operational ledger must be able to
+          # share the schema without a destructive/repeated CREATE SCHEMA.
+          # This does NOT activate two account authorities.
+          docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
+            < pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql
           docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
             psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
             < pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql

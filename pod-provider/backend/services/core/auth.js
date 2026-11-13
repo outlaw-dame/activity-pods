@@ -88,7 +88,12 @@ module.exports = {
         });
 
         accountData = await ctx.call('auth.account.attachWebId', { accountUri: accountData['@id'], webId });
-        ctx.emit('auth.registered', { webId, profileData, accountData });
+        // Match the W3-verified SemApps registration event authority across replicas.
+        ctx.emit(
+          'auth.registered',
+          { webId, profileData, accountData },
+          { meta: { webId: null, dataset: null } }
+        );
 
         let activityPubProvisioning = null;
         let atprotoProvisioning = null;
@@ -203,7 +208,7 @@ module.exports = {
 
         const isRetryableBootstrapTimeout = error => {
           const message = String(error?.message || '');
-          return /after\s+30s|still has not been created after\s+30s|timed out waiting/i.test(message);
+          return /after\s+30s|still has not been created after\s+30s|timed out waiting|Waiting for resource failed\. No results after [0-9]+ tries\./i.test(message);
         };
 
         const callBootstrapReadiness = async (actionName, params) => {

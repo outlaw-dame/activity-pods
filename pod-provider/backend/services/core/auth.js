@@ -1,4 +1,5 @@
 const { assertUnifiedResult } = require('../../utils/unified-identity-policy');
+const { mustPreserveFailedSignup } = require('../../utils/account-signup-rollback-policy');
 const path = require('path');
 const urlJoin = require('url-join');
 const {
@@ -277,10 +278,7 @@ module.exports = {
     },
 
     _mustPreserveFailedSignup() {
-      // This guard must not depend on whether the last RPC returned success:
-      // an HTTP/DB timeout can happen *after* a successful PLC submission.
-      return process.env.NODE_ENV === 'production' ||
-        process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION === 'true';
+      return mustPreserveFailedSignup();
     },
     async _cleanupPartialAtprotoArtifacts(ctx, webId) {
       if (this._mustPreserveFailedSignup()) {

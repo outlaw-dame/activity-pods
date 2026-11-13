@@ -47,6 +47,11 @@ binding already contains `repoInitialized=true`. Real PLC submission is a
 separate step and is not evidence of an initialized PDS. Production
 provisioning is explicitly blocked pending independently verified PDS
 repository creation and consistency, not silently declared complete.
+The production `auth.signup` endpoint now rejects before creating any account,
+WebID, signing key or PLC genesis operation while that repository adapter is
+missing. Existing account login is unchanged. This fail-fast gate must only
+be replaced by reviewed and verified real PDS bootstrap integration; an
+environment variable or boolean binding is not sufficient evidence.
 
 **Critical durability limitation:** `provider-capabilities` idempotency and
 `account-provisioning-state` phases currently use per-process Maps. Both

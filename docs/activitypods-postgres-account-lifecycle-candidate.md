@@ -23,6 +23,53 @@ The proof adapter uses **one injected bounded node-postgres pool**, one borrowed
 5. Export, reconcile and compare complete account records and all linked identity references in disposable restore environments. Enforce same canonical WebIDs, anti-IDOR provider scope and least-privileged SQL roles; use explicit migrations and tested backup/PITR. Cutover only after multi-process 1/2/4/8 load, node SIGKILL, database failover and rollback gates pass.
 6. Use measured costs before tuning. Start with 2–4 pool connections per cell (8 cells × 4 = up to 32 plus headroom). Track pool wait, lock contention, p95/p99 account reads/writes, WAL volume, autovacuum, cold-restores, index growth and backup cost. Keep indexed account joins bounded and never perform network calls while holding a row lock.
 
+
+## November 13 — new signup operation journal on the existing account authority
+
+A second, competing account registry is **not** being introduced. The additive
+`paper-account-postgres-candidate-v2-signup-ledger.sql` migration attaches
+`signup_operations` to the existing PR #138 `accounts` row using the exact
+(provider, account_id) foreign key. Both records are inserted in **one
+transaction**, retaining the existing provider/username uniqueness rules. The
+journal is still candidate-only; no production account route imports it.
+
+`createCandidate().reserveSignup` accepts only server-assigned UUIDs and
+32-byte, provider-keyed, domain-separated HMAC digests of the client
+idempotency key and canonical request. It requires a provider/app scope and
+explicit HMAC key version. The raw key, email, password, bearer token, account
+profile, and private signing material are never persisted. Different-payload
+replay is rejected; matching replay returns the original operation without
+authorizing another identity RPC. Existing SemApps accounts must still be
+checked by the trusted provider before *any* new-account reserve during
+activation; this isolated SQL candidate does not query SemApps.
+
+`markSignupMayHaveSideEffects` is a durable **pre-side-effect fence**. The
+provider must commit it *before* invoking the first external account/WebID,
+PLC or PDS operation. Once fenced, subsequent attempts only observe
+`reconciliation_required` and cannot automatically execute that operation
+again. A crash between the fence and the RPC may require operator
+reconciliation even if the RPC never ran; that is an intentional safety
+tradeoff. No automatic TTL releases usernames or operation records.
+
+The underlying PostgreSQL transaction helper now treats a lost or failed
+`COMMIT` reply as `ACCOUNT_COMMIT_OUTCOME_UNKNOWN`, discards that connection
+and requires read-only reconciliation instead of assuming rollback. The
+disposable PostgreSQL 18 acceptance test executes a real commit and then
+simulates losing its acknowledgment; it verifies the committed operation
+survives and subsequent reservation is recognized as replay. The same
+acceptance tests cover concurrent same-handle contention, HMAC mismatches,
+provider/app scope and exact backup/restore equality of the operation journal.
+
+**Do not activate new signup using this candidate yet.** The real provider
+must connect its authorized grants and single `auth.signup` path to these
+durable operations, implement read-only PLC/PDS reconciliation, verify the
+signed v3 repository and DID/handle reciprocity, check complete distributed
+Solid/SAI readiness, issue fresh auth sessions rather than replaying an old
+JWT, and prove node death, PostgreSQL failover, key rotation and release
+rollback. The independently protected canonical PostgreSQL permissions and
+general-Fuseki-writer isolation gates remain closed. Existing-account
+migration is a separate project.
+
 ## Disposable proof
 
 `pod-provider/backend/scripts/proof-postgres-account-lifecycle.js` asserts the database begins empty, loads the schema, checks disabled-by-default gating, concurrent same-name reservations, idempotent replays, conflicting replay detection, cross-provider IDOR, unified WebID/ActivityPub/did:plc binding, PDS/repository readiness, negative incomplete-identity cases, failed-transaction rollback, expected-generation fencing, suspend/delete transitions and no idle transaction leakage. CI uses disposable PostgreSQL 18 and isolated pinned `pg@8.16.3` without modifying the production package lockfile.

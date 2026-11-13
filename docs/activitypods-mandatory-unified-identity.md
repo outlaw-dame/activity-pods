@@ -132,10 +132,15 @@ not imported. A completed new signup can replay only its own matching
 idempotency digest, without repeating existing-username preflight or
 calling PLC again. Failure to check existing accounts fails closed.
 
-The PostgreSQL candidate now stores a single immutable bounded signed
-genesis CAR per new signup and checks the live PDS's latest-commit/CAR
-evidence against a resolved DID document before moving to
-`identities_ready`. For `completed`, the new Solid verifier requires
+The PostgreSQL account candidate stores only immutable bounded
+digest/length evidence for the new signup's signed genesis CAR, rather
+than duplicating the repository blocks in a second authority. The
+canonical PDS repository storage must durably own the actual blocks.
+The candidate verifies the live PDS's latest-commit/CAR evidence
+against the resolved DID document before moving to
+`identities_ready`. The live-proof fingerprint includes the verified
+remote CAR digest as well as the staged genesis digest, even when
+both CARs have different valid block ordering. For `completed`, the new Solid verifier requires
 the exact canonical WebID, local ActivityPub actor, same `did:plc`,
 an existing SemApps account and complete local Solid resource bootstrap.
 A read-only `inspectForReconciliation` operation uses one indexed

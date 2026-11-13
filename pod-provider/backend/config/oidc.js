@@ -1,5 +1,15 @@
 const urlJoin = require('url-join');
 
+// OIDC errors can contain untrusted OAuth request parameters. Never render
+// them as HTML or log token-bearing Error objects.
+const ERROR_HTML_ENTITIES = Object.freeze({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+});
+function escapeOidcError(value) {
+  return String(value ?? '').slice(0, 2048).replace(/[&<>"']/gu, char => ERROR_HTML_ENTITIES[char]);
+}
+
+
 // Inspired from https://github.com/CommunitySolidServer/CommunitySolidServer/blob/15a929a87e4ce00c0ed266e296405c8e4a22d4a7/config/identity/handler/base/provider-factory.json#L30
 module.exports = (settings, privateJwk) => ({
   claims: {
@@ -150,7 +160,10 @@ module.exports = (settings, privateJwk) => ({
     Session: 31536000
   },
   renderError: async (ctx, out, error) => {
-    console.error(error);
+    const errorCode = typeof error?.error === 'string' &&
+      /^[a-z_]{1,48}$/u.test(error.error) ? error.error : 'unspecified';
+    const statusCode = Number.isSafeInteger(error?.statusCode) ? error.statusCode : null;
+    console.error('OIDC error response', { errorCode, statusCode });
     ctx.type = 'html';
     ctx.body = `
       <!DOCTYPE html>
@@ -160,8 +173,8 @@ module.exports = (settings, privateJwk) => ({
       <body>
         <div>
           <h1>Error</h1>
-          ${Object.entries(out)
-            .map(([key, value]) => `<pre><strong>${key}</strong>: ${value}</pre>`)
+          ${Object.entries(out && typeof out === 'object' ? out : {}).slice(0, 16)
+            .map(([key, value]) => `<pre><strong>${escapeOidcError(key)}</strong>: ${escapeOidcError(value)}</pre>`)
             .join('')}
         </div>
       </body>

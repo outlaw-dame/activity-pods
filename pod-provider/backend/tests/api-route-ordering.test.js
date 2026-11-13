@@ -46,4 +46,34 @@ describe('API gateway route precedence across distributed pod cells', () => {
       'GET /', 'GET /.well-known/openid-configuration', 'fallback-a', 'fallback-b'
     ]);
   });
+  test('root redirect never intercepts prefixed OIDC discovery or token routes', () => {
+    const root = { ...route('root-redirect'), path: '/' };
+    const discovery = { ...route('discovery'), path: '/.well-known/openid-configuration' };
+    const oidc = { ...route('oidc-provider'), path: '/.oidc/auth' };
+    const signup = { ...route('signup'), path: '/auth' };
+    const fallback = { ...route('catchall', true), path: '/fallback' };
+    const gateway = {
+      routes: [root, discovery, oidc, fallback, signup],
+      aliases: [
+        alias('GET /', root),
+        alias('GET /.well-known/openid-configuration', discovery),
+        alias('GET /auth/signup', signup)
+      ]
+    };
+    optimizeApiRouteOrder(gateway);
+    expect(gateway.routes.map(x => x.name)).toEqual([
+      'discovery', 'oidc-provider', 'signup', 'catchall', 'root-redirect'
+    ]);
+    const firstMatch = url => gateway.routes.find(x => url.startsWith(x.path));
+    expect(firstMatch('/.oidc/auth/.well-known/openid-configuration')).toBe(oidc);
+    expect(firstMatch('/.oidc/auth/token')).toBe(oidc);
+    expect(firstMatch('/auth/signup')).toBe(signup);
+    expect(firstMatch('/')).toBe(root);
+    expect(gateway.aliases.map(a => a.name)).toEqual([
+      'GET /', 'GET /.well-known/openid-configuration', 'GET /auth/signup'
+    ]);
+    optimizeApiRouteOrder(gateway);
+    expect(gateway.routes[gateway.routes.length - 1]).toBe(root);
+  });
+
 });

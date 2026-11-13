@@ -119,6 +119,12 @@ jobs:
         if: failure()
         run: |
           cat /tmp/g1-provider-https-proxy.log || true
+          # Retain a bounded, startup-focused diagnostic before the repeated
+          # discovery 500 responses bury the original provider-init failure.
+          docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
+            logs --no-color --tail=3000 backend 2>/dev/null | \
+            grep -Ei -m 35 'solid-oidc|oidc-provider|failed to start|error starting|cannot find module|ERR_|TypeError|ReferenceError' | \
+            cut -c 1-900 || true
           docker compose -f docker-compose-test.yml -f docker-compose-collectives-e2e.yml \
             logs --no-color --tail=500 backend fuseki_test redis || true
 

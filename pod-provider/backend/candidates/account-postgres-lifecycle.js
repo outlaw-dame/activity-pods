@@ -381,7 +381,7 @@ function createAccountPostgresLifecycleCandidate({
         fail('ACCOUNT_LEDGER_SOLID_VERIFIER_REQUIRED', 503);
       }
       const existing = await pool.query(
-        `SELECT canonical_webid,state
+        `SELECT canonical_webid,atproto_did,state
          FROM ${TABLE}
          WHERE operation_id=$1::uuid AND lease_token=$2::uuid
            AND state='identities_ready'
@@ -389,24 +389,26 @@ function createAccountPostgresLifecycleCandidate({
         [input.operationId,input.leaseToken]
       );
       if (existing.rowCount !== 1 ||
-          !isCanonicalHttpsWebId(existing.rows[0].canonical_webid)) {
+          (!isCanonicalHttpsWebId(existing.rows[0].canonical_webid) ||
+           !DID.test(existing.rows[0].atproto_did || ''))) {
         fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
       }
       const webId = existing.rows[0].canonical_webid;
+      const did = existing.rows[0].atproto_did;
       let solid;
       try {
         solid = await verifySolid({
-          webId,
+          webId, did,
           operationId:input.operationId
         });
       } catch (_) {
         fail('ACCOUNT_LEDGER_SOLID_NOT_VERIFIED', 503);
       }
-      if (solid?.complete !== true || solid.webId !== webId) {
+      if (solid?.complete !== true || solid.webId !== webId || solid.did !== did) {
         fail('ACCOUNT_LEDGER_SOLID_NOT_VERIFIED', 503);
       }
       const solidProof=crypto.createHash('sha256')
-        .update(['solid-bootstrap-v1',input.operationId,webId].join('\0'))
+        .update(['solid-bootstrap-v1',input.operationId,webId,did].join('\0'))
         .digest();
       return transaction(pool, async client => {
         const updated=await client.query(

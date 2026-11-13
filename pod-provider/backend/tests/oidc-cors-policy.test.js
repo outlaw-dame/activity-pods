@@ -33,6 +33,35 @@ test('client metadata is required and cannot be used as a wildcard', () => {
   expect(allowedOrigin(app, { redirectUris: ['https://other.example.org/cb'] })).toBe(false);
 });
 
+test('registered redirect URLs are compared by parsed origin, not spelling', () => {
+  for (const uri of [
+    'https://app.example.org',
+    'https://app.example.org:443/callback',
+    'https://APP.EXAMPLE.ORG/callback',
+    'https://APP.EXAMPLE.ORG:443/callback?source=auth'
+  ]) {
+    expect(allowedOrigin(app, { redirectUris: [uri] })).toBe(true);
+  }
+  expect(allowedOrigin('https://attacker.example.org', {
+    redirectUris: ['https://APP.EXAMPLE.ORG/callback']
+  })).toBe(false);
+});
+
+test('registered redirect normalization never allows unsafe characters or origins', () => {
+  for (const raw of [
+    'https://app.example.org\\@evil.example/callback',
+    'https://app.example.org\r\n.evil.example/callback',
+    'https://app.example.org/callback#fragment',
+    'https://user:pass@app.example.org/callback',
+    'https://app.example.org.evil.example/callback',
+    'http://app.example.org/callback',
+    'https://other.example.org/callback',
+    '*'
+  ]) {
+    expect(allowedOrigin(app, { redirectUris: [raw] })).toBe(false);
+  }
+});
+
 test('localhost redirects are permitted only in explicit development mode', () => {
   const dev = { redirectUris: ['http://localhost:3000/callback'] };
   expect(allowedOrigin('http://localhost:3000', dev)).toBe(false);

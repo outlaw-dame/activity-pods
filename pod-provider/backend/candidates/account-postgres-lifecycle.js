@@ -10,6 +10,9 @@
  * External side effects (Jena/SAI, WebID, AP actor, PLC, PDS) must never be
  * retried automatically on a lost lease or an unknown commit outcome.
  * Each operation is externally assigned a stable UUID and a fresh lease UUID.
+ * The injected digests MUST be provider-keyed, domain-separated HMAC-SHA-256
+ * with a protected key and an explicit rotation protocol before activation;
+ * raw SHA-256 of credentials, emails or predictable client keys is unsafe.
  * A lease is NOT authority to overwrite a completed identity.
  */
 const { MoleculerError } = require('moleculer').Errors;

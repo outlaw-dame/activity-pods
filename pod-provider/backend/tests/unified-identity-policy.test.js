@@ -33,6 +33,35 @@ describe('mandatory unified identity for each newly created account', () => {
     expect(() => assertUnifiedRequest(request)).toThrow('UNIFIED_IDENTITY_REQUIRED');
   });
   test.each([
+    { did: 'did:plc:abcdefghijklmnopqrstuvwx' },
+    { webId: 'https://old.example/alice' },
+    { canonicalAccountId: 'https://old.example/alice' },
+    { actorId: 'https://old.example/alice' },
+    { existingAccountId: 'https://old.example/alice' },
+    { migration: true },
+    { import: { from: 'existing-account' } },
+    { linkExisting: false },
+    { atproto: { did: 'did:plc:abcdefghijklmnopqrstuvwx' } },
+    { atproto: { existingDid: 'did:plc:abcdefghijklmnopqrstuvwx' } },
+    { atproto: { force: true } },
+    { protocols: { atproto: { importDid: 'did:plc:abcdefghijklmnopqrstuvwx' } } },
+    { protocols: { activitypub: { actorId: 'https://old.example/alice' } } },
+    { protocols: { solid: { webId: 'https://old.example/alice' } } }
+  ])('new-account policy rejects existing-identity adoption before provisioning: %o', invalid => {
+    try {
+      assertUnifiedRequest(invalid);
+      throw new Error('Expected existing-identity adoption to be rejected');
+    } catch (error) {
+      expect(error.code).toBe('UNIFIED_ACCOUNT_NEW_ONLY');
+    }
+  });
+  test('new accounts may still choose a new handle without importing a DID', () => {
+    expect(assertUnifiedRequest({
+      username: 'newuser',
+      atproto: { requestedHandle: 'newuser.pods.example', didMethod: 'plc' }
+    })).toEqual({ solid: true, activitypub: true, atproto: true, didMethod: 'plc' });
+  });
+  test.each([
     {...result, actorId:'https://paper.example/users/other'},
     {...result, did:'did:web:paper.example'},
     {...result, did:'did:plc:short'},

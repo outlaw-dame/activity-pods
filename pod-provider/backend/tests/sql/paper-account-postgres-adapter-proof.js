@@ -89,7 +89,8 @@ async function main() {
     },
     verifyGenesis:verifySignedGenesisEvidence,
     verifyPds:opts=>verifyPdsReadiness({
-      ...opts,plcDirectoryUrl:plc,fetchImpl:mockFetch
+      ...opts,plcDirectoryUrl:plc,fetchImpl:mockFetch,
+      resolveHandle:async candidate=>candidate===handle ? did : null
     })
   });
   const a=factory(pa),b=factory(pb);

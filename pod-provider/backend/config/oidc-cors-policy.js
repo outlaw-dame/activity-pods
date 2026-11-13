@@ -25,14 +25,18 @@ function allowedOrigin(origin, client, { allowLocalhost = false } = {}) {
       redirectUris.length > 32) return false;
 
   return redirectUris.some(raw => {
-    if (typeof raw !== 'string' || raw.length > 2048) return false;
+    // The redirect URI may have a valid alternate serialization (uppercase
+    // host, explicit default HTTPS port, omitted trailing slash), but must
+    // never contain whitespace, controls or backslashes that URL() would
+    // silently normalize into a different security-relevant input.
+    if (typeof raw !== 'string' || raw.length > 2048 ||
+        /[\u0000-\u0020\u007f\\]/u.test(raw)) return false;
     let redirect;
     try { redirect = new URL(raw); } catch { return false; }
     return redirect.origin === origin &&
       redirect.protocol === requested.protocol &&
       !redirect.username && !redirect.password &&
-      !redirect.hash &&
-      redirect.href === raw;
+      !redirect.hash;
   });
 }
 

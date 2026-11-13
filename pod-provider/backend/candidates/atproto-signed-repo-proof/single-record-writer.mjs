@@ -130,12 +130,13 @@ export function createSignedSingleRecordWriter({
       fail('SINGLE_RECORD_HEAD_MISMATCH');
     }
     const outbox = await pool.query(
-      'SELECT rev,kind,status FROM '+ROOT+
+      'SELECT rev,kind,status,blocked_at FROM '+ROOT+
       '.native_event_outbox WHERE did=$1 AND commit_cid=$2',
       [did,h.head_cid]
     );
     if (outbox.rowCount !== 1 || outbox.rows[0].rev !== h.rev ||
         outbox.rows[0].kind !== 'at.commit.v1' ||
+        outbox.rows[0].blocked_at !== null ||
         !['pending','delivered'].includes(outbox.rows[0].status)) {
       fail('SINGLE_RECORD_OUTBOX_MISMATCH');
     }

@@ -99,7 +99,13 @@ test('native signed-event outbox claims are fenced, ordered and at least once',a
       // Reference from immutable blocks, NOT necessarily the newest head:
       // events are emitted in commit order even after the repository moves.
       const commitBytes=await getBlock(subject,commitCid);
-      const commit=cbor.decode(commitBytes);
+      let commit;
+      try { commit=cbor.decode(commitBytes); }
+      catch {
+        const e=Error('Noncanonical signed commit event block');
+        e.code='NATIVE_EVENT_INTEGRITY_INVALID';
+        throw e;
+      }
       assert.equal(commit.did,subject);
       const rootCid=commit.data.toString();
       const rootBytes=await getBlock(subject,rootCid);

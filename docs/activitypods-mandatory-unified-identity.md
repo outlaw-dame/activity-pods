@@ -1,3 +1,25 @@
+## Scope: newly registered accounts only
+
+This implementation applies **exclusively to accounts created after the new
+unified-account onboarding flow is activated**. It does not migrate, import,
+re-key, backfill, link, overwrite or adopt any existing ActivityPods/Solid,
+ActivityPub, Bonfire or AT Protocol account. Existing accounts and their
+current authentication paths must continue operating unchanged.
+
+The public and internal new-account create policies reject attempts to
+supply an existing WebID, ActivityPub actor ID, `did:plc`, `did:web`,
+existing account reference, migration/import/linking request, or forced AT
+Protocol reprovisioning. Rejection occurs before an authorized app's
+provisioning reservation and before the signup RPC begins. New-account
+handles may be requested; existing signing authority may not be imported.
+
+When this candidate is activated later, reconciliation is allowed only for
+a *previously reserved new signup operation* with its same authorized
+idempotency key. Recovery must **not** search for legacy identities and
+adopt them into the new ledger. Migrating existing identities is a separate
+project with explicit account-owner consent, key custody design, compatibility
+testing, and a distinct operational rollback plan.
+
 # Unified account identity contract — mandatory WebID + ActivityPub + did:plc
 
 **Release status: PR proof; no live data migrated.** This contract applies to

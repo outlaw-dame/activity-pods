@@ -82,10 +82,17 @@ not release the reservation as safely retryable.
   `reserve → account_created → identities_ready → completed` transitions.
   Unknown commits, stale leases and claims with an existing operation
   **require reconciliation**, never automatic second DID issuance.
-- `paper-account-postgres-lifecycle.yml` runs a real disposable PostgreSQL
-  18 schema proof: collisions must fail, and placeholder-PDS completion
-  cannot pass the SQL constraints. This is not yet an end-to-end account
-  authority or a production connection.
+- `paper-account-postgres-lifecycle.yml` runs disposable PostgreSQL
+  18 schema and transaction proofs. They assert username/idempotency
+  collisions, reject placeholder-PDS completion, coordinate two concurrent
+  clients on the same username, and demonstrate reservation survival after
+  a database restart. The **actual non-activated Node adapter** is also
+  exercised with two independent PostgreSQL connection pools in
+  `paper-account-postgres-adapter-proof.js`: reserve, transition,
+  completion, replay, expired/mismatched lease and conflict failure.
+  SHA `a477208` passed the SQL/adapter CI (run 43366957068).
+  These tests do not yet prove true PLC/PDS side effects, crash injection,
+  backup PITR or production authority integration.
 - No passwords, bearer tokens, recovery keys or raw email are kept in
   this lifecycle table. The `verified_email_hmac` is HMAC-SHA-256 with an
   external provider-held key, never unsalted SHA-256 of an email.

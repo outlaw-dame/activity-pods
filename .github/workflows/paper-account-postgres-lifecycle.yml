@@ -5,6 +5,7 @@ on:
     paths:
       - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
       - 'pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql'
+      - 'pod-provider/backend/tests/sql/paper-account-postgres-concurrency-proof.sh'
       - '.github/workflows/paper-account-postgres-lifecycle.yml'
   workflow_dispatch:
 
@@ -51,6 +52,24 @@ jobs:
           docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
             psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
             < pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql
+      - name: Concurrent reservations and restart durability
+        run: |
+          set -euo pipefail
+          bash pod-provider/backend/tests/sql/paper-account-postgres-concurrency-proof.sh
+          docker restart paper-account-pg-test >/dev/null
+          ready=false
+          for attempt in $(seq 1 90); do
+            if docker exec -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+                psql -X -Atqc "SELECT count(*) FROM paper_account_candidate.operations WHERE username_key='same_concurrent_name';" \
+                -U postgres -d paper_account_disposable 2>/dev/null | grep -qx 1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+          echo 'account_pg_restart_durability_passed'
+
       - name: Remove disposable database
         if: always()
         run: docker rm -f paper-account-pg-test >/dev/null 2>&1 || true

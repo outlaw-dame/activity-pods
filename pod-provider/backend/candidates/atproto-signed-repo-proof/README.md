@@ -237,3 +237,22 @@ Based on the primary AT Protocol
 and [XRPC](https://atproto.com/specs/xrpc) specifications plus the
 maintained `com.atproto.sync.*` Lexicon documents. This does not unblock
 the production `auth.signup` gate.
+
+
+### Serving-origin requirement after a verified DID hosting move
+
+The public XRPC candidate now requires its own configured PDS origin to
+match the **PLC-verified** origin returned by the protected provider
+repository authority. The latter checks the protected Jena binding against
+an independently resolved PLC DID document; success does not by itself
+prove that the currently serving PDS still hosts the DID. Both checks are
+necessary before returning a CAR, latest commit or active repo status.
+
+This closes a stale-account lookup scenario in which a DID has genuinely
+moved to a different PDS, the binding and PLC document agree on the new
+endpoint, but the previous PDS still has a local repository row. The
+candidate refuses to export from that old host even when the original
+signed CAR remains valid. New-signup cross-authority verification also
+requires the verified PLC hosting origin to agree with the PostgreSQL
+account's intended PDS. The signed proof exposes only this public
+hosting origin, never key references or private material.

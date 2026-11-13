@@ -208,3 +208,39 @@ revocation epoch, with revalidation before every authority-dependent
 operation. It must not accept a caller-created Boolean or the disposable
 `productionReady:false` evidence result. Until then, new signup remains
 in reconciliation and production `auth.signup` stays closed.
+
+
+## Durable provider evidence seal — candidate v3
+
+The additive PostgreSQL v3 candidate migration extends the existing
+signup_operations journal rather than introducing another account table.
+It stores one bounded SHA-256 evidence digest, verified commit/root CIDs,
+revision, monotone Jena projection fence, account generation and seal
+timestamp. These values form historical proof of the **observed**
+cross-authority readiness; they are not authorization tokens or private keys.
+
+The candidate accepts a trusted verifyNewSignupEvidence callback at
+construction, never a client-provided proof or key. It calls the previously
+merged cross-authority verifier before acquiring database locks, confirms
+that it returned evidence_only with productionReady=false and a matching
+signup operation, then takes the existing account row lock followed by the
+unique signup operation row lock in the SAME PostgreSQL transaction. It
+rejects an account generation, lifecycle, WebID, AP actor, managed DID, PDS
+origin or journal generation that changed during external checks. Only
+then can the journal advance from reconciliation_required to
+evidence_sealed with immutable CID/revision/fence metadata.
+
+The new operation cannot mark the account ready, log a user in, mint
+identity keys or repeat PLC calls. The existing generic ready transition
+continues to reject every journal-backed new account, including a sealed
+one; after sealing, any old historical replay returns
+releaseAuthorized=false and never renews grants. A lost COMMIT reply uses
+the existing unknown-outcome recovery rule and an indexed journal read.
+
+**Still required for production:** replace the injected, disposable proof
+dependency with the live provider-owned Solid/SAI and signed PDS authority;
+ensure consent revocation is fenced atomically against the final
+PostgreSQL completion decision, rather than trusting an old proof; add a
+provider-only guarded ready transition with generation CAS and a
+multi-replica kill/restart acceptance. No production signup route or
+existing-account migration is enabled by this v3 seal.

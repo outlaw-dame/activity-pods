@@ -26,7 +26,7 @@ async function tx(pool,fn){
     throw e;
   }finally{c.release(broken);}
 }
-function createCandidate({pool,fixtureOnly=false}={}){
+function createCandidate({pool,fixtureOnly=false,verifyNewSignupEvidence=null}={}){
   if(!pool||typeof pool.connect!=='function')fail('ACCOUNT_POOL_REQUIRED');
   const gate=()=>{if(fixtureOnly!==true)fail('ACCOUNT_CANDIDATE_NOT_RELEASED');};
   async function reserve({providerId,accountId,username}){
@@ -250,7 +250,139 @@ function createCandidate({pool,fixtureOnly=false}={}){
     return Object.freeze({...proof,operationId:operation.operationId,
       accountId:operation.accountId,generation:after.generation});
   }
+  /**
+   * Persist ONLY a verified evidence digest in this existing signup journal.
+   *
+   * The verifier is injected by the trusted provider when constructing the
+   * candidate, NOT received from a caller as an untrusted "ready" flag.
+   * External Solid/DID/SAI checks run before any PG locks; an exact
+   * generation CAS prevents sealing a concurrently changed account/journal.
+   *
+   * The sealed operation is NOT a ready account or permission to skip
+   * future consent/revocation checks. It cannot be converted to ready via
+   * the generic change() action, which retains its new-signup guard.
+   */
+  async function sealSignupEvidence(input) {
+    gate();
+    if (process.env.NODE_ENV === 'production' ||
+        process.env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
+        process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
+      fail('ACCOUNT_SIGNUP_EVIDENCE_NOT_RELEASED');
+    }
+    assertSignupScope(input);
+    if (typeof verifyNewSignupEvidence !== 'function') {
+      fail('ACCOUNT_SIGNUP_EVIDENCE_PROVIDER_REQUIRED');
+    }
+    const prior = await readSignup(input);
+    if (!prior) fail('ACCOUNT_SIGNUP_RECONCILIATION_REQUIRED');
+    if (prior.state === 'evidence_sealed') {
+      // This is a historical journal read, NOT renewed SAI permission and
+      // NOT permission to trigger any remote identity creation or login.
+      return Object.freeze({ ...prior, replay:true, releaseAuthorized:false });
+    }
+    if (prior.state !== 'reconciliation_required' ||
+        !Number.isSafeInteger(prior.generation) || prior.generation < 2) {
+      fail('ACCOUNT_SIGNUP_RECONCILIATION_REQUIRED');
+    }
+    let proof;
+    try {
+      proof = await verifyNewSignupEvidence(Object.freeze({
+        providerId:input.providerId,appClientId:input.appClientId,
+        hmacKeyVersion:input.hmacKeyVersion,
+        idempotencyHmac:Buffer.from(input.idempotencyHmac)
+      }));
+    }catch(error){
+      // Do not leak remote DID, SAI, OIDC or signing-service details to
+      // eventual internal log consumers at the account boundary.
+      if (error?.code === 'ACCOUNT_SIGNUP_EVIDENCE_NOT_RELEASED') throw error;
+      fail('ACCOUNT_SIGNUP_EVIDENCE_UNAVAILABLE');
+    }
+    const cid=/^bafyre[a-z2-7]{53}$/;
+    const tid=/^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;
+    const fence=/^[1-9][0-9]{0,18}$/;
+    if (!proof || proof.status !== 'evidence_only' ||
+        proof.productionReady !== false ||
+        proof.accountId !== prior.accountId ||
+        proof.signupGeneration !== prior.generation ||
+        typeof proof.webId !== 'string' || proof.webId.length > 2048 ||
+        typeof proof.did !== 'string' ||
+        !/^did:plc:[a-z2-7]{24}$/.test(proof.did) ||
+        typeof proof.pdsOrigin !== 'string' || proof.pdsOrigin.length > 2048 ||
+        !cid.test(proof.commitCid||'') ||
+        !cid.test(proof.rootCid||'') ||
+        !tid.test(proof.rev||'') ||
+        typeof proof.projectionFence !== 'string' ||
+        !fence.test(proof.projectionFence) ||
+        BigInt(proof.projectionFence) > 9223372036854775807n ||
+        !Number.isSafeInteger(proof.accountGeneration) ||
+        proof.accountGeneration < 1 ||
+        !['pending','delivered'].includes(proof.outboxStatus)) {
+      fail('ACCOUNT_SIGNUP_EVIDENCE_INVALID');
+    }
+    const digest=crypto.createHash('sha256').update(
+      JSON.stringify([
+        'paper.signup.evidence.seal.v1',input.providerId,prior.operationId,
+        prior.accountId,prior.generation,
+        proof.accountGeneration,proof.webId,proof.did,proof.pdsOrigin,
+        proof.commitCid,proof.rootCid,proof.rev,proof.projectionFence,
+        proof.outboxStatus
+      ])
+    ).digest();
+    return tx(pool,async c=>{
+      // Lock in the same canonical order as change(): account first,
+      // then the unique journal row. Never use a cross-Pod scan.
+      const account=await c.query(
+        'SELECT generation,state,webid,activitypub_actor_uri,atproto_did,'+
+        'atproto_pds_url FROM '+SCHEMA+'.accounts '+
+        'WHERE provider_id=$1 AND account_id=$2 FOR UPDATE',
+        [input.providerId,prior.accountId]
+      );
+      if(account.rowCount!==1 ||
+         Number(account.rows[0].generation)!==proof.accountGeneration ||
+         account.rows[0].state!=='provisioning' ||
+         account.rows[0].webid!==proof.webId ||
+         account.rows[0].activitypub_actor_uri!==proof.webId ||
+         account.rows[0].atproto_did!==proof.did ||
+         account.rows[0].atproto_pds_url!==proof.pdsOrigin){
+        fail('ACCOUNT_SIGNUP_EVIDENCE_ACCOUNT_CHANGED');
+      }
+      const operation=await c.query(
+        'SELECT operation_id,account_id,state,generation,may_have_side_effects '+
+        'FROM '+signupTable+
+        ' WHERE provider_id=$1 AND app_client_id=$2 '+
+        'AND hmac_key_version=$3 AND idempotency_hmac=$4 AND account_id=$5 '+
+        'AND operation_id=$6 FOR UPDATE',
+        [input.providerId,input.appClientId,input.hmacKeyVersion,
+          input.idempotencyHmac,prior.accountId,prior.operationId]
+      );
+      if(operation.rowCount!==1 ||
+         operation.rows[0].state!=='reconciliation_required' ||
+         operation.rows[0].may_have_side_effects!==true ||
+         Number(operation.rows[0].generation)!==proof.signupGeneration){
+        fail('ACCOUNT_SIGNUP_EVIDENCE_OPERATION_CHANGED');
+      }
+      const sealed=await c.query(
+        'UPDATE '+signupTable+
+        " SET state='evidence_sealed',generation=generation+1,"+
+        'evidence_digest=$3,evidence_commit_cid=$4,evidence_root_cid=$5,'+
+        'evidence_rev=$6,evidence_fence=$7::bigint,'+
+        'evidence_account_generation=$8,evidence_sealed_at=clock_timestamp(),'+
+        'changed_at=clock_timestamp() '+
+        "WHERE operation_id=$1 AND account_id=$2 AND state='reconciliation_required' "+
+        'AND generation=$9 RETURNING operation_id,account_id,state,generation',
+        [prior.operationId,prior.accountId,digest,proof.commitCid,
+          proof.rootCid,proof.rev,proof.projectionFence,
+          proof.accountGeneration,proof.signupGeneration]
+      );
+      if(sealed.rowCount!==1)fail('ACCOUNT_SIGNUP_EVIDENCE_OPERATION_CHANGED');
+      return Object.freeze({
+        ...signupResult(sealed.rows[0],false),
+        releaseAuthorized:false
+      });
+    });
+  }
+
   return Object.freeze({reserve,change,read,reserveSignup,
-    markSignupMayHaveSideEffects,readSignup,verifySignupSolidReadiness});
+    markSignupMayHaveSideEffects,readSignup,verifySignupSolidReadiness,sealSignupEvidence});
 }
 module.exports={createCandidate};

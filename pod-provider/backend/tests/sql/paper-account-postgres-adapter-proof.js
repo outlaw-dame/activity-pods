@@ -50,9 +50,9 @@ async function main() {
   };
   const routes={
     [plc+'/'+encodeURIComponent(did)]:new Response(JSON.stringify(document)),
-    [pds+'/xrpc/com.atproto.sync.getLatestCommit?did='+did]:
+    [pds+'/xrpc/com.atproto.sync.getLatestCommit?did='+encodeURIComponent(did)]:
       new Response(JSON.stringify({cid:genesis.rootCid,rev:genesis.rev})),
-    [pds+'/xrpc/com.atproto.sync.getRepo?did='+did]:
+    [pds+'/xrpc/com.atproto.sync.getRepo?did='+encodeURIComponent(did)]:
       new Response(genesis.car)
   };
   const mockFetch=async url=>{

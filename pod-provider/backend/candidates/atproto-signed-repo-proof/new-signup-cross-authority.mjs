@@ -81,6 +81,23 @@ export function createNewSignupCrossAuthority({
       deny('UNIFIED_SIGNUP_SOLID_EVIDENCE_MISMATCH');
     }
 
+    // The PostgreSQL account projection must also agree with the protected
+    // current handle and PDS URL. Solid bootstrap verification deliberately
+    // does not validate these fields, and neither may be trusted in isolation.
+    const binding = await solidCall('identitybindings.getByCanonicalAccountId', {
+      canonicalAccountId: before.webid
+    });
+    if (!binding || binding.canonicalAccountId !== before.webid ||
+        binding.atprotoHandle !== before.atproto_handle ||
+        binding.atprotoPdsUrl !== before.atproto_pds_url ||
+        binding.webId !== before.webid ||
+        binding.activityPubActorId !== before.webid ||
+        binding.atprotoDid !== before.atproto_did ||
+        binding.atprotoSource !== 'local' ||
+        binding.atprotoManaged !== true) {
+      deny('UNIFIED_SIGNUP_ACCOUNT_RDF_PROJECTION_MISMATCH');
+    }
+
     // The repository bridge verifies the real signed v3 CAR from its
     // PostgreSQL head and checks current PLC DID, signing key, handle,
     // PDS origin and the protected RDF identity projection.

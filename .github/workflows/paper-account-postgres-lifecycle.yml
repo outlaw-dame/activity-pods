@@ -26,9 +26,17 @@ jobs:
             -e POSTGRES_PASSWORD=disposable-ci-only \
             -e POSTGRES_DB=paper_account_disposable \
             postgres:18
+          # pg_isready can briefly report healthy while initdb's temporary
+          # postmaster is stopping. Require a *real query* against the final
+          # database, then recheck after one second before starting DDL.
           for attempt in $(seq 1 90); do
-            if docker exec paper-account-pg-test pg_isready -U postgres -d paper_account_disposable >/dev/null 2>&1; then
-              exit 0
+            if docker exec -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+                psql -X -Atqc 'SELECT 1' -U postgres -d paper_account_disposable \
+                2>/dev/null | grep -qx 1; then
+              sleep 1
+              if docker exec -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+                  psql -X -Atqc 'SELECT 1' -U postgres -d paper_account_disposable \
+                  2>/dev/null | grep -qx 1; then exit 0; fi
             fi
             sleep 1
           done

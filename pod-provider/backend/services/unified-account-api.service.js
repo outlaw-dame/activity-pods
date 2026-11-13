@@ -30,6 +30,7 @@ module.exports = {
   actions: {
     async create(ctx) {
       let provisioningGrant = null;
+      let accountCreated = false;
 
       try {
         const accountParams = this.normalizeAccountCreateParams(ctx.params || {});
@@ -69,6 +70,10 @@ module.exports = {
           }
         });
 
+        accountCreated = true;
+        // An account may already be provisioned when this acknowledgment is
+        // lost. Do not return 201 or release its idempotency reservation as
+        // "failed": either action could cause a second DID on retry.
         try {
           await ctx.call('provider-capabilities.completeAccountProvisioning', {
             grant: provisioningGrant,
@@ -76,12 +81,18 @@ module.exports = {
             statusCode: ctx.meta.$statusCode || 201
           });
         } catch (stateErr) {
-          this.logger.warn(`[UnifiedAccount] Failed to store provisioning idempotency completion: ${stateErr.message}`);
+          this.logger.error('[UnifiedAccount] Durable completion acknowledgement was not confirmed');
+          throw new MoleculerError(
+            'Account state requires reconciliation before a retry',
+            503,
+            'ACCOUNT_COMPLETION_UNCERTAIN',
+            { retryable: false }
+          );
         }
 
         return result;
       } catch (e) {
-        if (provisioningGrant && provisioningGrant.idempotency?.replay !== true) {
+        if (provisioningGrant && !accountCreated && provisioningGrant.idempotency?.replay !== true) {
           try {
             await ctx.call('provider-capabilities.failAccountProvisioning', {
               grant: provisioningGrant,
@@ -147,7 +158,7 @@ module.exports = {
           const atprotoConfig = atproto && typeof atproto === 'object' ? atproto : { enabled: atproto === true };
           accountParams.atproto = {
             ...(accountParams.atproto || {}),
-            enabled: atprotoConfig.enabled === true,
+            enabled: atprotoConfig.enabled !== false,
             requestedHandle:
               atprotoConfig.handle || atprotoConfig.requestedHandle || accountParams.atproto?.requestedHandle,
             didMethod: this.normalizeDidMethod(atprotoConfig.didMethod || accountParams.atproto?.didMethod),

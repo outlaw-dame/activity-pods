@@ -149,17 +149,27 @@ test('native signed-event outbox claims are fenced, ordered and at least once',a
 
     await t.test('only first pending revision of one DID is claimable across eight workers',async()=>{
       const batch=await Promise.all(workers.map(w=>w.deliverOnce()));
-      assert.equal(batch.filter(x=>x.delivered).length,1);
-      assert.equal(batch.filter(x=>x.claimed===false).length,7);
-      assert.equal(published.length,1);
+      // A later worker may legally claim the second revision once another
+      // worker has already durably ACKed the first. What matters is that
+      // revisions remain ordered and neither event can be claimed twice.
+      const successes=batch.filter(x=>x.delivered===true).length;
+      assert(successes>=1 && successes<=2,
+        'only the two distinct ordered commits may be delivered');
+      assert.equal(batch.filter(x=>x.claimed===false).length,8-successes);
       assert.equal(published[0].commitCid,alice.first.commitCid);
       assert.equal((await dispatcher().inspect({
         did:alice.did,commitCid:alice.first.commitCid
       })).status,'delivered');
-      const next=await dispatcher().deliverOnce();
-      assert.equal(next.delivered,true);
+      if(successes===1){
+        const next=await dispatcher().deliverOnce();
+        assert.equal(next.delivered,true);
+      }
+      assert.equal(published.length,2);
       assert.equal(published[1].commitCid,added.commitCid);
       assert.notEqual(published[0].idempotencyKey,published[1].idempotencyKey);
+      assert.equal((await dispatcher().inspect({
+        did:alice.did,commitCid:added.commitCid
+      })).status,'delivered');
       assert.equal((await dispatcher().deliverOnce()).claimed,false);
     });
     await t.test('crash after broker ACK before PG ACK replays exactly the same key',async()=>{

@@ -42,6 +42,12 @@ CREATE TABLE paper_account_candidate.operations (
   signed_repo_proof_digest bytea CHECK (
     signed_repo_proof_digest IS NULL OR octet_length(signed_repo_proof_digest) = 32
   ),
+  -- Separate evidence that the configured HTTPS PDS actually served
+  -- latestCommit and a matching signed getRepo CAR. Local genesis only
+  -- must never satisfy the account-completion constraint.
+  pds_sync_proof_digest bytea CHECK (
+    pds_sync_proof_digest IS NULL OR octet_length(pds_sync_proof_digest) = 32
+  ),
   version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -53,7 +59,8 @@ CREATE TABLE paper_account_candidate.operations (
       length(pds_repo_root_cid) >= 30 AND
       pds_repo_root_cid <> 'bafyreigenesisplaceholder' AND
       length(pds_repo_rev) > 1 AND
-      signed_repo_proof_digest IS NOT NULL
+      signed_repo_proof_digest IS NOT NULL AND
+      pds_sync_proof_digest IS NOT NULL
     )
   ),
   -- A per-provider application idempotency key cannot point at two accounts.
@@ -109,6 +116,30 @@ COMMIT;
 -- com.atproto.sync.getLatestCommit/getRepo, with independent DID resolution.
 -- The existence of a signed_genesis row alone MUST NOT activate the account.
 -- This small ledger is for immutable crash-recovery evidence, not content.
+
+-- A completed row must refer to the same immutable genesis evidence.
+-- This is a storage-level referential check, independent of the application.
+-- Application roles must NOT receive direct UPDATE rights to these tables.
+CREATE FUNCTION paper_account_candidate.verify_completed_genesis()
+RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $
+BEGIN
+  IF NEW.state = 'completed' AND NOT EXISTS (
+    SELECT 1 FROM paper_account_candidate.signed_genesis g
+    WHERE g.operation_id = NEW.operation_id
+      AND g.did = NEW.atproto_did
+      AND g.root_cid = NEW.pds_repo_root_cid
+      AND g.repo_rev = NEW.pds_repo_rev
+      AND g.car_sha256 = NEW.signed_repo_proof_digest
+  ) THEN
+    RAISE EXCEPTION 'Completed account lacks matching immutable signed genesis'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $;
+CREATE CONSTRAINT TRIGGER operations_complete_verified_genesis
+AFTER INSERT OR UPDATE ON paper_account_candidate.operations
+DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW
+EXECUTE FUNCTION paper_account_candidate.verify_completed_genesis();
 
 CREATE UNIQUE INDEX operations_provider_verified_email_unique
   ON paper_account_candidate.operations(provider_id, verified_email_hmac)

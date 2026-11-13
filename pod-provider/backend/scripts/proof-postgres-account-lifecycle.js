@@ -27,6 +27,7 @@ async function main(){
     const start=await pool.query("SELECT count(*)::int AS n FROM pg_catalog.pg_tables WHERE schemaname='paper_account_candidate'");
     assert.equal(start.rows[0].n,0,'disposable schema must start absent');
     await pool.query(fs.readFileSync(path.resolve(__dirname,'../sql/paper-account-postgres-candidate-v1.sql'),'utf8'));
+    await pool.query(fs.readFileSync(path.resolve(__dirname,'../sql/paper-account-postgres-candidate-v2-signup-ledger.sql'),'utf8'));
     const locked=createCandidate({pool});
     await rejected(locked.reserve({providerId:provider,accountId:id(),username:'blocked'}),'ACCOUNT_CANDIDATE_NOT_RELEASED');
 
@@ -97,8 +98,79 @@ async function main(){
     assert.equal(ledger.rows[0].n,5,'replay and aborted transactions must not duplicate ledger rows');
     const locks=await pool.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND state=$1',['idle in transaction']);
     assert.equal(locks.rows[0].n,0);
+    // New signup operations share the exact same account row and PG
+    // transaction. Neither RPC retries nor an expired caller may mint
+    // another DID for an already reserved operation.
+    const fixtureHmacKey=crypto.randomBytes(32);
+    const hmac=(domain,value)=>crypto.createHmac('sha256',fixtureHmacKey)
+      .update(domain+'\0'+value).digest();
+    const signupId=id(), signupOp=id(), app='https://app.paper.example';
+    const signup={
+      providerId:provider,accountId:signupId,operationId:signupOp,
+      username:'signup-user',appClientId:app,hmacKeyVersion:1,
+      idempotencyHmac:hmac('account-signup-idempotency-v1','key-1'),
+      requestHmac:hmac('account-signup-request-v1','request-1')
+    };
+    assert.deepEqual(await model.reserveSignup(signup),{
+      operationId:signupOp,accountId:signupId,state:'reserved',generation:1,replay:false
+    });
+    assert.deepEqual(await model.reserveSignup({...signup,accountId:id(),operationId:id()}),{
+      operationId:signupOp,accountId:signupId,state:'reserved',generation:1,replay:true
+    });
+    await rejected(model.reserveSignup({...signup,
+      requestHmac:hmac('account-signup-request-v1','different')}),'ACCOUNT_SIGNUP_IDEMPOTENCY_CONFLICT');
+    assert.equal((await model.markSignupMayHaveSideEffects(signup)).state,'reconciliation_required');
+    const repeated=await model.markSignupMayHaveSideEffects(signup);
+    assert.equal(repeated.replay,true,'repeated remote-RPC fence never authorizes a retry');
+    assert.equal(repeated.generation,2,'fence cannot advance twice');
+    assert.equal((await model.readSignup(signup)).state,'reconciliation_required');
+    assert.equal(await model.readSignup({...signup,providerId:other}),null,'provider scope');
+    await rejected(model.markSignupMayHaveSideEffects({...signup,appClientId:'https://foreign.paper.example'}),
+      'ACCOUNT_SIGNUP_RECONCILIATION_REQUIRED');
+    assert.equal((await model.reserveSignup({...signup,accountId:id(),operationId:id()})).replay,true);
+
+    const sameName=await Promise.allSettled(Array.from({length:6},(_,i)=>model.reserveSignup({
+      ...signup,username:'signup-race',accountId:id(),operationId:id(),
+      idempotencyHmac:hmac('account-signup-idempotency-v1','race-'+i),
+      requestHmac:hmac('account-signup-request-v1','race-'+i)
+    })));
+    assert.equal(sameName.filter(x=>x.status==='fulfilled').length,1);
+    assert.equal(sameName.filter(x=>x.status==='rejected'&&x.reason.code==='ACCOUNT_USERNAME_CONFLICT').length,5);
+    const oldCount=await pool.query(
+      "SELECT count(*)::int AS n FROM paper_account_candidate.accounts WHERE provider_id=$1 AND username_key='signup-race'",[provider]);
+    assert.equal(oldCount.rows[0].n,1);
+
+    // A lost COMMIT reply is not a rolled-back transaction. Execute the
+    // actual COMMIT, then simulate transport loss; verify no false retry.
+    const lost={
+      ...signup,username:'lost-commit',accountId:id(),operationId:id(),
+      idempotencyHmac:hmac('account-signup-idempotency-v1','lost'),
+      requestHmac:hmac('account-signup-request-v1','lost')
+    };
+    const ambiguousPool={
+      async connect(){
+        const c=await pool.connect();
+        return {
+          query:async (...args)=>{
+            if(args[0]==='COMMIT'){
+              await c.query(...args);
+              throw new Error('simulated lost COMMIT acknowledgement');
+            }
+            return c.query(...args);
+          },
+          release:discard=>c.release(discard)
+        };
+      }
+    };
+    await rejected(createCandidate({pool:ambiguousPool,fixtureOnly:true}).reserveSignup(lost),
+      'ACCOUNT_COMMIT_OUTCOME_UNKNOWN');
+    assert.equal((await model.readSignup(lost)).accountId,lost.accountId,
+      'database committed despite the lost transport reply');
+    assert.equal((await model.reserveSignup({...lost,accountId:id(),operationId:id()})).replay,true,
+      'the original operation survives and forbids another account');
+
     process.stdout.write(JSON.stringify({ok:true,schema:'paper.accounts.candidate.v1',postgres:18,
-      tests:['disabled-by-default','provider scope','unique username race','idempotency','unified AP/AT identity constraints','WebID conflict',
+      tests:['durable signup reservation','uncertain remote commit','replay fence','lost PostgreSQL COMMIT','disabled-by-default','provider scope','unique username race','idempotency','unified AP/AT identity constraints','WebID conflict',
         'rollback','generation fence','valid transition graph','deletion','no orphaned locks']})+'\n');
   }finally{await pool.end();}
 }

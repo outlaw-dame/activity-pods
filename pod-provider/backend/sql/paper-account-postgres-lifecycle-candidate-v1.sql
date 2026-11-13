@@ -7,6 +7,8 @@ CREATE SCHEMA paper_account_candidate;
 
 CREATE TABLE paper_account_candidate.operations (
   operation_id uuid PRIMARY KEY,
+  -- Legacy account migration deliberately uses a separate future workflow.
+  operation_kind text NOT NULL DEFAULT 'new_signup' CHECK (operation_kind = 'new_signup'),
   provider_id text NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 255),
   app_client_id text NOT NULL CHECK (length(app_client_id) BETWEEN 1 AND 2048),
   -- Provider-keyed, domain-separated HMAC-SHA256 of client idempotency key.

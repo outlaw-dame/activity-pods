@@ -125,7 +125,13 @@ module.exports = {
             ? 'ActivityPub/ATProto provisioning'
             : 'ActivityPub provisioning';
           this.logger.error(`[Auth] ${provisioningStage} failed for ${webId}: ${e.message}`);
-          await this._cleanupPartialAtprotoArtifacts(ctx, webId);
+          // A submitted PLC genesis cannot be rolled back by deleting local
+          // binding/key records. Keep all evidence for explicit reconciliation.
+          if (!this._mustPreserveFailedSignup()) {
+            await this._cleanupPartialAtprotoArtifacts(ctx, webId);
+          } else {
+            this.logger.error('[Auth] Signup failed after identity creation; preserving keys, binding and account for reconciliation');
+          }
           throw new MoleculerError(
             `${provisioningStage} failed during signup: ${e.message}`,
             Number.isFinite(Number(e.code)) ? Number(e.code) : 500,
@@ -152,6 +158,14 @@ module.exports = {
             : {})
         };
       } catch (e) {
+        // Once identity bootstrap starts, a failure may have occurred after
+        // an irreversible DID/PLC submission or asynchronous Solid resource
+        // creation. Releasing the username or destroying keys would make
+        // duplicate identities possible on a retry.
+        if (webId && this._mustPreserveFailedSignup()) {
+          this.logger.error('[Auth] Keeping failed signup state reserved pending reconciliation');
+          throw e;
+        }
         if (webId) await this._cleanupPartialAtprotoArtifacts(ctx, webId).catch(() => {});
         await ctx.call('auth.account.remove', { id: accountData['@id'] });
         throw e;
@@ -262,7 +276,20 @@ module.exports = {
       }
     },
 
+    _mustPreserveFailedSignup() {
+      // This guard must not depend on whether the last RPC returned success:
+      // an HTTP/DB timeout can happen *after* a successful PLC submission.
+      return process.env.NODE_ENV === 'production' ||
+        process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION === 'true';
+    },
     async _cleanupPartialAtprotoArtifacts(ctx, webId) {
+      if (this._mustPreserveFailedSignup()) {
+        throw new MoleculerError(
+          'Cannot destructively clean up potentially submitted PLC identity',
+          503,
+          'ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED'
+        );
+      }
       try {
         await ctx.call('identitybindings.remove', { canonicalAccountId: webId });
       } catch (err) {

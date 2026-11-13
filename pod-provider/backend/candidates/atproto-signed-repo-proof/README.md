@@ -312,3 +312,47 @@ provider-only key authority, atomic completion seal, authenticated
 record write XRPC, outbox publisher and public firehose, backup/restore,
 multi-replica crash/retry and throughput/cost acceptance. Existing-account
 migration remains deferred.
+
+
+## Durable native-event outbox dispatch proof
+
+The existing PostgreSQL native_event_outbox already commits with each
+signed repository head. This nonactivated extension adds durable lease
+owner/epoch, retry schedule, terminal blocked state, and indexed
+per-repository ordering to the SAME outbox table, without a second
+message broker, shadow account registry or unbounded polling loop.
+
+Each explicit deliverOnce call claims at most one due event using a
+PostgreSQL SKIP LOCKED query. It refuses a later revision of the same DID
+while an earlier event is pending. Network materialization and delivery
+occur after the PostgreSQL claim transaction ends; a cryptographically
+verifying provider callback builds bounded event bytes, and an injected
+broker adapter must acknowledge a durable send with the exact stable
+DID+commit CID idempotency key. Only then can PostgreSQL mark the row
+delivered, using the current lease owner, epoch, commit and nonexpired
+database-time lease as a conditional fence.
+
+Failures use bounded full-jitter exponential backoff, maximum attempts and
+a terminal blocked timestamp with no unbounded retry loop. Terminal blocks
+cannot pass signed-repository readiness: they require explicit operator
+recovery and prevent later pending events of the same DID overtaking a
+blocked event. No private key, untrusted XRPC parameter, plaintext token or
+broker credential is stored in the outbox.
+
+A process crash AFTER the broker accepted the event but BEFORE the
+PostgreSQL ACK will cause a duplicate send after the lease expires.
+Both sends use precisely the same idempotency key. Delivery is
+at-least-once, NOT exactly-once: the eventual Redpanda publisher and its
+consumer must deduplicate the key. The broker adapter must honor the
+provided AbortSignal and confirm durable broker acknowledgement; lease
+expiry is not permission for stale workers to mark an event delivered.
+
+The real PG18 test checks eight competing workers, per-DID ordering,
+crash-after-ACK replay, transient backoff, terminal poisoned events,
+corrupted signed blocks, readiness rejection and production fail-closed.
+The event payload in the test is a verified INTERNAL fixture, NOT an
+ATProto firehose frame. A correct native #commit event builder with
+prevData, ops and diff CAR, authenticated provider publisher, Redpanda
+integration, real multi-process SIGKILL, persistent restore and relay
+acceptance remain release blockers. There is no production dispatcher
+registration in this candidate.

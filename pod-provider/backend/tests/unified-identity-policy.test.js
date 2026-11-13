@@ -27,7 +27,8 @@ describe('mandatory unified identity for each newly created account', () => {
     {protocols:{atproto:false}},
     {protocols:{solid:{enabled:false}}},
     {protocols:{activitypub:{enabled:false}}},
-    {protocols:{atproto:{enabled:false}}}
+    {protocols:{atproto:{enabled:false}}},
+    []
   ])('rejects unsupported optional identity configuration %o', request => {
     expect(() => assertUnifiedRequest(request)).toThrow('UNIFIED_IDENTITY_REQUIRED');
   });
@@ -38,8 +39,18 @@ describe('mandatory unified identity for each newly created account', () => {
     {...result, repoInitialized:false},
     {...result, repoInitialized:null},
     {...result, webId:'http://paper.example/users/alice'},
+    {...result, webId:'https:///users/alice', actorId:'https:///users/alice'},
+    {...result, webId:'https://alice:secret@paper.example/users/alice', actorId:'https://alice:secret@paper.example/users/alice'},
+    {...result, webId:'https://paper.example:443/users/alice', actorId:'https://paper.example:443/users/alice'},
+    {...result, webId:'https://paper.example/users/../alice', actorId:'https://paper.example/users/../alice'},
     {...result, actorId:null}
   ])('does not report account provisioned with missing or different identities %o', invalid => {
     expect(() => assertUnifiedResult(invalid)).toThrow('UNIFIED_IDENTITY_INCOMPLETE');
   });
+  test.each([null, undefined, [], 'https://paper.example/users/alice'])(
+    'rejects malformed provisioning results instead of throwing an unclassified error: %p',
+    invalid => {
+      expect(() => assertUnifiedResult(invalid)).toThrow('UNIFIED_IDENTITY_INCOMPLETE');
+    }
+  );
 });

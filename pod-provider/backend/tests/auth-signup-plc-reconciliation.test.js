@@ -36,4 +36,19 @@ describe('irreversible PLC signup rollback safety', () => {
     expect(source).toContain('ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED');
     expect(source).toContain('return mustPreserveFailedSignup();');
   });
+
+  it('rejects production signup before a DB account, WebID, key or PLC operation', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../services/core/auth.js'), 'utf8'
+    );
+    const signup = source.indexOf('async signup(ctx) {');
+    const pdsGate = source.indexOf("if (process.env.NODE_ENV === 'production')", signup);
+    const accountWrite = source.indexOf("'auth.account.create'", signup);
+    const webidWrite = source.indexOf("'webid.createWebId'", signup);
+    expect(signup).toBeGreaterThan(-1);
+    expect(pdsGate).toBeGreaterThan(signup);
+    expect(accountWrite).toBeGreaterThan(pdsGate);
+    expect(webidWrite).toBeGreaterThan(accountWrite);
+    expect(source.slice(pdsGate, accountWrite)).toContain('ATPROTO_PDS_REPOSITORY_NOT_READY');
+  });
 });

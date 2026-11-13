@@ -6,6 +6,8 @@ on:
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v2-signup-ledger.sql'
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
+      - 'pod-provider/backend/candidates/solid-new-signup-proof.js'
+      - 'pod-provider/backend/tests/solid-new-signup-proof.test.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-lifecycle.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-backup-restore.sh'
       - '.github/workflows/paper-accounts-postgres-candidate.yml'
@@ -27,6 +29,7 @@ jobs:
       - name: Check implementation and proof syntax
         run: |
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
+          node --check pod-provider/backend/candidates/solid-new-signup-proof.js
           node --check pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
       - name: Install isolated PostgreSQL client for disposable proof
         run: |

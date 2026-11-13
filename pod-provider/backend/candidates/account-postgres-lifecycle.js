@@ -93,7 +93,8 @@ async function transaction(pool, fn) {
 }
 
 function createAccountPostgresLifecycleCandidate({
-  pool, resolveTrustedKeyDid, verifyGenesis, verifyPds, verifySolid
+  pool, resolveTrustedKeyDid, verifyGenesis, verifyPds, verifySolid,
+  assertFreshAccount
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') {
     throw new TypeError('ACCOUNT_LEDGER_PG_POOL_REQUIRED');
@@ -104,6 +105,39 @@ function createAccountPostgresLifecycleCandidate({
     // database unique constraints, not on a local JavaScript Map.
     async reserve(input) {
       validateReserve(input);
+      if (input.operationKind !== 'new_signup') {
+        fail('ACCOUNT_LEDGER_NEW_SIGNUP_ONLY', 400);
+      }
+      // Replays of completed NEW signups are resolved by the database and
+      // must not be blocked by the account they legitimately created.
+      // An unrecognized operation must first clear the existing Solid
+      // account namespace, so a legacy WebID cannot be silently adopted.
+      // Never hold a PostgreSQL row lock during the external indexed lookup.
+      const alreadyReserved = await pool.query(
+        `SELECT operation_id FROM ${TABLE}
+         WHERE provider_id=$1 AND app_client_id=$2
+           AND idempotency_digest=$3 LIMIT 1`,
+        [input.providerId,input.appClientId,input.idempotencyDigest]
+      );
+      if (alreadyReserved.rowCount === 0) {
+        if (typeof assertFreshAccount !== 'function') {
+          fail('ACCOUNT_LEDGER_NEW_ACCOUNT_CHECK_REQUIRED', 503);
+        }
+        let available;
+        try {
+          available = await assertFreshAccount({
+            providerId: input.providerId,
+            usernameKey: input.usernameKey
+          });
+        } catch (_) {
+          fail('ACCOUNT_LEDGER_EXISTING_ACCOUNT_CHECK_UNAVAILABLE', 503);
+        }
+        if (available !== true) {
+          fail('ACCOUNT_LEDGER_EXISTING_ACCOUNT', 409);
+        }
+      }
+      // SQL uniqueness is still authoritative for concurrent NEW signups;
+      // an external lookup by itself is never a substitute for this INSERT.
       return transaction(pool, async client => {
         const inserted = await client.query(
           `INSERT INTO ${TABLE} (

@@ -29,7 +29,7 @@ exec_psql "$source_db" -Atqc \
   "SELECT account_id,operation_id,previous_generation,next_generation,kind,payload_digest FROM paper_account_candidate.transitions ORDER BY account_id,next_generation;" \
   > "$tmp/source-transitions.txt"
 exec_psql "$source_db" -Atqc \
-  "SELECT provider_id,account_id,operation_id,app_client_id,hmac_key_version,encode(idempotency_hmac,'hex'),encode(request_hmac,'hex'),state,generation,may_have_side_effects FROM paper_account_candidate.signup_operations ORDER BY operation_id;" \
+  "SELECT provider_id,account_id,operation_id,app_client_id,hmac_key_version,encode(idempotency_hmac,'hex'),encode(request_hmac,'hex'),state,generation,may_have_side_effects,encode(evidence_digest,'hex'),evidence_commit_cid,evidence_root_cid,evidence_rev,evidence_fence,evidence_account_generation,evidence_sealed_at FROM paper_account_candidate.signup_operations ORDER BY operation_id;" \
   > "$tmp/source-signups.txt"
 
 docker exec -e PGPASSWORD=bench "$container" \
@@ -50,7 +50,7 @@ exec_psql "$restore_db" -Atqc \
   "SELECT account_id,operation_id,previous_generation,next_generation,kind,payload_digest FROM paper_account_candidate.transitions ORDER BY account_id,next_generation;" \
   > "$tmp/restored-transitions.txt"
 exec_psql "$restore_db" -Atqc \
-  "SELECT provider_id,account_id,operation_id,app_client_id,hmac_key_version,encode(idempotency_hmac,'hex'),encode(request_hmac,'hex'),state,generation,may_have_side_effects FROM paper_account_candidate.signup_operations ORDER BY operation_id;" \
+  "SELECT provider_id,account_id,operation_id,app_client_id,hmac_key_version,encode(idempotency_hmac,'hex'),encode(request_hmac,'hex'),state,generation,may_have_side_effects,encode(evidence_digest,'hex'),evidence_commit_cid,evidence_root_cid,evidence_rev,evidence_fence,evidence_account_generation,evidence_sealed_at FROM paper_account_candidate.signup_operations ORDER BY operation_id;" \
   > "$tmp/restored-signups.txt"
 cmp "$tmp/source-accounts.txt" "$tmp/restored-accounts.txt"
 cmp "$tmp/source-transitions.txt" "$tmp/restored-transitions.txt"

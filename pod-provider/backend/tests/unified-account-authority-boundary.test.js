@@ -90,6 +90,14 @@ describe('unified account: one authoritative signup and no fake production PDS',
     })).rejects.toMatchObject({ code: 503 });
     expect(atprotoRepeat).not.toHaveBeenCalled();
   });
+  it('keeps a pre-signup phase failure distinct from an uncertain PLC outcome', async () => {
+    markPhase.mockRejectedValueOnce(new Error('Provisioning journal unavailable'));
+    await expect(broker.call('unified-account.create', input, {
+      meta: { accountProvisioning: { capabilityId: 'provider.account.provisioning' } }
+    })).rejects.toMatchObject({ type: 'UNIFIED_ACCOUNT_PROVISIONING_FAILED' });
+    expect(signups).not.toHaveBeenCalled();
+    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ state: 'failed' }));
+  });
   it('marks uncertain state instead of failed when signup RPC may have committed a PLC operation', async () => {
     signups.mockRejectedValueOnce(new Error('Transport closed after PLC submission'));
     await expect(broker.call('unified-account.create', input, {

@@ -35,7 +35,40 @@ function isCanonicalHttpsWebId(value) {
     return false;
   }
 }
+/**
+ * This create endpoint is exclusively for NEW identities. Importing,
+ * migrating, linking or repairing existing WebIDs/DIDs is a different,
+ * consent-bound workflow. Reject such fields before any reservation,
+ * username registration, signing key or PLC side effect.
+ */
+const EXISTING_IDENTITY_FIELDS = Object.freeze([
+  'accountId', 'canonicalAccountId', 'existingAccountId',
+  'webId', 'existingWebId', 'actorId', 'activityPubActorId',
+  'did', 'atprotoDid', 'existingDid', 'sourceDid',
+  'importDid', 'migration', 'migrate', 'import',
+  'linkExisting', 'fromAccountId', 'fromDid'
+]);
+function requestsExistingIdentity(input) {
+  if (!input || typeof input !== 'object') return false;
+  const scopes = [
+    input,
+    input.atproto,
+    input.protocols?.atproto,
+    input.activitypub,
+    input.protocols?.activitypub,
+    input.solid,
+    input.protocols?.solid
+  ];
+  return scopes.some(value => value && typeof value === 'object' &&
+    (EXISTING_IDENTITY_FIELDS.some(key => Object.prototype.hasOwnProperty.call(value, key)) ||
+     value.force === true || value.recover === true || value.repair === true));
+}
 function assertUnifiedRequest(input) {
+  if (requestsExistingIdentity(input)) {
+    const error = new Error('UNIFIED_ACCOUNT_NEW_ONLY: use a separate consented migration/linking flow for existing identities');
+    error.code = 'UNIFIED_ACCOUNT_NEW_ONLY';
+    throw error;
+  }
   if (!input || typeof input !== 'object' || Array.isArray(input) || hasExplicitDisable(input) ||
       input?.atproto?.didMethod && !['plc','did:plc'].includes(input.atproto.didMethod)) {
     const error = new Error('UNIFIED_IDENTITY_REQUIRED: WebID, ActivityPub and did:plc are mandatory');

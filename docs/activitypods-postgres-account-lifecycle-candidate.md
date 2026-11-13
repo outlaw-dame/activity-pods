@@ -182,3 +182,29 @@ cross-store revocation epochs and outbox consumer delivery, live PLC/DNS
 resolution, and multi-replica kill/restart and cost benchmarks. An
 `evidence_only` result MUST NOT bypass the production `auth.signup` fuse.
 Existing-account migration remains a separate future phase.
+
+
+## Ready-transition safety: newly journaled accounts cannot bypass signed release
+
+A read-only signed-repository, Solid and PG/Jena proof does not by itself
+authorize a state mutation. The generic `change(kind:'transition_state',
+nextState:'ready')` candidate now checks the indexed
+`signup_operations` row **inside the same PostgreSQL transaction**, under
+the canonical account row lock. If the account was reserved through the
+new-signup journal, it refuses `ready` with
+`ACCOUNT_SIGNUP_COMPLETION_SEAL_REQUIRED`, including the
+`suspended → ready` path. It cannot be bypassed with a reused
+`operationId` because the guard executes before transition replay.
+
+The existing candidate `reserve()` fixture without a new-signup journal
+retains its separate legacy state-transition test path; it is **not** the
+production new-account registration entry point. This distinction is
+intentional to avoid migrating or silently adopting existing accounts.
+
+The future provider-only completion operation must be a distinct,
+generation-fenced PostgreSQL transaction consuming *fresh, current* signed
+repo head and outbox evidence plus the still-valid protected SAI/RDF
+revocation epoch, with revalidation before every authority-dependent
+operation. It must not accept a caller-created Boolean or the disposable
+`productionReady:false` evidence result. Until then, new signup remains
+in reconciliation and production `auth.signup` stays closed.

@@ -64,12 +64,27 @@ function createCandidate({pool,fixtureOnly=false}={}){
     return tx(pool,async c=>{
       const a=await c.query('SELECT state,webid,atproto_did,generation FROM '+SCHEMA+'.accounts WHERE provider_id=$1 AND account_id=$2 FOR UPDATE',[providerId,accountId]);
       if(a.rowCount!==1)fail('ACCOUNT_NOT_FOUND');
+      const current=a.rows[0],target=kind==='bind_unified_identity'?'provisioning':nextState;
+      if(target==='ready'){
+        // A newly reserved account is NOT ready merely because its
+        // PostgreSQL identity columns contain WebID, DID and a Boolean
+        // repoInitialized. Only a future, reviewed provider-owned completion
+        // CAS may transition a signup-journal account to ready after
+        // verifying signed CAR, SAI revocation epoch and RDF projection.
+        // The journal's UNIQUE(provider_id,account_id) gives an indexed,
+        // bounded row lock, not a full account scan.
+        const newSignup=await c.query(
+          'SELECT operation_id FROM '+SCHEMA+'.signup_operations '+
+          'WHERE provider_id=$1 AND account_id=$2 FOR UPDATE',
+          [providerId,accountId]
+        );
+        if(newSignup.rowCount!==0)fail('ACCOUNT_SIGNUP_COMPLETION_SEAL_REQUIRED');
+      }
       const replay=await c.query('SELECT payload_digest,next_generation FROM '+SCHEMA+'.transitions WHERE account_id=$1 AND operation_id=$2',[accountId,operationId]);
       if(replay.rowCount){
         if(replay.rows[0].payload_digest!==digest)fail('ACCOUNT_OPERATION_CONFLICT');
         return {accountId,generation:Number(replay.rows[0].next_generation),replay:true};
       }
-      const current=a.rows[0],target=kind==='bind_unified_identity'?'provisioning':nextState;
       if(Number(current.generation)!==expectedGeneration)fail('ACCOUNT_STALE_GENERATION');
       if(!ALLOWED[current.state].includes(target))fail('ACCOUNT_INVALID_TRANSITION');
       if(kind==='bind_unified_identity'&&(current.webid!==null||current.atproto_did!==null))fail('ACCOUNT_ALREADY_BOUND');

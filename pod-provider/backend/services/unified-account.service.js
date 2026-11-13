@@ -1,3 +1,4 @@
+const { assertUnifiedRequest, assertUnifiedResult } = require('../utils/unified-identity-policy');
 const { MoleculerError } = require('moleculer').Errors;
 
 module.exports = {
@@ -18,6 +19,7 @@ module.exports = {
     'webid-provisioning',
     'activitypub-provisioning',
     'atproto-provisioning',
+    'identitybindings',
     'account-provisioning-state'
   ],
 
@@ -54,14 +56,19 @@ module.exports = {
           props: {
             enabled: { type: 'boolean', optional: true },
             requestedHandle: { type: 'string', optional: true },
-            didMethod: { type: 'enum', values: ['plc', 'web'], optional: true },
+            didMethod: { type: 'enum', values: ['plc'], optional: true },
             force: { type: 'boolean', optional: true }
           }
         }
       },
       async handler(ctx) {
         const input = ctx.params;
-        const requestedProtocols = this.requestedProtocolsFromInput(input);
+        let requestedProtocols;
+        try {
+          requestedProtocols = assertUnifiedRequest(input);
+        } catch (error) {
+          throw new MoleculerError(error.message, 400, error.code);
+        }
 
         await ctx.call('provider-capabilities.assertAccountProvisioningGrant', {
           grant: ctx.meta?.accountProvisioning || {},
@@ -71,7 +78,7 @@ module.exports = {
         const enableSolid = requestedProtocols.solid;
         const enableActivityPub = requestedProtocols.activitypub;
         const enableAtproto = requestedProtocols.atproto;
-        const atprotoDidMethod = input.atproto?.didMethod ?? this.settings.defaults.atprotoDidMethod;
+        const atprotoDidMethod = 'plc';
 
         const warnings = [];
         const failedPhases = [];
@@ -109,6 +116,17 @@ module.exports = {
             status: 'completed'
           });
 
+          // The accounts adapter has already executed auth.signup. In the
+          // real provider that one action provisions AP, did:plc, PDS state
+          // and the Solid bootstrap. Do not submit another PLC operation.
+          const signupEvidence = canonical.signupProvisioning || null;
+          if (signupEvidence && signupEvidence.webId !== canonical.canonicalAccountId) {
+            throw new MoleculerError('Signup returned inconsistent account identity', 503, 'UNIFIED_IDENTITY_INCOMPLETE');
+          }
+          if (process.env.NODE_ENV === 'production' && !signupEvidence) {
+            throw new MoleculerError('Authoritative signup completion evidence is missing', 503, 'UNIFIED_IDENTITY_INCOMPLETE');
+          }
+
           if (enableSolid) {
             currentPhase = 'webid';
             await ctx.call('account-provisioning-state.markPhase', {
@@ -135,7 +153,7 @@ module.exports = {
           }
 
           if (canonical.canonicalAccountId !== solid.webId) {
-            warnings.push('canonicalAccountId and webId differ; current AT provisioning path expects them to match');
+            throw new MoleculerError('Canonical account ID and WebID disagree', 503, 'UNIFIED_IDENTITY_INCOMPLETE');
           }
 
           if (enableActivityPub) {
@@ -168,19 +186,56 @@ module.exports = {
               status: 'started'
             });
 
-            atproto = await ctx.call('atproto-provisioning.provisionForAccount', {
-              canonicalAccountId: canonical.canonicalAccountId,
-              webId: solid.webId,
-              requestedHandle: input.atproto?.requestedHandle || input.username,
-              activityPubActorId: activitypub?.actorId || solid.webId,
-              activityPubHandle: activitypub?.handle || null,
-              didMethod: atprotoDidMethod,
-              profile: input.profile,
-              force: input.atproto?.force ?? false
-            });
+            if (signupEvidence) {
+              // Use the DID returned by the authoritative signup path,
+              // cross-checking its protected identity binding. A second
+              // provisioning call can create duplicate keys or PLC operations.
+              const binding = await ctx.call('identitybindings.getByCanonicalAccountId', {
+                canonicalAccountId: canonical.canonicalAccountId
+              });
+              if (!binding || binding.webId !== solid.webId ||
+                  binding.activityPubActorId !== activitypub?.actorId ||
+                  binding.atprotoDid !== signupEvidence.did ||
+                  binding.repoInitialized !== true ||
+                  !binding.repoRootCid || !binding.repoRev ||
+                  binding.atprotoSource === 'external' ||
+                  binding.atprotoManaged === false ||
+                  !binding.atSigningKeyRef || !binding.atRotationKeyRef ||
+                  !binding.atprotoPdsUrl) {
+                throw new MoleculerError('Persisted identity binding is incomplete or inconsistent', 503, 'UNIFIED_IDENTITY_INCOMPLETE');
+              }
+              atproto = {
+                did: signupEvidence.did,
+                handle: signupEvidence.atprotoHandle,
+                repoInitialized: signupEvidence.repoInitialized === true,
+                atprotoPdsUrl: binding.atprotoPdsUrl
+              };
+            } else {
+              // Only the isolated legacy test fixture may need provisioning
+              // after the stubbed accounts.create action. Production NEVER
+              // takes this path.
+              if (process.env.NODE_ENV === 'production') {
+                throw new MoleculerError('Signup did not complete AT Protocol provisioning', 503, 'UNIFIED_IDENTITY_INCOMPLETE');
+              }
+              atproto = await ctx.call('atproto-provisioning.provisionForAccount', {
+                canonicalAccountId: canonical.canonicalAccountId,
+                webId: solid.webId,
+                requestedHandle: input.atproto?.requestedHandle || input.username,
+                activityPubActorId: activitypub?.actorId || solid.webId,
+                activityPubHandle: activitypub?.handle || null,
+                didMethod: atprotoDidMethod,
+                profile: input.profile,
+                force: input.atproto?.force ?? false
+              });
+            }
 
-            if (!atproto?.did || !atproto?.repoInitialized) {
-              throw new MoleculerError('ATProto provisioning incomplete', 500, 'ATPROTO_PROVISIONING_INCOMPLETE');
+            try {
+              assertUnifiedResult({
+                webId: solid.webId, actorId: activitypub?.actorId,
+                did: atproto?.did, repoInitialized: atproto?.repoInitialized
+              });
+            } catch (error) {
+              throw new MoleculerError(error.message, 503, error.code);
             }
 
             await ctx.call('account-provisioning-state.markPhase', {
@@ -211,7 +266,7 @@ module.exports = {
                   did: atproto.did,
                   handle: atproto.handle,
                   repoInitialized: !!atproto.repoInitialized,
-                  signingReady: true
+                  atprotoPdsUrl: atproto.atprotoPdsUrl || null
                 }
               : null,
             solid: {
@@ -261,9 +316,9 @@ module.exports = {
   methods: {
     requestedProtocolsFromInput(input) {
       return {
-        solid: input.solid?.enabled ?? this.settings.defaults.enableSolid,
-        activitypub: input.activitypub?.enabled ?? this.settings.defaults.enableActivityPub,
-        atproto: input.atproto?.enabled ?? this.settings.defaults.enableAtproto
+        solid: true,
+        activitypub: true,
+        atproto: true
       };
     }
   }

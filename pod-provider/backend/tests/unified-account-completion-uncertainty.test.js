@@ -4,6 +4,21 @@ const api = require('../services/unified-account-api.service');
 const provider = require('../services/provider-capabilities.service');
 
 describe('unified account completion is fail-closed after side effects', () => {
+  it('rejects production unified API before reserving a username or creating a DID', async () => {
+    const oldNodeEnv=process.env.NODE_ENV;
+    process.env.NODE_ENV='production';
+    try {
+      await expect(api.actions.create({params:{username:'alice'},meta:{}}))
+        .rejects.toMatchObject({
+          type:'UNIFIED_ACCOUNT_RELEASE_GATE_CLOSED',
+          code:503,
+          data:{retryable:false}
+        });
+    } finally {
+      if(oldNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV=oldNodeEnv;
+    }
+  });
   it('never returns HTTP 201 or releases an idempotency reservation when completion storage fails', async () => {
     const failProvisioning = jest.fn(async () => ({ ok: true }));
     const begin = jest.fn(async () => ({ canonicalAccountId: 'https://pods.example/alice' }));

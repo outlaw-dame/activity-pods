@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v2-signup-ledger.sql'
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-lifecycle.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-backup-restore.sh'

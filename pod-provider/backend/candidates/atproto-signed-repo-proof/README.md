@@ -256,3 +256,59 @@ signed CAR remains valid. New-signup cross-authority verification also
 requires the verified PLC hosting origin to agree with the PostgreSQL
 account's intended PDS. The signed proof exposes only this public
 hosting origin, never key references or private material.
+
+
+## Signed record mutation candidate — bounded PostgreSQL 18 gate
+
+**Status: NON-ACTIVATED; zero or one record per repository.** The additive
+single-record-mutation.sql and single-record-writer.mjs use the EXISTING
+signed repository tables. They introduce no new account authority, no public
+XRPC write surface and no production signup activation.
+
+The signed-v3 sequence now proved in the disposable database is empty
+genesis → create one record → update that same record → delete the record
+and return to the exact prior empty-tree CID. A second distinct record,
+arbitrary subtree updates and production XRPC remain outside this gate.
+
+The implementation limits canonical record paths, validates the matching
+collection record type, uses canonical DAG-CBOR and real SHA-256 CIDs, signs
+with the account secp256k1 key (canonical low-S signature), and verifies a
+three-block CAR (commit/MST/record), or two blocks for the empty root.
+The next TID is strictly greater than the prior durable revision even when
+two writers use the same wall-clock millisecond.
+
+An authorized provider callback must approve before and after signing.
+The writer verifies the full existing signed snapshot and requires the exact
+prior commit CID/revision from its trusted caller. It signs outside SQL,
+then locks the canonical PG repo row and repeats the head/generation CAS.
+Only one competing writer can win; the others fail with a stale-head error
+without an uncontrolled retry.
+
+One PG transaction persists content-addressed blocks, advances the
+canonical repo head, appends a native pending commit event, stores immutable
+mutation metadata (action, path, prior CID/rev and new CID), and resets the
+EXISTING PG→Jena projection intent to pending with a strictly increasing
+generation while preserving the monotone lease fence. An unapplied
+projection blocks another write. A failed transaction rolls back all
+effects. A lost COMMIT reply yields a special unknown-outcome error and
+discards the uncertain PG connection; reconciliation must use read-only
+verified head/outbox state, never blind creation.
+
+The disposable PG18 tests cover create/update/delete, matching CID bytes,
+restored empty root, prior block retention, pending projection,
+authorization denial, wrong signer, corrupted blocks, eight concurrent
+writers, failure after outbox insertion and an actual durable COMMIT
+whose acknowledgment was lost. The independent CI reference test uses
+Bluesky's published @atproto/repo MST to verify one-leaf root CIDs,
+signed CAR parsing and deletion.
+
+**Not yet production-ready:** actual Solid-OIDC/SAI authorization is an
+injected fixture; PG test projection ACK is a synthetic SQL fixture,
+not a live Jena grant. Existing read-only public sync XRPC and the older
+genesis-only verifier deliberately fail closed on nonempty heads.
+Remaining release gates include full multi-record open-source MST,
+real protected Jena projection/revocation integration, production
+provider-only key authority, atomic completion seal, authenticated
+record write XRPC, outbox publisher and public firehose, backup/restore,
+multi-replica crash/retry and throughput/cost acceptance. Existing-account
+migration remains deferred.

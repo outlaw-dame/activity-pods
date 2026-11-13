@@ -6,6 +6,7 @@ const {
 const { AuthLocalService } = require('@semapps/auth');
 const CONFIG = require('../../config/config');
 const transport = require('../../config/transport');
+const { mustPreserveFailedSignup } = require('../../utils/account-signup-rollback-policy');
 
 module.exports = {
   mixins: [AuthLocalService],
@@ -68,6 +69,7 @@ module.exports = {
       });
 
       let webId = null;
+      let irreversibleIdentityStarted = false;
       try {
         const profileData = { nick: accountData.username, email: accountData.email, ...rest };
         webId = await ctx.call('webid.createWebId', this.pickWebIdData(profileData), {
@@ -102,6 +104,10 @@ module.exports = {
           });
 
           if (this.settings.atproto.autoProvisionOnSignup) {
+            // This RPC may create keys, a DID genesis or a PDS record before
+            // the transport reports an error. Preserve recovery materials if
+            // the service is configured for real external side effects.
+            irreversibleIdentityStarted = mustPreserveFailedSignup();
             atprotoProvisioning = await ctx.call('atproto-provisioning.provisionForAccount', {
               canonicalAccountId: webId,
               webId,
@@ -120,7 +126,7 @@ module.exports = {
             ? 'ActivityPub/ATProto provisioning'
             : 'ActivityPub provisioning';
           this.logger.error(`[Auth] ${provisioningStage} failed for ${webId}: ${e.message}`);
-          await this._cleanupPartialAtprotoArtifacts(ctx, webId);
+          // Cleanup is owned by the outer catch exactly once.
           throw new MoleculerError(
             `${provisioningStage} failed during signup: ${e.message}`,
             Number.isFinite(Number(e.code)) ? Number(e.code) : 500,
@@ -147,7 +153,29 @@ module.exports = {
             : {})
         };
       } catch (e) {
-        if (webId) await this._cleanupPartialAtprotoArtifacts(ctx, webId).catch(() => {});
+        if (irreversibleIdentityStarted) {
+          this.logger.error('[Auth] Preserving failed signup account and signing records for identity reconciliation');
+          throw new MoleculerError(
+            'Account identity outcome requires reconciliation before retry',
+            503,
+            'ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED',
+            { retryable: false }
+          );
+        }
+        if (webId) {
+          try {
+            await this._cleanupPartialAtprotoArtifacts(ctx, webId);
+          } catch (_cleanupError) {
+            // An unknown cleanup outcome is not permission to release a
+            // username or mint an unrelated DID on a repeated request.
+            throw new MoleculerError(
+              'Account cleanup requires reconciliation before retry',
+              503,
+              'ACCOUNT_CLEANUP_UNCERTAIN',
+              { retryable: false }
+            );
+          }
+        }
         await ctx.call('auth.account.remove', { id: accountData['@id'] });
         throw e;
       }
@@ -258,15 +286,28 @@ module.exports = {
     },
 
     async _cleanupPartialAtprotoArtifacts(ctx, webId) {
+      // Non-production fixture or a failure before irreversible ATProto work.
+      // If either cleanup fails, leave the account reserved for reconciliation.
+      const failures = [];
       try {
         await ctx.call('identitybindings.remove', { canonicalAccountId: webId });
-      } catch (err) {
-        this.logger.warn(`[Auth] rollback: identitybindings.remove failed for ${webId}: ${err.message}`);
+      } catch (_err) {
+        failures.push('identitybindings');
+        this.logger.warn('[Auth] Partial identity-binding cleanup requires reconciliation');
       }
       try {
         await ctx.call('keys.deleteAllKeysForWebId', { webId });
-      } catch (err) {
-        this.logger.warn(`[Auth] rollback: keys.deleteAllKeysForWebId failed for ${webId}: ${err.message}`);
+      } catch (_err) {
+        failures.push('keys');
+        this.logger.warn('[Auth] Partial signing-key cleanup requires reconciliation');
+      }
+      if (failures.length > 0) {
+        throw new MoleculerError(
+          'Partial identity cleanup failed',
+          503,
+          'ACCOUNT_CLEANUP_UNCERTAIN',
+          { retryable: false }
+        );
       }
     }
   },

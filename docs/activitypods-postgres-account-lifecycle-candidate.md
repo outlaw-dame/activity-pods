@@ -126,3 +126,59 @@ resolution, the single PostgreSQL operation authority, complete Solid/SAI
 consent, privileged Fuseki isolation, crash reconciliation, and real
 multi-replica acceptance. No existing-identity migration is in scope.
 
+
+
+## Cross-authority new-signup proof (November 13)
+
+The new `new-signup-cross-authority.mjs` candidate correlates a single
+provider/app-scoped HMAC operation in the **existing PR #138 PostgreSQL account
+schema** with the independently signed ATProto repository and the protected
+PG-to-Jena recovery record. It adds **no second account registry**, changes
+neither WebID ownership nor the SemApps login path and cannot be loaded as a
+production service.
+
+The read-only acceptance sequence is:
+
+1. Read the exact fenced new-signup operation (`reconciliation_required`).
+   Require the canonical account row still to be in `provisioning`, with the
+   same WebID and ActivityPub actor, one managed `did:plc`, handle and PDS.
+2. Resolve and verify the actual SemApps user, protected Jena identity binding
+   and complete Solid bootstrap. Match protected PDS and handle explicitly
+   against the PostgreSQL account projection, rejecting imported identities.
+3. Through the provider-owned signed repository authority, independently
+   verify current DID/handle reciprocity, PDS endpoint, signing key, real
+   signed v3 CAR/MST/CIDs and persisted native event outbox. Do **not**
+   accept a synthetic root CID or `repoInitialized` boolean as evidence.
+4. Require the PostgreSQL RDF recovery intent to be `applied`, verify the
+   current monotonically fenced per-Pod Jena projection and re-evaluate
+   current provider/SAI permission. Match exact signed head/root/revision and
+   outbox state across both authorities.
+5. Re-read the account and operation generations to reject concurrent state
+   changes. No PostgreSQL connection or lock is held during DNS, PLC, Solid
+   or RDF calls. The result is `status:'evidence_only'` and
+   `productionReady:false`, **never an account-completion mutation**.
+
+A disposable PostgreSQL 18 acceptance executes the candidate with an actual
+signed CAR and committed repository/outbox, one shared account journal, and
+a PostgreSQL recovery intent. SemApps, PLC and Jena/SAI callbacks in this
+joint test are **injected trusted fixtures**, not a real multi-process
+production authorization path. Negative checks cover missing repo, missing
+RDF projection ACK, wrong app scope, protected handle/PDS drift, consent
+revocation, incomplete Solid bootstrap, corrupted CAR and stale generation.
+Separate existing real Fuseki and native OIDC acceptance cover their own
+interfaces; this test does not silently claim their combination is complete.
+
+The signed-repository PostgreSQL transaction helper also now classifies a
+lost `COMMIT` acknowledgment as
+`ATPROTO_REPO_COMMIT_OUTCOME_UNKNOWN`, discards the uncertain pooled
+connection and requires a read-only signed-head/outbox reconciliation.
+Disposable tests perform a **real COMMIT** before losing its reply, proving
+that a subsequent replay does not recreate genesis.
+
+**Still before production cutover:** implement provider-owned real signed PDS
+XRPC, protected account/SAI grant issuance, canonical PostgreSQL
+single-writer completion CAS that atomically persists proof generation,
+cross-store revocation epochs and outbox consumer delivery, live PLC/DNS
+resolution, and multi-replica kill/restart and cost benchmarks. An
+`evidence_only` result MUST NOT bypass the production `auth.signup` fuse.
+Existing-account migration remains a separate future phase.

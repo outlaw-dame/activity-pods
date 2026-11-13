@@ -56,6 +56,12 @@ await expectError({resolveHandle:async()=>{throw new Error('DNS unavailable');}}
   'PDS_PROOF_HANDLE_RESOLUTION_UNAVAILABLE');
 await expectError({expectedRootCid:'bafy'+'a'.repeat(50)},'PDS_PROOF_LATEST_COMMIT_MISMATCH');
 await expectError({expectedPdsUrl:'http://127.0.0.1:4000'},'PDS_PROOF_INVALID_ORIGIN');
+await expectError({allowFixture:true,expectedPdsUrl:'http://169.254.169.254'},
+  'PDS_PROOF_INVALID_ORIGIN');
+await expectError({allowFixture:true,expectedPdsUrl:'http://192.168.1.10:4000'},
+  'PDS_PROOF_INVALID_ORIGIN');
+await expectError({allowFixture:true,expectedPdsUrl:'http://evil.test:4000'},
+  'PDS_PROOF_INVALID_ORIGIN');
 await expectError({expectedPdsUrl:'https://user:pass@pds.example'},'PDS_PROOF_INVALID_ORIGIN');
 await expectError({expectedPdsUrl:'https://pds.example/redirect'},'PDS_PROOF_INVALID_ORIGIN');
 await expectError({handle:'bob.pds.example'},'PDS_PROOF_HANDLE_MISMATCH');

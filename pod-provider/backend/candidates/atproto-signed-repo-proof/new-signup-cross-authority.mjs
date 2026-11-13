@@ -158,7 +158,8 @@ export function createNewSignupCrossAuthority({
     return Object.freeze({
       evidence: 'signed_repo_solid_projection_v1',
       accountId: operation.accountId, webId: before.webid,
-      did: repo.did, commitCid: repo.commitCid, rootCid: repo.rootCid,
+      did: repo.did, pdsOrigin: repo.pdsOrigin,
+      commitCid: repo.commitCid, rootCid: repo.rootCid,
       rev: repo.rev, projectionFence: projected.fence,
       outboxStatus: repo.outboxStatus,
       signupGeneration: operation.generation,

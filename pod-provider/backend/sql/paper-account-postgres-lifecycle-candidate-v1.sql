@@ -74,9 +74,10 @@ CREATE INDEX operations_reconciliation_idx
   ON paper_account_candidate.operations(updated_at,operation_id)
   WHERE state = 'needs_reconciliation';
 
--- Immutable initial signed v3 repository CAR is small and bounded.
--- Future record/blob blocks belong in a separate PDS blockstore (object storage),
--- not in the account ledger; do not build an unbounded content table here.
+-- Immutable digest + size metadata of the initially verified signed CAR.
+-- Store actual CAR blocks ONCE in the canonical PDS repository blockstore.
+-- Duplicating up to 256 KiB of CAR payload per signup here would make the
+-- account control-plane a second, unnecessary content store at scale.
 CREATE TABLE paper_account_candidate.signed_genesis (
   operation_id uuid PRIMARY KEY REFERENCES paper_account_candidate.operations(operation_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
@@ -86,7 +87,7 @@ CREATE TABLE paper_account_candidate.signed_genesis (
   signing_key_did text NOT NULL CHECK (
     signing_key_did ~ '^did:key:z[1-9A-HJ-NP-Za-km-z]{30,160}$'
   ),
-  car_bytes bytea NOT NULL CHECK (octet_length(car_bytes) BETWEEN 32 AND 262144),
+  car_byte_length integer NOT NULL CHECK (car_byte_length BETWEEN 32 AND 262144),
   car_sha256 bytea NOT NULL CHECK (octet_length(car_sha256) = 32),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );

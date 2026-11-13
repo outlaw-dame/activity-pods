@@ -33,7 +33,7 @@ export function createNewSignupCrossAuthority({
 } = {}) {
   // The actual production account signup remains disabled until a distinct,
   // reviewed provider-owned writer and XRPC/consent gate is activated.
-  const unavailable = () => deny('UNIFIED_SIGNUP_CROSS_AUTHORITY_NOT_RELEASED');
+  const unavailable = async () => deny('UNIFIED_SIGNUP_CROSS_AUTHORITY_NOT_RELEASED');
   if (fixtureOnly !== true || process.env.NODE_ENV === 'production' ||
       process.env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
       process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
@@ -53,7 +53,9 @@ export function createNewSignupCrossAuthority({
     // merely because its process later changes environment or configuration.
     if (process.env.NODE_ENV === 'production' ||
         process.env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
-        process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') unavailable();
+        process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
+      deny('UNIFIED_SIGNUP_CROSS_AUTHORITY_NOT_RELEASED');
+    }
     // The caller has already verified the external app and produced HMAC
     // digests. Never accept a public idempotency key or user-supplied actor.
     const operation = await accountAuthority.readSignup(scope);

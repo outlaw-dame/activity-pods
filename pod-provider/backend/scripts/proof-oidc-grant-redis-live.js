@@ -170,6 +170,83 @@ async function main() {
   assert.equal(await redis.llen('grant:' + legacy), 0);
   assert.equal(await redis.exists(list[0]), 0);
   assert.equal(await redis.exists(list[list.length - 1]), 0);
+
+  // Review regression #171: individually destroyed keys must not consume
+  // the entire grant quota indefinitely. At the cap, Lua compacts ONLY
+  // demonstrably absent Redis token keys, preserving the one live pointer.
+  const reusedGrant = 'grant-reused-' + crypto.randomUUID();
+  const reusedPayload = { ...basePayload, grantId: reusedGrant };
+  const keepId = 'recycle-keep-' + crypto.randomUUID();
+  await adapter.upsert(keepId, reusedPayload, 1800);
+  const deadIds = Array.from({ length: MAX_GRANT_TOKENS - 1 }, (_, i) =>
+    'recycle-dead-' + i + '-' + crypto.randomUUID());
+  await Promise.all(deadIds.map(id => adapter.upsert(id, reusedPayload, 1800)));
+  assert.equal(await redis.llen('grant:' + reusedGrant), MAX_GRANT_TOKENS);
+  await Promise.all(deadIds.map(id => adapter.destroy(id)));
+  assert.equal(await redis.exists('AccessToken:' + keepId), 1);
+  assert.equal(await redis.llen('grant:' + reusedGrant), MAX_GRANT_TOKENS,
+    'deleted/expired keys are still in the old pointer index until admission');
+  const replacement = 'recycle-new-' + crypto.randomUUID();
+  await adapter.upsert(replacement, reusedPayload, 1800);
+  assert.equal(await redis.llen('grant:' + reusedGrant), 2,
+    'at-cap compaction keeps live tokens and reclaims dead pointers');
+  assert.equal(await redis.exists('AccessToken:' + keepId), 1);
+  await adapter.revokeByGrantId(reusedGrant);
+  assert.equal(await redis.exists('AccessToken:' + keepId, 'AccessToken:' + replacement), 0);
+
+  // Redis TTL expiry independently leaves stale list entries. Verify that a
+  // 1-second token TTL cannot permanently exhaust a long-lived grant.
+  const expiredGrant = 'grant-expired-' + crypto.randomUUID();
+  const expiredPayload = { ...basePayload, grantId: expiredGrant };
+  const survivor = 'expiry-survivor-' + crypto.randomUUID();
+  await adapter.upsert(survivor, expiredPayload, 1800);
+  const oneSecond = Array.from({ length: MAX_GRANT_TOKENS - 1 }, (_, i) =>
+    'expiry-short-' + i + '-' + crypto.randomUUID());
+  await Promise.all(oneSecond.map(id => adapter.upsert(id, expiredPayload, 1)));
+  await new Promise(resolve => setTimeout(resolve, 1700));
+  assert.equal(await redis.exists('AccessToken:' + oneSecond[0]), 0);
+  const afterExpiry = 'expiry-new-' + crypto.randomUUID();
+  await adapter.upsert(afterExpiry, expiredPayload, 1800);
+  assert.equal(await redis.llen('grant:' + expiredGrant), 2);
+  await adapter.revokeByGrantId(expiredGrant);
+  assert.equal(await redis.exists('AccessToken:' + survivor, 'AccessToken:' + afterExpiry), 0);
+
+  // Review regression #171: revokers on four separate processes previously
+  // read the same 128 pointers, then independently trimmed the list. That
+  // could orphan live token keys while falsely returning successful cleanup.
+  // The Lua batch now selects, deletes and trims atomically.
+  const concurrentRevokeGrant = 'grant-mp-' + crypto.randomUUID();
+  const concurrentPayload = { ...basePayload, grantId: concurrentRevokeGrant };
+  const concurrentIds = Array.from({ length: 384 }, (_, i) =>
+    'race-revoke-' + i + '-' + crypto.randomUUID());
+  await Promise.all(concurrentIds.map(id => adapter.upsert(id, concurrentPayload, 1800)));
+  assert.equal(await redis.llen('grant:' + concurrentRevokeGrant), 384);
+  const revokeWorkers = await Promise.all(Array.from({ length: 4 }, async (_, i) => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      path.join(__dirname, 'proof-oidc-grant-worker.js'),
+      concurrentRevokeGrant, String(i), '1', 'revoke'
+    ], {
+      env: {
+        ...process.env,
+        ATPROTO_OIDC_REDIS_WORKER: 'confirmed',
+        ATPROTO_OIDC_TEST_KEY_PREFIX: testKeyPrefix
+      },
+      timeout: 12000, maxBuffer: 32 * 1024
+    });
+    return JSON.parse(stdout.trim());
+  }));
+  assert(revokeWorkers.every(x => x.mode === 'revoke' && x.remainingPointers === 0));
+  assert.equal(await redis.llen('grant:' + concurrentRevokeGrant), 0);
+  for (let i = 0; i < concurrentIds.length; i += 128) {
+    const batchIds = concurrentIds.slice(i, i + 128).map(id => 'AccessToken:' + id);
+    assert.equal(await redis.exists(...batchIds), 0,
+      'no token may remain after parallel grant revocation');
+  }
+  await assert.rejects(
+    adapter.upsert('revoke-new-' + crypto.randomUUID(), concurrentPayload, 1800),
+    e => e.code === 'OIDC_GRANT_ALREADY_REVOKED'
+  );
+
   // Estimate the storage footprint of the actual DPoP replay-key format.
   // MEMORY USAGE reports Redis allocation for the sample keys, not the
   // process's complete RSS or allocator fragmentation. It cannot be used
@@ -200,7 +277,10 @@ async function main() {
     multiProcessWorkers: workers.length,
     multiProcessAccepted: workers.reduce((sum, w) => sum + w.accepted, 0),
     multiProcessRejected: workers.reduce((sum, w) => sum + w.rejected, 0),
-    revokedLegacyTokens: list.length, durationMs,
+    revokedLegacyTokens: list.length,
+    verifiedExpiredPointerCompaction: true,
+    verifiedConcurrentRevokeWorkers: revokeWorkers.length,
+    durationMs,
     replaySampleBytesPerKey,
     modeledReplayMegabytesAt1000Rps:
       Number((replaySampleBytesPerKey * 1000 * 130 / 1048576).toFixed(2)),

@@ -13,6 +13,7 @@
  * A lease is NOT authority to overwrite a completed identity.
  */
 const { MoleculerError } = require('moleculer').Errors;
+const { isCanonicalHttpsWebId } = require('../utils/unified-identity-policy');
 const TABLE = 'paper_account_candidate.operations';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DID = /^did:plc:[a-z2-7]{24}$/;
@@ -139,7 +140,7 @@ function createAccountPostgresLifecycleCandidate({ pool } = {}) {
 
     async markAccountCreated(input) {
       baseInput(input);
-      if (!requiredString(input.webId) || !input.webId.startsWith('https://')) {
+      if (!isCanonicalHttpsWebId(input.webId)) {
         fail('ACCOUNT_LEDGER_INVALID_WEBID', 400);
       }
       return transaction(pool, async client => {

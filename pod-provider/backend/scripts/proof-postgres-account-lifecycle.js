@@ -129,6 +129,48 @@ async function main(){
       'ACCOUNT_SIGNUP_RECONCILIATION_REQUIRED');
     assert.equal((await model.reserveSignup({...signup,accountId:id(),operationId:id()})).replay,true);
 
+    // A real PostgreSQL journal may ask the authoritative Solid provider
+    // to verify one exact new account without importing existing identities.
+    const signupBind=await model.change({providerId:provider,accountId:signupId,
+      operationId:id(),expectedGeneration:1,kind:'bind_unified_identity',
+      ...identity('signup-user')});
+    assert.equal(signupBind.generation,2);
+    let solidCalls=0;
+    const solidCall=async (action,params)=>{
+      solidCalls++;
+      if(action==='auth.account.findByWebId'){
+        assert.equal(params.webId,identity('signup-user').webId);
+        return {'@id':params.webId,disabled:false};
+      }
+      if(action==='identitybindings.getByCanonicalAccountId'){
+        assert.equal(params.canonicalAccountId,identity('signup-user').webId);
+        return {webId:params.canonicalAccountId,
+          activityPubActorId:params.canonicalAccountId,
+          atprotoDid:identity('signup-user').atprotoDid,
+          atprotoSource:'local',atprotoManaged:true};
+      }
+      if(action==='auth.awaitBootstrapComplete')return {webId:params.webId,complete:true};
+      throw Error('Unexpected Solid proof action');
+    };
+    const solidProof=await model.verifySignupSolidReadiness({...signup,call:solidCall});
+    assert.equal(solidProof.complete,true);
+    assert.equal(solidProof.operationId,signupOp);
+    assert.equal(solidProof.accountId,signupId);
+    assert.equal(solidProof.generation,2);
+    assert.equal(solidCalls,3);
+    await rejected(model.verifySignupSolidReadiness({...signup,
+      call:async (action,params)=>action==='auth.account.findByWebId'
+        ? {'@id':'local',disabled:false}
+        : action==='identitybindings.getByCanonicalAccountId'
+          ? {webId:params.canonicalAccountId,
+              activityPubActorId:'https://evil.example/other',
+              atprotoDid:identity('signup-user').atprotoDid,
+              atprotoSource:'local',atprotoManaged:true}
+          : {webId:params.webId,complete:true}
+    }), 'SOLID_SIGNUP_PROOF_IDENTITY_MISMATCH');
+    assert.equal(await model.readSignup(signup).then(x=>x.state),
+      'reconciliation_required','read-only Solid evidence never marks signup completed');
+
     const sameName=await Promise.allSettled(Array.from({length:6},(_,i)=>model.reserveSignup({
       ...signup,username:'signup-race',accountId:id(),operationId:id(),
       idempotencyHmac:hmac('account-signup-idempotency-v1','race-'+i),
@@ -170,7 +212,7 @@ async function main(){
       'the original operation survives and forbids another account');
 
     process.stdout.write(JSON.stringify({ok:true,schema:'paper.accounts.candidate.v1',postgres:18,
-      tests:['durable signup reservation','uncertain remote commit','replay fence','lost PostgreSQL COMMIT','disabled-by-default','provider scope','unique username race','idempotency','unified AP/AT identity constraints','WebID conflict',
+      tests:['read-only Solid authority proof','durable signup reservation','uncertain remote commit','replay fence','lost PostgreSQL COMMIT','disabled-by-default','provider scope','unique username race','idempotency','unified AP/AT identity constraints','WebID conflict',
         'rollback','generation fence','valid transition graph','deletion','no orphaned locks']})+'\n');
   }finally{await pool.end();}
 }

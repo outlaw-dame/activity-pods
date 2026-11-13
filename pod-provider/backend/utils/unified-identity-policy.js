@@ -20,8 +20,23 @@ function hasExplicitDisable(input) {
     input?.protocols?.[kind]?.enabled === false
   );
 }
+function isCanonicalHttpsWebId(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const uri = new URL(value);
+    // A syntactically valid and normalized HTTPS actor URI must not carry
+    // userinfo credentials. Requiring canonical serialization also avoids
+    // binding two identities that differ only by URL normalization.
+    return uri.protocol === 'https:' &&
+      uri.hostname.length > 0 &&
+      uri.username === '' && uri.password === '' &&
+      uri.href === value;
+  } catch {
+    return false;
+  }
+}
 function assertUnifiedRequest(input) {
-  if (!input || typeof input !== 'object' || hasExplicitDisable(input) ||
+  if (!input || typeof input !== 'object' || Array.isArray(input) || hasExplicitDisable(input) ||
       input?.atproto?.didMethod && !['plc','did:plc'].includes(input.atproto.didMethod)) {
     const error = new Error('UNIFIED_IDENTITY_REQUIRED: WebID, ActivityPub and did:plc are mandatory');
     error.code = 'UNIFIED_IDENTITY_REQUIRED';
@@ -29,8 +44,10 @@ function assertUnifiedRequest(input) {
   }
   return { ...IDENTITY_PROTOCOLS, didMethod: 'plc' };
 }
-function assertUnifiedResult({ webId, actorId, did, repoInitialized, identityWebId }) {
-  if (typeof webId !== 'string' || !webId.startsWith('https://') ||
+function assertUnifiedResult(input) {
+  const { webId, actorId, did, repoInitialized, identityWebId } =
+    input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  if (!isCanonicalHttpsWebId(webId) ||
       typeof actorId !== 'string' || actorId !== webId ||
       typeof did !== 'string' || !/^did:plc:[a-z2-7]{24}$/.test(did) ||
       repoInitialized !== true ||

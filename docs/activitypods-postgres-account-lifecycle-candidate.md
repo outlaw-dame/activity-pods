@@ -70,6 +70,32 @@ rollback. The independently protected canonical PostgreSQL permissions and
 general-Fuseki-writer isolation gates remain closed. Existing-account
 migration is a separate project.
 
+
+## Read-only Solid verification for a reserved new signup
+
+The merged PR #138 account candidate and subsequent signup journal reuse the
+actual SemApps/Solid authority. This independent non-activated verifier was
+selectively brought forward from historical PR #134, without importing its
+competing PostgreSQL operations table or introducing new account ownership.
+
+`verifySignupSolidReadiness` resolves exactly one provider-scoped signup
+operation and its existing account row. It refuses a missing or unfenced
+reservation, unbound/non-PLC identity, incomplete local repository marker or
+invalid account lifecycle state. It then calls only indexed authoritative
+`auth.account.findByWebId`,
+`identitybindings.getByCanonicalAccountId`, and
+`auth.awaitBootstrapComplete`, requiring matching WebID/ActivityPub actor,
+managed-local DID and complete Solid bootstrap. Provider/RDF failures fail
+closed. A second PostgreSQL read detects concurrent account transitions
+without holding a DB connection across external Solid checks.
+
+**This is an evidence probe, not a completion mutation.** It never marks
+`ready`, releases a username, creates keys, replays PLC or migrates
+preexisting accounts. A production activation must still atomically seal a
+fresh evidence version using one provider-owned writer and durable
+revocation/epoch fencing, not trust this read-then-read probe as a
+transaction across PostgreSQL and Jena. Other release gates remain closed.
+
 ## Disposable proof
 
 `pod-provider/backend/scripts/proof-postgres-account-lifecycle.js` asserts the database begins empty, loads the schema, checks disabled-by-default gating, concurrent same-name reservations, idempotent replays, conflicting replay detection, cross-provider IDOR, unified WebID/ActivityPub/did:plc binding, PDS/repository readiness, negative incomplete-identity cases, failed-transaction rollback, expected-generation fencing, suspend/delete transitions and no idle transaction leakage. CI uses disposable PostgreSQL 18 and isolated pinned `pg@8.16.3` without modifying the production package lockfile.

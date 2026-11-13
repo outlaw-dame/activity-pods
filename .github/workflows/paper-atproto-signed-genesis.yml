@@ -1,6 +1,15 @@
 name: Paper ATProto Signed Repository Genesis Candidate
 
 on:
+  push:
+    branches:
+      - feat/unified-mandatory-plc-identity
+    paths:
+      - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
+      - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
+      - 'pod-provider/backend/tests/atproto-signed-genesis-proof.mjs'
+      - 'pod-provider/backend/tests/atproto-pds-readiness-proof.mjs'
+      - '.github/workflows/paper-atproto-signed-genesis.yml'
   pull_request:
     paths:
       - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'

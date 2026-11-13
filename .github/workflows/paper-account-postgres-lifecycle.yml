@@ -8,6 +8,8 @@ on:
       - 'pod-provider/backend/tests/sql/paper-account-postgres-concurrency-proof.sh'
       - 'pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js'
       - 'pod-provider/backend/candidates/account-postgres-lifecycle.js'
+      - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
+      - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
       - 'pod-provider/backend/utils/unified-identity-policy.js'
       - '.github/workflows/paper-account-postgres-lifecycle.yml'
   workflow_dispatch:
@@ -74,16 +76,21 @@ jobs:
           test "$ready" = true
           echo 'account_pg_restart_durability_passed'
 
-      - name: Verify live candidate adapter across two PostgreSQL pools
+      - name: Verify live adapter + signed CAR across two PostgreSQL pools
         run: |
           set -euo pipefail
-          # Non-production dependencies are isolated in RUNNER_TEMP.
-          # No Node dependency is added to the deployed ActivityPods backend.
-          npm install --prefix "$RUNNER_TEMP/paper-account-pg-proof" \
-            --no-save --ignore-scripts --no-audit --no-fund \
-            pg@8.16.3 moleculer@0.14.19 >/dev/null
-          NODE_PATH="$RUNNER_TEMP/paper-account-pg-proof/node_modules" \
-            node pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js
+          proof="$RUNNER_TEMP/paper-account-pg-proof"
+          mkdir -p "$proof/candidates" "$proof/utils" "$proof/tests/sql"
+          cp pod-provider/backend/candidates/account-postgres-lifecycle.js "$proof/candidates/"
+          cp pod-provider/backend/candidates/atproto-repo-genesis.mjs "$proof/candidates/"
+          cp pod-provider/backend/candidates/atproto-pds-readiness.mjs "$proof/candidates/"
+          cp pod-provider/backend/utils/unified-identity-policy.js "$proof/utils/"
+          cp pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js "$proof/tests/sql/"
+          # All dependencies are ephemeral CI-only, not in the deployed Pod.
+          npm install --prefix "$proof" --no-save --ignore-scripts --no-audit --no-fund \
+            pg@8.16.3 moleculer@0.14.19 \
+            @atproto/repo@0.11.5 @atproto/crypto@0.5.7 @atproto/lex-cbor@0.1.10 >/dev/null
+          node "$proof/tests/sql/paper-account-postgres-adapter-proof.js"
 
       - name: Remove disposable database
         if: always()

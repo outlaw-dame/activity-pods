@@ -429,6 +429,17 @@ module.exports = {
     },
 
     reserveAccountProvisioning(input) {
+      // The in-memory Map is intentionally a non-production fixture. A
+      // successful reserve must survive another Pod cell and process death
+      // before account/DID/PDS side effects become possible.
+      if (process.env.NODE_ENV === 'production') {
+        return this.deny(
+          'durable_account_provisioning_not_ready',
+          'Account provisioning requires the reviewed PostgreSQL lifecycle authority',
+          true,
+          503
+        );
+      }
       this.pruneIdempotencyRecords();
 
       const authorization = this.evaluateAccountProvisioning(input);

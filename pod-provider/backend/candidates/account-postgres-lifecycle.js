@@ -93,7 +93,7 @@ async function transaction(pool, fn) {
 }
 
 function createAccountPostgresLifecycleCandidate({
-  pool, resolveTrustedKeyDid, verifyGenesis, verifyPds
+  pool, resolveTrustedKeyDid, verifyGenesis, verifyPds, verifySolid
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') {
     throw new TypeError('ACCOUNT_LEDGER_PG_POOL_REQUIRED');
@@ -335,18 +335,58 @@ function createAccountPostgresLifecycleCandidate({
       });
     },
 
+    /**
+     * Seal an account only once both protocol authorities are satisfied:
+     * the PDS proof is already checked during identities_ready, and the
+     * authoritative Solid service must independently confirm WebID/ACL/
+     * SAI registry/type-index bootstrap. No RDF is copied into PostgreSQL.
+     */
     async complete(input) {
       baseInput(input);
+      if (typeof verifySolid !== 'function') {
+        fail('ACCOUNT_LEDGER_SOLID_VERIFIER_REQUIRED', 503);
+      }
+      const existing = await pool.query(
+        `SELECT canonical_webid,state
+         FROM ${TABLE}
+         WHERE operation_id=$1::uuid AND lease_token=$2::uuid
+           AND state='identities_ready'
+           AND lease_expires_at > clock_timestamp()`,
+        [input.operationId,input.leaseToken]
+      );
+      if (existing.rowCount !== 1 ||
+          !isCanonicalHttpsWebId(existing.rows[0].canonical_webid)) {
+        fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
+      }
+      const webId = existing.rows[0].canonical_webid;
+      let solid;
+      try {
+        solid = await verifySolid({
+          webId,
+          operationId:input.operationId
+        });
+      } catch (_) {
+        fail('ACCOUNT_LEDGER_SOLID_NOT_VERIFIED', 503);
+      }
+      if (solid?.complete !== true || solid.webId !== webId) {
+        fail('ACCOUNT_LEDGER_SOLID_NOT_VERIFIED', 503);
+      }
+      const solidProof=crypto.createHash('sha256')
+        .update(['solid-bootstrap-v1',input.operationId,webId].join('\0'))
+        .digest();
       return transaction(pool, async client => {
-        const updated = await client.query(
-          `UPDATE ${TABLE} SET state='completed', version=version+1,
-                  updated_at=clock_timestamp()
+        const updated=await client.query(
+          `UPDATE ${TABLE} SET state='completed',
+               solid_bootstrap_proof_digest=$3,
+               version=version+1, updated_at=clock_timestamp()
            WHERE operation_id=$1::uuid AND lease_token=$2::uuid
-             AND state='identities_ready' AND lease_expires_at > clock_timestamp()
-           RETURNING operation_id, state, canonical_webid, atproto_did, version`,
-          [input.operationId, input.leaseToken]
+             AND state='identities_ready'
+             AND canonical_webid=$4
+             AND lease_expires_at > clock_timestamp()
+           RETURNING operation_id,state,canonical_webid,atproto_did,version`,
+          [input.operationId,input.leaseToken,solidProof,webId]
         );
-        if (updated.rowCount !== 1) fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
+        if(updated.rowCount !== 1) fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
         return publicResult(updated.rows[0]);
       });
     },

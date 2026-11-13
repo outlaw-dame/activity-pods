@@ -38,6 +38,12 @@ CREATE TABLE paper_account_candidate.operations (
   pds_sync_proof_digest bytea CHECK (
     pds_sync_proof_digest IS NULL OR octet_length(pds_sync_proof_digest) = 32
   ),
+  -- Verifies real Solid/SAI/Pod resource readiness via the canonical
+  -- ActivityPods auth.awaitBootstrapComplete action before completion.
+  -- This is an operational proof, never a second authorization authority.
+  solid_bootstrap_proof_digest bytea CHECK (
+    solid_bootstrap_proof_digest IS NULL OR octet_length(solid_bootstrap_proof_digest) = 32
+  ),
   version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -50,7 +56,8 @@ CREATE TABLE paper_account_candidate.operations (
       pds_repo_root_cid <> 'bafyreigenesisplaceholder' AND
       length(pds_repo_rev) > 1 AND
       signed_repo_proof_digest IS NOT NULL AND
-      pds_sync_proof_digest IS NOT NULL
+      pds_sync_proof_digest IS NOT NULL AND
+      solid_bootstrap_proof_digest IS NOT NULL
     )
   ),
   CONSTRAINT operations_idempotency_unique UNIQUE

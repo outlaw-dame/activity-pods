@@ -155,6 +155,20 @@ no production accounts were created or migrated. The bounded SQL proof
 does not establish production throughput or cost metrics. See the
 dedicated latest CI in PR #134.
 
+**One PostgreSQL account authority at activation:** the repository already
+contains the older, also nonactivated `paper_account_candidate.accounts`
+lifecycle candidate (with its `transitions` ledger). This PR's
+`paper_account_candidate.operations` reservation/recovery ledger must
+eventually join **that one canonical account lifecycle**, not become a
+second account database or independently writable account registry.
+Disposable PostgreSQL 18 CI now loads both schema definitions together
+to prove they can coexist without an accidental duplicate namespace.
+That is a migration-compatibility test, **not** approval to enable two
+concurrent account reservation writers. The later production migration
+must choose a single atomic reservation/account transaction and one
+provider-authorized writer, enforce cross-table username uniqueness,
+and retire redundant candidate paths before activation.
+
 **Next required integration order:** a single authenticated provider
 provisioning grant and durable PostgreSQL claim; reuse the existing
 `auth.signup` authority for **future new registrations only**, replacing

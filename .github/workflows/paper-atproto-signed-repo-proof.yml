@@ -72,6 +72,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-xrpc-candidate.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-xrpc-candidate.test.mjs
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)

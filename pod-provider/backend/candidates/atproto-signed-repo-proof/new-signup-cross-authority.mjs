@@ -115,6 +115,7 @@ export function createNewSignupCrossAuthority({
     });
     if (repo?.verified !== true || repo.accountId !== before.webid ||
         repo.did !== before.atproto_did ||
+        repo.pdsOrigin !== before.atproto_pds_url ||
         !CID.test(repo.commitCid || '') || !CID.test(repo.rootCid || '') ||
         !TID.test(repo.rev || '') ||
         !['pending','delivered'].includes(repo.outboxStatus)) {

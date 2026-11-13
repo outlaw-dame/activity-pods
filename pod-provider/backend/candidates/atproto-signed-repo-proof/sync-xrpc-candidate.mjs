@@ -69,7 +69,8 @@ function ensureActive(account) {
 }
 function checkSignedRepo(repo, proof, projected, account, did) {
   if (repo?.verified !== true || repo.accountId !== account.webId ||
-      repo.did !== did || !CID.test(repo.commitCid || '') ||
+      repo.did !== did || repo.pdsOrigin !== account.pdsUrl ||
+      !CID.test(repo.commitCid || '') ||
       !CID.test(repo.rootCid || '') || !TID.test(repo.rev || '') ||
       !['pending', 'delivered'].includes(repo.outboxStatus) ||
       proof?.verified !== true || proof.accountId !== account.webId ||

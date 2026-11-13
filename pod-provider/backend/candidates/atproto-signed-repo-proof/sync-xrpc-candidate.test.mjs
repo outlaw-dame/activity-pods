@@ -101,7 +101,7 @@ test('nonactivated XRPC exports exact signed empty CAR and current hosting state
           }],
           service: [{
             id: '#atproto_pds', type: 'AtprotoPersonalDataServer',
-            serviceEndpoint: pdsOrigin
+            serviceEndpoint: binding.atprotoPdsUrl
           }]
         }
       }),
@@ -200,6 +200,25 @@ test('nonactivated XRPC exports exact signed empty CAR and current hosting state
         assert.equal(repo.content?.startsWith('application/json'), true);
       }
       hosted = { ...hosted, status: 'active' };
+    });
+    await t.test('PLC and protected binding can move together but old hosting must not export', async () => {
+      const movedPds = 'https://new-pds.paper.example.org';
+      // Simulate a real identity hosting move: the independently resolved
+      // PLC DID document and protected RDF binding BOTH agree on the new
+      // endpoint, while this server's indexed local hosting lookup is stale.
+      binding = { ...binding, atprotoPdsUrl: movedPds };
+      const independentlyVerified = await repoAuthority.verifyReady({
+        canonicalAccountId: accountId, did, handle
+      });
+      assert.equal(independentlyVerified.pdsOrigin, movedPds);
+      assert.equal(hosted.pdsUrl, pdsOrigin);
+      for (const method of ['getRepo','getLatestCommit','getRepoStatus']) {
+        const response = await get(api(method));
+        assert.equal(response.status, 503, method);
+        assert.equal(response.json?.error, 'InternalError');
+      }
+      binding = { ...binding, atprotoPdsUrl: pdsOrigin };
+      assert.equal((await get(api('getLatestCommit'))).status, 200);
     });
     await t.test('a PDS move, revoked SAI grant or changed RDF identity blocks export', async () => {
       hosted = { ...hosted, pdsUrl: 'https://another.example.org' };

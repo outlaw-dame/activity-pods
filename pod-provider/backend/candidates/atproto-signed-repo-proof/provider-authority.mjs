@@ -143,7 +143,10 @@ function sanitize(proof) {
   return Object.freeze({
     verified: true, accountId: proof.accountId, did: proof.did,
     commitCid: proof.commitCid, rootCid: proof.rootCid,
-    rev: proof.rev, outboxStatus: proof.outboxStatus
+    rev: proof.rev, outboxStatus: proof.outboxStatus,
+    // Public hosting provenance comes from the protected binding that was
+    // cross-checked against the independently resolved PLC DID document.
+    pdsOrigin: proof.pdsOrigin
   });
 }
 
@@ -233,7 +236,7 @@ export function createProviderManagedRepoAuthority({
       });
       await confirmStableIdentity(identity);
     }
-    return sanitize(proof);
+    return sanitize({ ...proof, pdsOrigin: identity.binding.atprotoPdsUrl });
   }
 
   async function verifyReady(input) {
@@ -246,7 +249,7 @@ export function createProviderManagedRepoAuthority({
         identity.binding.repoRev !== proof.rev) {
       refusal('MANAGED_REPO_RDF_DRIFT', 'RDF repository readiness projection differs from durable signed head');
     }
-    return sanitize(proof);
+    return sanitize({ ...proof, pdsOrigin: identity.binding.atprotoPdsUrl });
   }
 
   async function inspectRecovery(input) {

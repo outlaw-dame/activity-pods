@@ -2,7 +2,7 @@ const fetch = require('node-fetch');
 const isEmpty = require('lodash/isEmpty.js');
 const { clientFetchOptions } = require('./oidc-client-network-policy');
 const {
-  ATOMIC_GRANT_UPSERT, MAX_GRANT_TOKENS, MAX_GRANT_TTL_SECONDS,
+  ATOMIC_GRANT_UPSERT, ATOMIC_GRANT_REVOKE_BATCH, MAX_GRANT_TOKENS, MAX_GRANT_TTL_SECONDS,
   REVOKE_BATCH, MAX_REVOKE_BATCHES, revokeMarker, validTtl, cappedError
 } = require('./oidc-grant-index-policy');
 
@@ -60,6 +60,7 @@ class RedisAdapter {
       if (result === -1) throw cappedError('OIDC_GRANT_TOKEN_LIMIT');
       if (result === -2) throw cappedError('OIDC_GRANT_ALREADY_REVOKED');
       if (result === -3) throw cappedError('OIDC_GRANT_TOKEN_ID_CONFLICT');
+      if (result === -4) throw cappedError('OIDC_GRANT_INDEX_NAMESPACE_INVALID');
       if (result !== 1) throw cappedError('OIDC_GRANT_WRITE_UNKNOWN');
       return;
     }
@@ -188,21 +189,22 @@ class RedisAdapter {
     await this.client.set(
       revokeMarker(grantId), '1', 'EX', MAX_GRANT_TTL_SECONDS
     );
+    const prefix = this.client.options?.keyPrefix || '';
+    if (typeof prefix !== 'string' || prefix.length > 1024) {
+      throw cappedError('OIDC_GRANT_INDEX_NAMESPACE_INVALID');
+    }
     for (let batch = 0; batch < MAX_REVOKE_BATCHES; batch++) {
-      const tokens = await this.client.lrange(key, 0, REVOKE_BATCH - 1);
-      if (!tokens.length) {
-        await this.client.del(key);
-        return;
-      }
-      // Delete this batch's token keys and remove their pointers in one
-      // Redis transaction. A crash cannot discard a pointer before its token.
-      const multi = this.client.multi();
-      for (const token of tokens) multi.del(token);
-      multi.ltrim(key, tokens.length, -1);
-      const executed = await multi.exec();
-      if (!executed || executed.some(([error]) => error)) {
+      // Do NOT split LRANGE/DEL/LTRIM across commands or a MULTI whose
+      // selection happened outside the transaction. Two Pod cells can
+      // otherwise trim each other's unread token pointers.
+      const removed = await this.client.eval(
+        ATOMIC_GRANT_REVOKE_BATCH, 1,
+        key, String(REVOKE_BATCH), prefix
+      );
+      if (!Number.isSafeInteger(removed) || removed < 0 || removed > REVOKE_BATCH) {
         throw cappedError('OIDC_GRANT_REVOKE_FAILED');
       }
+      if (removed === 0) return;
     }
     throw cappedError('OIDC_GRANT_LEGACY_INDEX_TOO_LARGE');
   }

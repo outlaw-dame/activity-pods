@@ -1,6 +1,14 @@
 name: Backend checks
 
 on:
+  # Exact-head validation for the currently nonactivated unified-signup
+  # candidate. Its contents-API commits do not consistently dispatch PR CI.
+  push:
+    branches:
+      - feat/unified-mandatory-plc-identity
+    paths:
+      - 'pod-provider/backend/**'
+      - '.github/workflows/backend.yml'
   pull_request:
     paths:
       - 'pod-provider/backend/**'

@@ -122,9 +122,38 @@ not release the reservation as safely retryable.
   versioning, rotation/replay continuity and key recovery remain mandatory
   design work before activating this adapter.
 
+**Current new-signup authority bridge and evidence (November 13):**
+`new-signup-postgres-authority.js` binds the nonactivated ledger to the
+existing SemApps indexed `auth.account.findByUsername` lookup and the
+`solid-new-signup-proof.js` verifier. Only an operation tagged
+`new_signup` is permitted; SQL independently checks the same operation
+kind. A username already present in the legacy auth dataset is refused,
+not imported. A completed new signup can replay only its own matching
+idempotency digest, without repeating existing-username preflight or
+calling PLC again. Failure to check existing accounts fails closed.
+
+The PostgreSQL candidate now stores a single immutable bounded signed
+genesis CAR per new signup and checks the live PDS's latest-commit/CAR
+evidence against a resolved DID document before moving to
+`identities_ready`. For `completed`, the new Solid verifier requires
+the exact canonical WebID, local ActivityPub actor, same `did:plc`,
+an existing SemApps account and complete local Solid resource bootstrap.
+A read-only `inspectForReconciliation` operation uses one indexed
+PostgreSQL lookup by provider/app/HMAC/lease; it never authorizes
+automatic identity recreation, even after an unknown database commit.
+
+The **real PDS server**, durable blockstore, identity-proof persistence,
+provider-held HMAC key rotation, real PLC submission replay, Solid-OIDC/SAI
+consent and live provisioning single-writer cutover are still not activated.
+These tests use disposable PostgreSQL and simulated PDS XRPC transport;
+no production accounts were created or migrated. The bounded SQL proof
+does not establish production throughput or cost metrics. See the
+dedicated latest CI in PR #134.
+
 **Next required integration order:** a single authenticated provider
 provisioning grant and durable PostgreSQL claim; reuse the existing
-`auth.signup` authority while migrating only the operational lifecycle;
+`auth.signup` authority for **future new registrations only**, replacing
+only their operational lifecycle; no existing identity migration occurs;
 checkpoint each completed side effect with exact operation ID; explicitly
 create and verify Pod/SAI/ACL resources; submit PLC once with reconciled
 directory state; bootstrap a real signed PDS repo; seal the WebID=AP actor
@@ -153,10 +182,12 @@ a distinct consent-fenced cutover.
   PDS unavailable/slow, real PLC directory key and DID resolution,
   same public actor URI after restart, full SAI/WAC and Solid-OIDC
   readiness, durable restore and account deletion/export.
-- The current 4-cell mixed-Redis setup still reports incomplete
-  `pim:preferencesFile`, `interop:hasAuthorizationAgent` and
-  `interop:hasRegistrySet` during bootstrap. Mandatory DID creation
-  MUST NOT be used to hide that independent Solid lifecycle failure.
+- The previously failing distributed Solid bootstrap was corrected and
+  ActivityPods PR #136 merged after exact-head W3 1/2/4-replica acceptance
+  (run 43423753079). Revalidation against the squashed merge commit remains
+  a separate federation-sidecar CI pin. This does NOT substitute for
+  application-level Solid-OIDC consent, SAI revocation or new-account
+  PostgreSQL/PDS cutover acceptance.
 - Never put private signing keys or credentials in PostgreSQL shadow
   profiles. If PostgreSQL later becomes the canonical auth-account
   store, keep external WebID/AP/DID identifiers invariant through a

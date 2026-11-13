@@ -37,6 +37,23 @@ module.exports = {
   },
   actions: {
     async signup(ctx) {
+      // A new production account must be one verified WebID/AP + did:plc
+      // identity with a real signed PDS repository. The current managed
+      // repository service remains a non-activated fixture, and the legacy
+      // ATProto env opt-out must NOT be an escape hatch to create a partial
+      // account. Refuse before username registration, dataset, key, DID or
+      // external PLC effects. Existing login/session/recovery is untouched.
+      // Remove only with a reviewed, cryptographically verified production
+      // PDS + durable PostgreSQL/SAI single-writer onboarding cutover.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'New accounts require verified signed PDS repository provisioning',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY',
+          { retryable: false }
+        );
+      }
+
       const { username, email, password, ...rest } = ctx.params;
 
       ctx.meta.skipObjectsWatcher = true;

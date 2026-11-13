@@ -107,3 +107,22 @@ Related decisions: `docs/activitypods-postgres-account-and-groups-decision.md`, 
 ## Identity contract and scope of the experiment
 
 One user-facing account means one coherent authoritative login/lifecycle record, **not** one interchangeable protocol identifier. WebID and ActivityPub actor URI are the same absolute URI by design; ATProto retains a different required `did:plc` because that protocol uses DIDs. The database keys both protocol identifiers to the *same* account and stores no second user record. A handle change or DID recovery is a later separately authorized state transition, not a silent new account. `repo_initialized` is only a fixture assertion here; in production this must be a **fresh verified outcome** from the real ATProto repository, not a client-supplied Boolean. Neither a provisional WebID nor a DID without its repository can be returned as an activated unified account. This preserves the current protected RDF identity bindings until one reviewed authoritative migration.
+
+
+## Production signup release boundary (November 13)
+
+The real ActivityPods-managed signed PDS remains a non-activated candidate.
+The normal `auth.signup` action now refuses **all production new registration
+before any account, dataset, WebID, signing-key, or PLC side effects**. Setting
+`APODS_AUTO_PROVISION_ATPROTO_ON_SIGNUP=false` cannot bypass mandatory
+WebID/ActivityPub + managed `did:plc` and signed PDS onboarding. Existing
+account login, identity records and sessions are unaffected. Isolated
+non-production fixtures can still use their explicit test opt-out.
+
+This is a source-controlled release fuse, not an environment flag or a
+boolean repository-readiness claim. It may only be replaced following reviewed
+and verified integration of a real signed PDS writer/readback, PLC and handle
+resolution, the single PostgreSQL operation authority, complete Solid/SAI
+consent, privileged Fuseki isolation, crash reconciliation, and real
+multi-replica acceptance. No existing-identity migration is in scope.
+

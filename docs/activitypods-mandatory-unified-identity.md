@@ -94,8 +94,11 @@ not release the reservation as safely retryable.
   These tests do not yet prove true PLC/PDS side effects, crash injection,
   backup PITR or production authority integration.
 - No passwords, bearer tokens, recovery keys or raw email are kept in
-  this lifecycle table. The `verified_email_hmac` is HMAC-SHA-256 with an
-  external provider-held key, never unsalted SHA-256 of an email.
+  this lifecycle table. Email, client idempotency keys and canonical request
+  fingerprints must be domain-separated **HMAC-SHA-256 under an external
+  provider-held key**, not unkeyed SHA-256 of low-entropy inputs. Key
+  versioning, rotation/replay continuity and key recovery remain mandatory
+  design work before activating this adapter.
 
 **Next required integration order:** a single authenticated provider
 provisioning grant and durable PostgreSQL claim; reuse the existing

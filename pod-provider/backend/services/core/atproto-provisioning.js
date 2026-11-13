@@ -665,6 +665,16 @@ module.exports = {
     },
 
     async initializeRepoState(_ctx, { canonicalAccountId, did, handle }) {
+      // A metadata-only root CID/revision is a fixture, not a signed PDS
+      // repository. Until the provider-owned bootstrap authority is active,
+      // fail before writing an identity binding in production.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Verified ATProto PDS repository bootstrap is unavailable',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+        );
+      }
       await _ctx.call('identitybindings.upsertRepoBootstrap', {
         canonicalAccountId,
         did,
@@ -685,6 +695,15 @@ module.exports = {
     },
 
     async verifyProvisionedState(ctx, { canonicalAccountId, binding, didMethod }) {
+      // Do not promote fixture metadata to verified production readiness,
+      // even when older bindings contain repoInitialized=true.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Verified ATProto PDS repository readiness is unavailable',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+        );
+      }
       if (!binding?.atSigningKeyRef || !binding?.atRotationKeyRef) {
         throw new MoleculerError('Identity binding is missing AT key refs', 500, 'ATPROTO_BINDING_INVALID');
       }

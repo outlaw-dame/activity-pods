@@ -36,9 +36,21 @@ function checkProof(p, accountId, did) {
   }
 }
 function checkJob(row, p) {
+  const generation=Number(row?.generation);
   if (!row || row.account_id !== p.accountId || row.did !== p.did ||
       row.head_cid !== p.commitCid || row.root_cid !== p.rootCid ||
-      row.rev !== p.rev || Number(row.generation) !== 1) {
+      row.rev !== p.rev ||
+      !Number.isSafeInteger(generation) || generation < 1 ||
+      (p.generation !== undefined && p.generation !== generation) ||
+      // An older genesis-only verifier cannot authorize a newer record head:
+      // every >1 projection requires a cryptographically verified predecessor.
+      (generation > 1 && (
+        p.generation !== generation ||
+        !CID.test(p.previousRootCid || '') ||
+        !TID.test(p.previousRev || '') ||
+        p.previousRev >= p.rev
+      )) ||
+      (generation === 1 && p.generation !== undefined && p.generation !== 1)) {
     fail('PROJECTION_VERIFIED_HEAD_CHANGED', 'Recovery intent differs from signed PG head');
   }
 }
@@ -118,7 +130,8 @@ export function createRdfProjectionRecovery({
     await permitted(accountId, did, String(row.lease_epoch));
     return Object.freeze({
       ready: true, accountId, did, headCid: p.commitCid, rootCid: p.rootCid,
-      rev: p.rev, fence: String(row.lease_epoch), outboxStatus: p.outboxStatus
+      rev: p.rev, generation: Number(row.generation),
+      fence: String(row.lease_epoch), outboxStatus: p.outboxStatus
     });
   }
   async function inspect({ accountId, did }) {
@@ -213,6 +226,8 @@ export function createRdfProjectionRecovery({
       await applyRdfFenced({
         accountId, did, headCid: p.commitCid, rootCid: p.rootCid,
         rev: p.rev, fence,
+        expectedPreviousRootCid: p.previousRootCid ?? null,
+        expectedPreviousRev: p.previousRev ?? null,
         expectedIdentity: { canonicalAccountId: accountId, webId: accountId,
           activityPubActorId: accountId, atprotoDid: did }
       });
@@ -222,7 +237,10 @@ export function createRdfProjectionRecovery({
       }
       await permitted(accountId, did, fence);
       const fresh = await evidence(accountId, did);
-      if (fresh.commitCid !== p.commitCid || fresh.rootCid !== p.rootCid || fresh.rev !== p.rev) {
+      if (fresh.commitCid !== p.commitCid || fresh.rootCid !== p.rootCid ||
+          fresh.rev !== p.rev || fresh.generation !== p.generation ||
+          fresh.previousRootCid !== p.previousRootCid ||
+          fresh.previousRev !== p.previousRev) {
         fail('PROJECTION_VERIFIED_HEAD_CHANGED', 'Signed repository changed during projection');
       }
       checkProjected(await readRdf({ accountId, did }), p, fence);
@@ -231,8 +249,8 @@ export function createRdfProjectionRecovery({
         'applied_at=clock_timestamp(),last_error_code=NULL,updated_at=clock_timestamp() ' +
         'WHERE account_id=$1 AND did=$2 AND lease_owner=$3::uuid AND ' +
         "lease_epoch=$4::bigint AND state='leased' AND lease_until>clock_timestamp() " +
-        'AND head_cid=$5 AND root_cid=$6 AND rev=$7 RETURNING lease_epoch',
-        [accountId, did, leased.lease_owner, fence, p.commitCid, p.rootCid, p.rev]
+        'AND head_cid=$5 AND root_cid=$6 AND rev=$7 AND generation=$8 RETURNING lease_epoch',
+        [accountId, did, leased.lease_owner, fence, p.commitCid, p.rootCid, p.rev, leased.generation]
       );
       if (ack.rowCount !== 1) fail('PROJECTION_STALE_FENCE', 'Lease superseded before durable ACK');
       return readiness({ accountId, did });

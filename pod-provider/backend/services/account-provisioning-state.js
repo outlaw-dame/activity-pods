@@ -44,7 +44,7 @@ module.exports = {
       params: {
         provisioningId: 'string|min:1',
         phase: 'string|min:1',
-        status: { type: 'enum', values: ['started', 'completed', 'failed'] },
+        status: { type: 'enum', values: ['started', 'completed', 'failed', 'reconciliation_required'] },
         detail: { type: 'string', optional: true }
       },
       handler(ctx) {
@@ -72,7 +72,7 @@ module.exports = {
     finalize: {
       params: {
         provisioningId: 'string|min:1',
-        state: { type: 'enum', values: ['completed', 'failed'] }
+        state: { type: 'enum', values: ['completed', 'failed', 'reconciliation_required'] }
       },
       handler(ctx) {
         const { provisioningId, state } = ctx.params;

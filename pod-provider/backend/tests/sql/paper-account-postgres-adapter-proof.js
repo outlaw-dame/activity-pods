@@ -170,11 +170,11 @@ async function main() {
   assert.equal(completedRecovery.reconciliationRequired,false);
   assert.equal(completedRecovery.retryIdentityCreation,false);
   const stored=await pa.query(
-    'SELECT car_sha256,car_bytes FROM paper_account_candidate.signed_genesis WHERE operation_id=$1',
+    'SELECT car_sha256,car_byte_length FROM paper_account_candidate.signed_genesis WHERE operation_id=$1',
     [input.operationId]
   );
   assert.equal(stored.rowCount,1);
-  assert(stored.rows[0].car_bytes.equals(genesis.car));
+  assert.equal(stored.rows[0].car_byte_length,genesis.car.length);
   assert(stored.rows[0].car_sha256.equals(
     crypto.createHash('sha256').update(genesis.car).digest()
   ));

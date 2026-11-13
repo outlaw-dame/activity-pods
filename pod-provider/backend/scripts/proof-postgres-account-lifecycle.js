@@ -173,6 +173,28 @@ async function main(){
     assert.equal(await model.readSignup(signup).then(x=>x.state),
       'reconciliation_required','read-only Solid evidence never marks signup completed');
 
+    // PR #176's read-only signed/Solid evidence must never be confused
+    // with an atomic provider-only account completion seal. Both the
+    // normal provisioning->ready transition and a suspension->ready detour
+    // must fail closed for a journal-backed NEW signup.
+    await rejected(model.change({
+      providerId:provider,accountId:signupId,operationId:id(),
+      expectedGeneration:2,kind:'transition_state',nextState:'ready'
+    }), 'ACCOUNT_SIGNUP_COMPLETION_SEAL_REQUIRED');
+    assert.equal((await model.read({providerId:provider,accountId:signupId})).state,
+      'provisioning','unverified identity cannot become ready');
+    const suspended=await model.change({
+      providerId:provider,accountId:signupId,operationId:id(),
+      expectedGeneration:2,kind:'transition_state',nextState:'suspended'
+    });
+    assert.equal(suspended.generation,3);
+    await rejected(model.change({
+      providerId:provider,accountId:signupId,operationId:id(),
+      expectedGeneration:3,kind:'transition_state',nextState:'ready'
+    }), 'ACCOUNT_SIGNUP_COMPLETION_SEAL_REQUIRED');
+    assert.equal((await model.read({providerId:provider,accountId:signupId})).state,
+      'suspended','reactivation cannot evade the new-signup completion fence');
+
     const sameName=await Promise.allSettled(Array.from({length:6},(_,i)=>model.reserveSignup({
       ...signup,username:'signup-race',accountId:id(),operationId:id(),
       idempotencyHmac:hmac('account-signup-idempotency-v1','race-'+i),
@@ -214,7 +236,7 @@ async function main(){
       'the original operation survives and forbids another account');
 
     process.stdout.write(JSON.stringify({ok:true,schema:'paper.accounts.candidate.v1',postgres:18,
-      tests:['read-only Solid authority proof','durable signup reservation','uncertain remote commit','replay fence','lost PostgreSQL COMMIT','disabled-by-default','provider scope','unique username race','idempotency','unified AP/AT identity constraints','WebID conflict',
+      tests:['new-signup completion-fuse bypass','read-only Solid authority proof','durable signup reservation','uncertain remote commit','replay fence','lost PostgreSQL COMMIT','disabled-by-default','provider scope','unique username race','idempotency','unified AP/AT identity constraints','WebID conflict',
         'rollback','generation fence','valid transition graph','deletion','no orphaned locks']})+'\n');
   }finally{await pool.end();}
 }

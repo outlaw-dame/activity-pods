@@ -28,6 +28,7 @@ async function main(){
     assert.equal(start.rows[0].n,0,'disposable schema must start absent');
     await pool.query(fs.readFileSync(path.resolve(__dirname,'../sql/paper-account-postgres-candidate-v1.sql'),'utf8'));
     await pool.query(fs.readFileSync(path.resolve(__dirname,'../sql/paper-account-postgres-candidate-v2-signup-ledger.sql'),'utf8'));
+    await pool.query(fs.readFileSync(path.resolve(__dirname,'../sql/paper-account-postgres-candidate-v3-evidence-seal.sql'),'utf8'));
     const locked=createCandidate({pool});
     await rejected(locked.reserve({providerId:provider,accountId:id(),username:'blocked'}),'ACCOUNT_CANDIDATE_NOT_RELEASED');
 
@@ -172,6 +173,70 @@ async function main(){
     }), 'SOLID_SIGNUP_PROOF_IDENTITY_MISMATCH');
     assert.equal(await model.readSignup(signup).then(x=>x.state),
       'reconciliation_required','read-only Solid evidence never marks signup completed');
+
+    // The signed cross-authority verifier is a trusted provider dependency,
+    // not a proof object supplied by the signup caller. The resulting journal
+    // seal is immutable historical evidence, NEVER permission to mark ready.
+    await rejected(model.sealSignupEvidence(signup),
+      'ACCOUNT_SIGNUP_EVIDENCE_PROVIDER_REQUIRED');
+    const syntheticCid='bafyre'+'a'.repeat(53);
+    const syntheticRoot='bafyre'+'b'.repeat(53);
+    const validEvidence={
+      status:'evidence_only',productionReady:false,
+      accountId:signupId,signupGeneration:2,accountGeneration:2,
+      webId:signupIdentity.webId,did:signupIdentity.atprotoDid,
+      pdsOrigin:signupIdentity.atprotoPdsUrl,
+      commitCid:syntheticCid,rootCid:syntheticRoot,
+      rev:'2222222222222',projectionFence:'1',
+      outboxStatus:'pending'
+    };
+    let evidenceCalls=0;
+    let evidenceOk=true;
+    const sealer=createCandidate({
+      pool,fixtureOnly:true,
+      verifyNewSignupEvidence:async scope=>{
+        evidenceCalls++;
+        assert.equal(scope.providerId,provider);
+        assert.equal(scope.appClientId,app);
+        assert.deepEqual(scope.idempotencyHmac,signup.idempotencyHmac);
+        if(!evidenceOk) return {...validEvidence,productionReady:true};
+        return {...validEvidence};
+      }
+    });
+    await rejected(sealer.sealSignupEvidence({
+      ...signup,appClientId:'https://attacker.example'
+    }),'ACCOUNT_SIGNUP_RECONCILIATION_REQUIRED');
+    evidenceOk=false;
+    await rejected(sealer.sealSignupEvidence(signup),
+      'ACCOUNT_SIGNUP_EVIDENCE_INVALID');
+    evidenceOk=true;
+    assert.equal((await model.readSignup(signup)).state,'reconciliation_required');
+    const sealed=await sealer.sealSignupEvidence(signup);
+    assert.equal(sealed.state,'evidence_sealed');
+    assert.equal(sealed.generation,3);
+    assert.equal(sealed.replay,false);
+    assert.equal(sealed.releaseAuthorized,false);
+    assert.equal((await model.read({providerId:provider,accountId:signupId})).state,
+      'provisioning','historical evidence seal must not activate a new account');
+    const sealedPersisted=await pool.query(
+      'SELECT state,generation,evidence_digest,evidence_commit_cid,'+
+      'evidence_root_cid,evidence_rev,evidence_fence,'+
+      'evidence_account_generation,evidence_sealed_at '+
+      'FROM paper_account_candidate.signup_operations WHERE operation_id=$1',
+      [signupOp]
+    );
+    assert.equal(sealedPersisted.rows[0].state,'evidence_sealed');
+    assert.equal(sealedPersisted.rows[0].evidence_digest.length,32);
+    assert.equal(sealedPersisted.rows[0].evidence_commit_cid,syntheticCid);
+    assert.equal(sealedPersisted.rows[0].evidence_root_cid,syntheticRoot);
+    assert.equal(sealedPersisted.rows[0].evidence_rev,'2222222222222');
+    assert.equal(String(sealedPersisted.rows[0].evidence_fence),'1');
+    assert.equal(Number(sealedPersisted.rows[0].evidence_account_generation),2);
+    assert(sealedPersisted.rows[0].evidence_sealed_at);
+    const sealedReplay=await sealer.sealSignupEvidence(signup);
+    assert.equal(sealedReplay.replay,true);
+    assert.equal(sealedReplay.releaseAuthorized,false);
+    assert.equal(evidenceCalls,2,'read-only historical replay must not generate new credentials');
 
     // PR #176's read-only signed/Solid evidence must never be confused
     // with an atomic provider-only account completion seal. Both the

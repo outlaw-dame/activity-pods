@@ -96,7 +96,7 @@ describe('unified account: one authoritative signup and no fake production PDS',
       meta: { accountProvisioning: { capabilityId: 'provider.account.provisioning' } }
     })).rejects.toMatchObject({ type: 'UNIFIED_ACCOUNT_PROVISIONING_FAILED' });
     expect(signups).not.toHaveBeenCalled();
-    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ state: 'failed' }));
+    expect(finalize.mock.calls[0][0].params).toEqual(expect.objectContaining({ state: 'failed' }));
   });
   it('marks uncertain state instead of failed when signup RPC may have committed a PLC operation', async () => {
     signups.mockRejectedValueOnce(new Error('Transport closed after PLC submission'));
@@ -106,10 +106,10 @@ describe('unified account: one authoritative signup and no fake production PDS',
       code: 503, type: 'ACCOUNT_PROVISIONING_UNCERTAIN',
       data: { retryable: false }
     });
-    expect(markPhase).toHaveBeenCalledWith(expect.objectContaining({
+    expect(markPhase.mock.calls.at(-1)[0].params).toEqual(expect.objectContaining({
       phase: 'canonical_account', status: 'reconciliation_required'
     }));
-    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+    expect(finalize.mock.calls[0][0].params).toEqual(expect.objectContaining({
       state: 'reconciliation_required'
     }));
     expect(atprotoRepeat).not.toHaveBeenCalled();
@@ -124,7 +124,7 @@ describe('unified account: one authoritative signup and no fake production PDS',
     await expect(broker.call('unified-account.create', input, {
       meta: { accountProvisioning: { capabilityId: 'provider.account.provisioning' } }
     })).rejects.toMatchObject({ type: 'ACCOUNT_PROVISIONING_UNCERTAIN', code: 503 });
-    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({
+    expect(finalize.mock.calls[0][0].params).toEqual(expect.objectContaining({
       state: 'reconciliation_required'
     }));
   });

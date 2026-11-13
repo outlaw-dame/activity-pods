@@ -67,6 +67,11 @@ async function main() {
       return key.did();
     },
     verifyGenesis:verifySignedGenesisEvidence,
+    verifySolid:async ({webId,operationId})=>{
+      assert(webId.startsWith('https://pods.example/'));
+      assert(typeof operationId==='string');
+      return {webId,complete:true};
+    },
     verifyPds:opts=>verifyPdsReadiness({
       ...opts,plcDirectoryUrl:plc,fetchImpl:mockFetch
     })
@@ -112,6 +117,12 @@ async function main() {
     ...input,did,repoRootCid:genesis.rootCid,repoRev:genesis.rev,
     handle,expectedPdsUrl:pds
   })).state,'identities_ready');
+  await reject(missingVerifier.complete(input),'ACCOUNT_LEDGER_SOLID_VERIFIER_REQUIRED');
+  const wrongSolid=createAccountPostgresLifecycleCandidate({
+    pool:pa,
+    verifySolid:async()=>({webId:'https://pods.example/wrong-user',complete:true})
+  });
+  await reject(wrongSolid.complete(input),'ACCOUNT_LEDGER_SOLID_NOT_VERIFIED');
   assert.equal((await a.complete(input)).state,'completed');
   const stored=await pa.query(
     'SELECT car_sha256,car_bytes FROM paper_account_candidate.signed_genesis WHERE operation_id=$1',

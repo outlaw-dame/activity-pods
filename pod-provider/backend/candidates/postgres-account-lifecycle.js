@@ -2,6 +2,7 @@
 // Experimental and never autoloaded; does not own authentication or WebID.
 // Only a disposable fixture can construct an enabled candidate.
 const crypto=require('node:crypto');
+const { verifyNewSignupSolidAuthority } = require('./solid-new-signup-proof');
 const SCHEMA='paper_account_candidate';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const USERNAME=/^[a-z0-9][a-z0-9_-]{1,63}$/;
@@ -201,7 +202,40 @@ function createCandidate({pool,fixtureOnly=false}={}){
     );
     return r.rowCount?signupResult(r.rows[0],true):null;
   }
+  // Read-only readiness probe. This does NOT mark a signup complete, renew
+  // its lease or grant the caller permission to repeat remote identity RPCs.
+  // The trusted caller must seal a fresh verified proof in a separate,
+  // reviewed generation-fenced completion transaction.
+  async function verifySignupSolidReadiness({providerId,appClientId,
+    hmacKeyVersion,idempotencyHmac,call}){
+    gate();
+    if(typeof call!=='function')fail('ACCOUNT_SIGNUP_TRUSTED_SOLID_CALL_REQUIRED');
+    const operation=await readSignup({providerId,appClientId,
+      hmacKeyVersion,idempotencyHmac});
+    if(!operation||operation.state!=='reconciliation_required'){
+      fail('ACCOUNT_SIGNUP_RECONCILIATION_REQUIRED');
+    }
+    const before=await read({providerId,accountId:operation.accountId});
+    if(!before||before.webid!==before.activitypub_actor_uri||
+       !/^did:plc:[a-z2-7]{24}$/.test(before.atproto_did||'')||
+       before.atproto_repo_initialized!==true||
+       !['provisioning','ready'].includes(before.state)){
+      fail('ACCOUNT_SIGNUP_IDENTITY_NOT_READY');
+    }
+    const proof=await verifyNewSignupSolidAuthority({call,webId:before.webid,
+      did:before.atproto_did,operationId:operation.operationId});
+    // A concurrent lifecycle transition must never elevate a stale read-only
+    // proof. No SQL lock or connection is held across Solid/RDF calls.
+    const after=await read({providerId,accountId:operation.accountId});
+    if(!after||after.generation!==before.generation||
+       after.state!==before.state||after.webid!==before.webid||
+       after.atproto_did!==before.atproto_did){
+      fail('ACCOUNT_SIGNUP_CONCURRENT_IDENTITY_CHANGE');
+    }
+    return Object.freeze({...proof,operationId:operation.operationId,
+      accountId:operation.accountId,generation:after.generation});
+  }
   return Object.freeze({reserve,change,read,reserveSignup,
-    markSignupMayHaveSideEffects,readSignup});
+    markSignupMayHaveSideEffects,readSignup,verifySignupSolidReadiness});
 }
 module.exports={createCandidate};

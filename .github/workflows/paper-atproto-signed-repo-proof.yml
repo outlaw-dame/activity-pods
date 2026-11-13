@@ -79,6 +79,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/single-record-writer.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-outbox-dispatch.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-outbox-dispatch.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/signed-record-projection.test.mjs
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)

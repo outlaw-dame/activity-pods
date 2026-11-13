@@ -1,6 +1,18 @@
 name: Paper Account PostgreSQL Lifecycle Candidate
 
 on:
+  # The GitHub App's contents commits can be pushed without reliably
+  # scheduling a pull_request synchronize run. Validate the exact candidate
+  # SHA on scoped branch pushes as well; this is not production activation.
+  push:
+    branches:
+      - feat/unified-mandatory-plc-identity
+    paths:
+      - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
+      - 'pod-provider/backend/tests/sql/**'
+      - 'pod-provider/backend/candidates/**'
+      - 'pod-provider/backend/utils/unified-identity-policy.js'
+      - '.github/workflows/paper-account-postgres-lifecycle.yml'
   pull_request:
     paths:
       - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'

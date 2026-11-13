@@ -146,11 +146,14 @@ export function createNativeOutboxDispatcher({
     if(!claim)return Object.freeze({claimed:false});
     validateLease(claim);
     const idempotencyKey='at.commit.v1:'+claim.did+':'+claim.commit_cid;
+    // Transport implementations must honor this signal; a callback that
+    // stalls beyond the lease cannot ACK an expired lease in PostgreSQL.
+    const signal=AbortSignal.timeout((leaseSeconds-2)*1000);
     let event;
     try {
       event=await verifyEvent(Object.freeze({
         did:claim.did,commitCid:claim.commit_cid,
-        rev:claim.rev,kind:claim.kind
+        rev:claim.rev,kind:claim.kind,signal
       }));
       if(event?.verified!==true || event.did!==claim.did ||
          event.commitCid!==claim.commit_cid || event.rev!==claim.rev ||
@@ -159,13 +162,15 @@ export function createNativeOutboxDispatcher({
         fail('NATIVE_EVENT_INTEGRITY_INVALID');
       }
     }catch(error){
+      // A malformed signed event is terminal; transient signer/DB/PLC
+      // lookup failures remain retryable with bounded backoff.
       return Object.freeze(await failDelivery(claim,
-        errorCode(error),true));
+        errorCode(error),error?.code==='NATIVE_EVENT_INTEGRITY_INVALID'));
     }
     try {
       const ack=await publish(Object.freeze({
         did:claim.did,commitCid:claim.commit_cid,rev:claim.rev,
-        kind:claim.kind,idempotencyKey,
+        kind:claim.kind,idempotencyKey,signal,
         eventBytes:Buffer.from(event.eventBytes)
       }));
       if(ack?.acked!==true || ack.idempotencyKey!==idempotencyKey) {

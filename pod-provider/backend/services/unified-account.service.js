@@ -94,6 +94,9 @@ module.exports = {
         let activitypub = null;
         let atproto = null;
         let currentPhase = 'canonical_account';
+        // After a signup RPC starts, transport errors cannot rule out
+        // committed PLC/PDS side effects. Preserve the account for recovery.
+        let signupStarted = false;
 
         try {
           currentPhase = 'canonical_account';
@@ -103,6 +106,7 @@ module.exports = {
             status: 'started'
           });
 
+          signupStarted = true;
           canonical = await ctx.call('accounts.create', {
             username: input.username,
             email: input.email,
@@ -286,13 +290,13 @@ module.exports = {
             await ctx.call('account-provisioning-state.markPhase', {
               provisioningId,
               phase: currentPhase,
-              status: 'failed',
-              detail: e.message
+              status: signupStarted ? 'reconciliation_required' : 'failed',
+              detail: e.type || 'UNIFIED_ACCOUNT_PROVISIONING_FAILED'
             });
 
             await ctx.call('account-provisioning-state.finalize', {
               provisioningId,
-              state: 'failed'
+              state: signupStarted ? 'reconciliation_required' : 'failed'
             });
           } catch (stateErr) {
             this.logger.warn(
@@ -303,10 +307,12 @@ module.exports = {
           const statusCode = Number.isFinite(Number(e.code)) ? Number(e.code) : 500;
 
           throw new MoleculerError(
-            `Unified account provisioning failed during phase "${currentPhase}": ${e.message}`,
-            statusCode,
-            e.type || 'UNIFIED_ACCOUNT_PROVISIONING_FAILED',
-            { phase: currentPhase }
+            signupStarted
+              ? 'Unified account outcome requires authoritative reconciliation'
+              : 'Unified account provisioning failed before account creation',
+            signupStarted ? 503 : statusCode,
+            signupStarted ? 'ACCOUNT_PROVISIONING_UNCERTAIN' : (e.type || 'UNIFIED_ACCOUNT_PROVISIONING_FAILED'),
+            { phase: currentPhase, retryable: false }
           );
         }
       }

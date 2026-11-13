@@ -64,6 +64,52 @@ CREATE TABLE paper_account_candidate.operations (
   CONSTRAINT operations_provider_username_unique UNIQUE
     (provider_id, username_key)
 );
+-- Genesis CAR is deliberately small and immutable. Later repo writes/blocks
+-- must use an object-storage-backed, independently verified PDS blockstore:
+-- never put all future social content or blobs into this account ledger.
+CREATE TABLE paper_account_candidate.signed_genesis (
+  operation_id uuid PRIMARY KEY REFERENCES paper_account_candidate.operations(operation_id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  did text NOT NULL UNIQUE CHECK (did ~ '^did:plc:[a-z2-7]{24}
+  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
+  WHERE verified_email_hmac IS NOT NULL;
+CREATE INDEX operations_reconciliation_idx
+  ON paper_account_candidate.operations(updated_at, operation_id)
+  WHERE state = 'needs_reconciliation';
+REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
+COMMIT;
+),
+  root_cid text NOT NULL CHECK (root_cid ~ '^bafy[a-z2-7]{24,}
+  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
+  WHERE verified_email_hmac IS NOT NULL;
+CREATE INDEX operations_reconciliation_idx
+  ON paper_account_candidate.operations(updated_at, operation_id)
+  WHERE state = 'needs_reconciliation';
+REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
+COMMIT;
+),
+  repo_rev text NOT NULL CHECK (length(repo_rev) BETWEEN 12 AND 64),
+  signing_key_did text NOT NULL CHECK (signing_key_did ~ '^did:key:z[1-9A-HJ-NP-Za-km-z]{30,160}
+  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
+  WHERE verified_email_hmac IS NOT NULL;
+CREATE INDEX operations_reconciliation_idx
+  ON paper_account_candidate.operations(updated_at, operation_id)
+  WHERE state = 'needs_reconciliation';
+REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
+COMMIT;
+),
+  car_bytes bytea NOT NULL CHECK (octet_length(car_bytes) BETWEEN 32 AND 262144),
+  car_sha256 bytea NOT NULL CHECK (octet_length(car_sha256) = 32),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+-- A full PDS proof requires reading the same signed commit over actual
+-- com.atproto.sync.getLatestCommit/getRepo, with independent DID resolution.
+-- The existence of a signed_genesis row alone MUST NOT activate the account.
+-- This small ledger is for immutable crash-recovery evidence, not content.
+
 CREATE UNIQUE INDEX operations_provider_verified_email_unique
   ON paper_account_candidate.operations(provider_id, verified_email_hmac)
   WHERE verified_email_hmac IS NOT NULL;

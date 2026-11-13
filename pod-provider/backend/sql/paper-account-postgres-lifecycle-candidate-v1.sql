@@ -1,35 +1,29 @@
--- Paper / ActivityPods unified account lifecycle -- DISPOSABLE CANDIDATE.
--- NOT connected to auth.signup, Solid-OIDC, SAI, PLC or the live PDS.
--- Execute only after reviewed backup/migration, single-writer and rollback gates.
--- This is operational state, NOT a replacement for WebID/RDF/Pod storage.
+-- Paper / ActivityPods unified account candidate -- DISPOSABLE, NON-ACTIVATED.
+-- PostgreSQL owns operational account reservation; Jena owns Solid/RDF.
+-- This schema does not replace Solid-OIDC, SAI, the PLC directory or a PDS.
+-- A schema change here is NOT a reviewed production migration.
 BEGIN;
 CREATE SCHEMA paper_account_candidate;
+
 CREATE TABLE paper_account_candidate.operations (
   operation_id uuid PRIMARY KEY,
   provider_id text NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 255),
   app_client_id text NOT NULL CHECK (length(app_client_id) BETWEEN 1 AND 2048),
-  -- Domain-separated HMAC-SHA-256 of the opaque app idempotency key,
-  -- with a provider-held secret kept OUTSIDE the database. Never plain
-  -- SHA-256: client keys can be short or guessable.
+  -- Provider-keyed, domain-separated HMAC-SHA256 of client idempotency key.
   idempotency_digest bytea NOT NULL CHECK (octet_length(idempotency_digest) = 32),
-  -- Domain-separated HMAC-SHA-256 over the approved canonical request.
-  -- No raw password, email, authorization header or bearer token is stored.
-  -- The key version and rotation protocol are required at activation.
+  -- Provider-keyed, domain-separated HMAC-SHA256 of approved request.
   request_digest bytea NOT NULL CHECK (octet_length(request_digest) = 32),
   username_key text NOT NULL CHECK (
     length(username_key) BETWEEN 1 AND 128 AND username_key = lower(username_key)
   ),
-  -- Optional HMAC-SHA-256, provider-keyed, of verified normalized email.
-  -- Plain SHA-256 on low-entropy emails is reversible by guessing; do not use.
   verified_email_hmac bytea CHECK (
     verified_email_hmac IS NULL OR octet_length(verified_email_hmac) = 32
   ),
   state text NOT NULL DEFAULT 'reserved' CHECK (
-    state IN ('reserved', 'account_created', 'identities_ready',
-              'completed', 'needs_reconciliation')
+    state IN ('reserved','account_created','identities_ready',
+              'completed','needs_reconciliation')
   ),
-  -- Lease expiration is a FAIL-CLOSED reconciliation trigger, never authority
-  -- to mint another DID or create the same username a second time.
+  -- Expiry is a reconciliation trigger, NEVER permission to mint another DID.
   lease_token uuid NOT NULL,
   lease_expires_at timestamptz NOT NULL,
   canonical_webid text,
@@ -37,14 +31,10 @@ CREATE TABLE paper_account_candidate.operations (
   atproto_did text,
   pds_repo_root_cid text,
   pds_repo_rev text,
-  -- Digest of verified signed PDS commit evidence from a future real PDS
-  -- implementation. A boolean repoInitialized is NOT that evidence.
   signed_repo_proof_digest bytea CHECK (
     signed_repo_proof_digest IS NULL OR octet_length(signed_repo_proof_digest) = 32
   ),
-  -- Separate evidence that the configured HTTPS PDS actually served
-  -- latestCommit and a matching signed getRepo CAR. Local genesis only
-  -- must never satisfy the account-completion constraint.
+  -- Must derive from independent configured PDS XRPC+PLC document verification.
   pds_sync_proof_digest bytea CHECK (
     pds_sync_proof_digest IS NULL OR octet_length(pds_sync_proof_digest) = 32
   ),
@@ -63,68 +53,43 @@ CREATE TABLE paper_account_candidate.operations (
       pds_sync_proof_digest IS NOT NULL
     )
   ),
-  -- A per-provider application idempotency key cannot point at two accounts.
   CONSTRAINT operations_idempotency_unique UNIQUE
-    (provider_id, app_client_id, idempotency_digest),
-  -- Never release the name merely because a lease timed out or a client
-  -- disappeared; manual reconciliation/explicit deletion is required.
+    (provider_id,app_client_id,idempotency_digest),
   CONSTRAINT operations_provider_username_unique UNIQUE
-    (provider_id, username_key)
+    (provider_id,username_key)
 );
--- Genesis CAR is deliberately small and immutable. Later repo writes/blocks
--- must use an object-storage-backed, independently verified PDS blockstore:
--- never put all future social content or blobs into this account ledger.
+CREATE UNIQUE INDEX operations_provider_verified_email_unique
+  ON paper_account_candidate.operations(provider_id,verified_email_hmac)
+  WHERE verified_email_hmac IS NOT NULL;
+CREATE INDEX operations_reconciliation_idx
+  ON paper_account_candidate.operations(updated_at,operation_id)
+  WHERE state = 'needs_reconciliation';
+
+-- Immutable initial signed v3 repository CAR is small and bounded.
+-- Future record/blob blocks belong in a separate PDS blockstore (object storage),
+-- not in the account ledger; do not build an unbounded content table here.
 CREATE TABLE paper_account_candidate.signed_genesis (
   operation_id uuid PRIMARY KEY REFERENCES paper_account_candidate.operations(operation_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
-  did text NOT NULL UNIQUE CHECK (did ~ '^did:plc:[a-z2-7]{24}
-  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
-  WHERE verified_email_hmac IS NOT NULL;
-CREATE INDEX operations_reconciliation_idx
-  ON paper_account_candidate.operations(updated_at, operation_id)
-  WHERE state = 'needs_reconciliation';
-REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
-REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
-COMMIT;
-),
-  root_cid text NOT NULL CHECK (root_cid ~ '^bafy[a-z2-7]{24,}
-  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
-  WHERE verified_email_hmac IS NOT NULL;
-CREATE INDEX operations_reconciliation_idx
-  ON paper_account_candidate.operations(updated_at, operation_id)
-  WHERE state = 'needs_reconciliation';
-REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
-REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
-COMMIT;
-),
+  did text NOT NULL UNIQUE CHECK (did ~ '^did:plc:[a-z2-7]{24}$'),
+  root_cid text NOT NULL CHECK (root_cid ~ '^bafy[a-z2-7]{24,}$'),
   repo_rev text NOT NULL CHECK (length(repo_rev) BETWEEN 12 AND 64),
-  signing_key_did text NOT NULL CHECK (signing_key_did ~ '^did:key:z[1-9A-HJ-NP-Za-km-z]{30,160}
-  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
-  WHERE verified_email_hmac IS NOT NULL;
-CREATE INDEX operations_reconciliation_idx
-  ON paper_account_candidate.operations(updated_at, operation_id)
-  WHERE state = 'needs_reconciliation';
-REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
-REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
-COMMIT;
-),
+  signing_key_did text NOT NULL CHECK (
+    signing_key_did ~ '^did:key:z[1-9A-HJ-NP-Za-km-z]{30,160}$'
+  ),
   car_bytes bytea NOT NULL CHECK (octet_length(car_bytes) BETWEEN 32 AND 262144),
   car_sha256 bytea NOT NULL CHECK (octet_length(car_sha256) = 32),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
--- A full PDS proof requires reading the same signed commit over actual
--- com.atproto.sync.getLatestCommit/getRepo, with independent DID resolution.
--- The existence of a signed_genesis row alone MUST NOT activate the account.
--- This small ledger is for immutable crash-recovery evidence, not content.
 
--- A completed row must refer to the same immutable genesis evidence.
--- This is a storage-level referential check, independent of the application.
--- Application roles must NOT receive direct UPDATE rights to these tables.
+-- Storage-level referential integrity even when direct SQL is attempted.
+-- This is not itself a cryptographic verifier: app roles must NOT have
+-- direct table writes; authorization + signature verification live upstream.
 CREATE FUNCTION paper_account_candidate.verify_completed_genesis()
-RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $
+RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
   IF NEW.state = 'completed' AND NOT EXISTS (
-    SELECT 1 FROM paper_account_candidate.signed_genesis g
+    SELECT 1 FROM paper_account_candidate.signed_genesis AS g
     WHERE g.operation_id = NEW.operation_id
       AND g.did = NEW.atproto_did
       AND g.root_cid = NEW.pds_repo_root_cid
@@ -135,18 +100,12 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
-END $;
+END $$;
 CREATE CONSTRAINT TRIGGER operations_complete_verified_genesis
 AFTER INSERT OR UPDATE ON paper_account_candidate.operations
 DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW
 EXECUTE FUNCTION paper_account_candidate.verify_completed_genesis();
 
-CREATE UNIQUE INDEX operations_provider_verified_email_unique
-  ON paper_account_candidate.operations(provider_id, verified_email_hmac)
-  WHERE verified_email_hmac IS NOT NULL;
-CREATE INDEX operations_reconciliation_idx
-  ON paper_account_candidate.operations(updated_at, operation_id)
-  WHERE state = 'needs_reconciliation';
 REVOKE ALL ON SCHEMA paper_account_candidate FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA paper_account_candidate FROM PUBLIC;
 COMMIT;

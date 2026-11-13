@@ -59,6 +59,7 @@ jobs:
         env:
           NODE_PATH: /tmp/paper-accounts-pg/node_modules
           PAPER_ACCOUNTS_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
           PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
         run: node pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
       - name: Verify PostgreSQL 18 full backup and exact account restore

@@ -8,11 +8,12 @@ if (process.env.NODE_ENV !== 'test' ||
     process.env.ATPROTO_OIDC_REDIS_WORKER !== 'confirmed') {
   throw Error('The grant stress worker is restricted to disposable integration tests');
 }
-const [grantId, workerId, attemptsText] = process.argv.slice(2);
+const [grantId, workerId, attemptsText, mode = 'upsert'] = process.argv.slice(2);
 const attempts = Number(attemptsText);
 if (!/^grant-mp-[0-9a-f-]{36}$/u.test(grantId || '') ||
     !/^[0-3]$/u.test(workerId || '') ||
-    !Number.isSafeInteger(attempts) || attempts < 1 || attempts > 200) {
+    !Number.isSafeInteger(attempts) || attempts < 1 || attempts > 200 ||
+    !['upsert', 'revoke'].includes(mode)) {
   throw Error('Invalid disposable grant worker inputs');
 }
 const source = process.env.SEMAPPS_REDIS_OIDC_PROVIDER_URL || 'redis://redis:6379/13';
@@ -29,6 +30,12 @@ const redis = new Redis(url.toString(), {
 });
 (async () => {
   const adapter = new RedisAdapter('AccessToken', redis);
+  if (mode === 'revoke') {
+    await adapter.revokeByGrantId(grantId);
+    console.log(JSON.stringify({ workerId, mode: 'revoke', remainingPointers:
+      await redis.llen('grant:' + grantId) }));
+    return;
+  }
   const results = await Promise.allSettled(Array.from({ length: attempts }, (_, i) =>
     adapter.upsert('worker-' + workerId + '-' + i, {
       grantId, accountId: 'test-user', clientId: 'test-client',

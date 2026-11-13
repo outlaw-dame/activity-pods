@@ -695,9 +695,14 @@ module.exports = {
     },
 
     async verifyProvisionedState(ctx, { canonicalAccountId, binding, didMethod }) {
-      // Do not promote fixture metadata to verified production readiness,
-      // even when older bindings contain repoInitialized=true.
-      if (process.env.NODE_ENV === 'production') {
+      // Reject missing and fixture-only repository evidence before treating
+      // the binding as ready. Preserve the verification path for pre-existing
+      // accounts with actual repository metadata; migrations are separate.
+      const placeholderRepo = !binding?.repoInitialized ||
+        !binding?.repoRootCid || !binding?.repoRev ||
+        binding.repoRootCid === 'bafyreigenesisplaceholder' ||
+        binding.repoRev === '0';
+      if (process.env.NODE_ENV === 'production' && placeholderRepo) {
         throw new MoleculerError(
           'Verified ATProto PDS repository readiness is unavailable',
           503,

@@ -28,6 +28,72 @@ Production legacy `auth.signup` does not honor the older
 usable only by explicitly isolated non-production federation fixtures,
 which must never be represented as full account onboarding.
 
+## November 2026 implementation findings and safety fences
+
+The current `accounts.create` delegates to `auth.signup`. That action already
+performs the authoritative WebID, ActivityPub and optional ATProto phases.
+Re-invoking ATProto from the unified-account facade can create fresh signing
+keys and duplicate or conflict with submitted PLC operations. The facade now
+uses `signupProvisioning` evidence returned by `auth.signup`, performs a
+read-only AP actor readiness check, and checks the protected identity binding
+instead of repeating ATProto provisioning. A missing or inconsistent binding
+fails closed. It does not return or persist the login JWT in the account API.
+
+**Critical ATProto limitation:** `atproto-provisioning.initializeRepoState`
+currently writes a placeholder root CID and revision into the RDF identity
+binding; it does not create an actual signed repository commit/CAR on a
+working PDS. This PR now rejects this path in production even if a legacy
+binding already contains `repoInitialized=true`. Real PLC submission is a
+separate step and is not evidence of an initialized PDS. Production
+provisioning is explicitly blocked pending independently verified PDS
+repository creation and consistency, not silently declared complete.
+
+**Critical durability limitation:** `provider-capabilities` idempotency and
+`account-provisioning-state` phases currently use per-process Maps. Both
+must reject production reservations/starts, because a second Moleculer cell
+or restart can lose the only record of irreversible account creation. If an
+account has already been created and storing its completion fails, the API
+now returns `ACCOUNT_COMPLETION_UNCERTAIN`, does not report 201, and does
+not release the reservation as safely retryable.
+
+### PostgreSQL account control-plane candidate (not activated)
+
+- `pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql`
+  defines a **separate account lifecycle** schema with unique
+  provider-scoped username, provider/app/idempotency digest and optional
+  keyed-email-HMAC constraints. It does not replace the live
+  `@semapps/auth` accounts dataset or Group PostgreSQL control plane.
+- `pod-provider/backend/candidates/account-postgres-lifecycle.js` is an
+  explicitly injected, non-autoloaded pool adapter with transactional
+  `reserve → account_created → identities_ready → completed` transitions.
+  Unknown commits, stale leases and claims with an existing operation
+  **require reconciliation**, never automatic second DID issuance.
+- `paper-account-postgres-lifecycle.yml` runs a real disposable PostgreSQL
+  18 schema proof: collisions must fail, and placeholder-PDS completion
+  cannot pass the SQL constraints. This is not yet an end-to-end account
+  authority or a production connection.
+- No passwords, bearer tokens, recovery keys or raw email are kept in
+  this lifecycle table. The `verified_email_hmac` is HMAC-SHA-256 with an
+  external provider-held key, never unsalted SHA-256 of an email.
+
+**Next required integration order:** a single authenticated provider
+provisioning grant and durable PostgreSQL claim; reuse the existing
+`auth.signup` authority while migrating only the operational lifecycle;
+checkpoint each completed side effect with exact operation ID; explicitly
+create and verify Pod/SAI/ACL resources; submit PLC once with reconciled
+directory state; bootstrap a real signed PDS repo; seal the WebID=AP actor
+and DID binding; atomically confirm completion. Test SIGKILL and unknown
+COMMIT, conflicting same-name requests, expired leases, failed PLC/PDS,
+actual Solid-OIDC consent revocation, database failover and PostgreSQL
+backup/restore before activating a new account path.
+
+PostgreSQL will own account/reservation transactions only **after** the
+single-writer migration gate. Jena remains canonical for Pod RDF and
+enforced Solid data rights. Separate read-only projections must not add a
+second mutable authority. The planned Group PostgreSQL migration remains
+a distinct consent-fenced cutover.
+
+ 
 ## Reliability and migration acceptance (still required)
 
 - All phases (account reservation, Pod+WebID, AP, did:plc/PDS and

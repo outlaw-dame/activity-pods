@@ -24,6 +24,7 @@ on:
       - 'pod-provider/backend/candidates/account-postgres-lifecycle.js'
       - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
       - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
+      - 'pod-provider/backend/candidates/provider-handle-resolver.mjs'
       - 'pod-provider/backend/utils/unified-identity-policy.js'
       - '.github/workflows/paper-account-postgres-lifecycle.yml'
   workflow_dispatch:
@@ -107,6 +108,7 @@ jobs:
           cp pod-provider/backend/candidates/new-signup-postgres-authority.js "$proof/candidates/"
           cp pod-provider/backend/candidates/atproto-repo-genesis.mjs "$proof/candidates/"
           cp pod-provider/backend/candidates/atproto-pds-readiness.mjs "$proof/candidates/"
+          cp pod-provider/backend/candidates/provider-handle-resolver.mjs "$proof/candidates/"
           cp pod-provider/backend/utils/unified-identity-policy.js "$proof/utils/"
           cp pod-provider/backend/tests/sql/paper-account-postgres-adapter-proof.js "$proof/tests/sql/"
           # All dependencies are ephemeral CI-only, not in the deployed Pod.

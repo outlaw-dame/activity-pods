@@ -200,7 +200,7 @@ function createAccountPostgresLifecycleCandidate({
     },
 
     /**
-     * Store one immutable signed genesis archive after resolving the actual
+     * Store only immutable genesis digest/size evidence after resolving the actual
      * did:plc document and verifying every CAR block + commit signature.
      * Never accept signing authority supplied in a client request.
      *
@@ -255,15 +255,15 @@ function createAccountPostgresLifecycleCandidate({
         const inserted = await client.query(
           `INSERT INTO paper_account_candidate.signed_genesis
            (operation_id, did, root_cid, repo_rev, signing_key_did,
-            car_bytes, car_sha256)
+            car_byte_length, car_sha256)
            VALUES ($1::uuid,$2,$3,$4,$5,$6,$7)
            ON CONFLICT DO NOTHING RETURNING operation_id`,
           [input.operationId, genesis.did, genesis.rootCid, genesis.rev,
-            trustedKeyDid, genesis.car, digestBytes]
+            trustedKeyDid, genesis.car.length, digestBytes]
         );
         if (inserted.rowCount !== 1) {
           const existing = await client.query(
-            `SELECT did,root_cid,repo_rev,signing_key_did,car_sha256
+            `SELECT did,root_cid,repo_rev,signing_key_did,car_byte_length,car_sha256
              FROM paper_account_candidate.signed_genesis
              WHERE operation_id=$1::uuid`, [input.operationId]
           );
@@ -272,6 +272,7 @@ function createAccountPostgresLifecycleCandidate({
               existing.rows[0].root_cid !== genesis.rootCid ||
               existing.rows[0].repo_rev !== genesis.rev ||
               existing.rows[0].signing_key_did !== trustedKeyDid ||
+              existing.rows[0].car_byte_length !== genesis.car.length ||
               !existing.rows[0].car_sha256.equals(digestBytes)) {
             fail('ACCOUNT_LEDGER_GENESIS_CONFLICT');
           }
@@ -341,7 +342,8 @@ function createAccountPostgresLifecycleCandidate({
       const liveProof = crypto.createHash('sha256')
         .update(['pds-sync-v1',input.did,input.handle,
           input.expectedPdsUrl,input.repoRootCid,input.repoRev,
-          staged.car_sha256.toString('hex')].join('\0'))
+          staged.car_sha256.toString('hex'),
+          remote.carSha256.toString('hex')].join('\0'))
         .digest();
       return transaction(pool, async client => {
         const updated = await client.query(

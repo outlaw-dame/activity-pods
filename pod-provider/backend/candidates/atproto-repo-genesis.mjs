@@ -129,3 +129,47 @@ export async function delegatedActivityPodsSigner({ call, canonicalAccountId, di
     }
   };
 }
+
+
+/**
+ * Independently validate an externally stored genesis CAR. Caller must
+ * obtain trustedKeyDid from the resolved and checked PLC DID document,
+ * never from a request payload. This proves signing *and* content hashing.
+ * It does not prove any PDS XRPC endpoint serves the repository.
+ */
+export async function verifySignedGenesisEvidence({
+  did, rootCid, rev, car, trustedKeyDid
+} = {}) {
+  assert(DID_PATTERN.test(did || '') && KEY_PATTERN.test(trustedKeyDid || ''),
+    'REPO_GENESIS_INVALID_AUTHORITY');
+  assert(typeof rootCid === 'string' && rootCid.startsWith('bafy') &&
+      typeof rev === 'string' && rev.length >= 12,
+  'REPO_GENESIS_INVALID_CLAIM');
+  assert((car instanceof Uint8Array || Buffer.isBuffer(car)) &&
+      car.byteLength > 0 && car.byteLength <= MAX_GENESIS_CAR_BYTES,
+  'REPO_GENESIS_SIZE_LIMIT');
+  let parsed, commit;
+  try {
+    parsed = await readCarWithRoot(car);
+    assert(parsed.root.toString() === rootCid &&
+        parsed.blocks.size >= 2 && parsed.blocks.size <= MAX_GENESIS_BLOCKS,
+      'REPO_GENESIS_CAR_INTEGRITY_FAILED');
+    const bytes = parsed.blocks.get(parsed.root);
+    assert(bytes instanceof Uint8Array, 'REPO_GENESIS_MISSING_COMMIT');
+    commit = decodeCbor(bytes);
+  } catch (error) {
+    assert(false, error?.code || 'REPO_GENESIS_CAR_INTEGRITY_FAILED');
+  }
+  assert(commit && commit.did === did && commit.version === 3 &&
+      commit.rev === rev && commit.prev === null &&
+      commit.sig instanceof Uint8Array && commit.sig.byteLength === 64,
+  'REPO_GENESIS_INVALID_COMMIT');
+  let verified = false;
+  try { verified = await verifyCommitSig(commit, trustedKeyDid); }
+  catch (_) { verified = false; }
+  assert(verified === true, 'REPO_GENESIS_SIGNATURE_NOT_VERIFIED');
+  return Object.freeze({
+    did, rootCid, rev, keyDid: trustedKeyDid,
+    car: Buffer.from(car)
+  });
+}

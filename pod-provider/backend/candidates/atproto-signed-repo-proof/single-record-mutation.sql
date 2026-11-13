@@ -18,6 +18,7 @@ CREATE TABLE paper_atproto_repo_proof.record_mutations (
   did text COLLATE "C" NOT NULL REFERENCES paper_atproto_repo_proof.repos(did),
   commit_cid text COLLATE "C" NOT NULL,
   previous_commit_cid text COLLATE "C" NOT NULL,
+  previous_root_cid text COLLATE "C" NOT NULL,
   previous_rev text COLLATE "C" NOT NULL
     CHECK (previous_rev ~ '^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$'),
   rev text COLLATE "C" NOT NULL
@@ -34,6 +35,8 @@ CREATE TABLE paper_atproto_repo_proof.record_mutations (
   FOREIGN KEY (did, commit_cid)
     REFERENCES paper_atproto_repo_proof.blocks(did, cid),
   FOREIGN KEY (did, previous_commit_cid)
+    REFERENCES paper_atproto_repo_proof.blocks(did, cid),
+  FOREIGN KEY (did, previous_root_cid)
     REFERENCES paper_atproto_repo_proof.blocks(did, cid),
   CHECK ((action = 'create' AND previous_record_cid IS NULL AND record_cid IS NOT NULL)
       OR (action = 'update' AND previous_record_cid IS NOT NULL AND record_cid IS NOT NULL)

@@ -47,7 +47,7 @@ BEGIN
     UPDATE paper_account_candidate.operations SET
       state='completed', canonical_webid='https://pods.example/alice',
       activitypub_actor_id='https://pods.example/alice',
-      atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
+      atproto_did='did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
       pds_repo_root_cid='bafyreigenesisplaceholder', pds_repo_rev='0',
       signed_repo_proof_digest=decode(repeat('77',32),'hex')
     WHERE operation_id=op;
@@ -65,7 +65,7 @@ BEGIN
   BEGIN
     UPDATE paper_account_candidate.operations SET
       state='completed',
-      atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
+      atproto_did='did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
       pds_repo_root_cid='bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       pds_repo_rev='3kskdumj2wvab',
       signed_repo_proof_digest=decode(repeat('77',32),'hex'),
@@ -83,14 +83,14 @@ BEGIN
   INSERT INTO paper_account_candidate.signed_genesis (
     operation_id,did,root_cid,repo_rev,signing_key_did,car_bytes,car_sha256
   ) VALUES (
-    op,'did:plc:abcdefghijklmnopqrstuvwx',
+    op,'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
     'bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa','3kskdumj2wvab',
     'did:key:z' || repeat('1',40),
     decode(repeat('ab',64),'hex'),decode(repeat('77',32),'hex')
   );
   UPDATE paper_account_candidate.operations SET
     state='identities_ready',
-    atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
+    atproto_did='did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
     pds_repo_root_cid='bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     pds_repo_rev='3kskdumj2wvab',
     signed_repo_proof_digest=decode(repeat('77',32),'hex'),

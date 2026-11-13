@@ -49,7 +49,7 @@ async function main() {
     service:[{id:did+'#atproto_pds',type:'AtprotoPersonalDataServer',serviceEndpoint:pds}]
   };
   const routes={
-    [plc+'/'+did]:new Response(JSON.stringify(document)),
+    [plc+'/'+encodeURIComponent(did)]:new Response(JSON.stringify(document)),
     [pds+'/xrpc/com.atproto.sync.getLatestCommit?did='+did]:
       new Response(JSON.stringify({cid:genesis.rootCid,rev:genesis.rev})),
     [pds+'/xrpc/com.atproto.sync.getRepo?did='+did]:

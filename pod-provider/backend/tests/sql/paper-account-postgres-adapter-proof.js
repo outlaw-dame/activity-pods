@@ -7,6 +7,8 @@ const crypto = require('node:crypto');
 const { Pool } = require('pg');
 const { createAccountPostgresLifecycleCandidate } =
   require('../../candidates/account-postgres-lifecycle');
+const { verifyNewSignupSolidAuthority } =
+  require('../../candidates/solid-new-signup-proof');
 
 const connection = {
   host:'127.0.0.1',port:15432,database:'paper_account_disposable',
@@ -72,10 +74,25 @@ async function main() {
       return key.did();
     },
     verifyGenesis:verifySignedGenesisEvidence,
-    verifySolid:async ({webId,operationId})=>{
-      assert(webId.startsWith('https://pods.example/'));
-      assert(typeof operationId==='string');
-      return {webId,complete:true};
+    verifySolid:async ({webId, did:claimedDid, operationId})=>{
+      assert.equal(claimedDid,did);
+      return verifyNewSignupSolidAuthority({
+        webId,did:claimedDid,operationId,
+        call:async (action)=>{
+          switch(action){
+            case 'auth.account.findByWebId':
+              return {'@id':'https://pods.example/auth/account-1',disabled:false};
+            case 'identitybindings.getByCanonicalAccountId':
+              return {
+                webId,activityPubActorId:webId,atprotoDid:did,
+                atprotoSource:'local',atprotoManaged:true
+              };
+            case 'auth.awaitBootstrapComplete':
+              return {webId,complete:true};
+            default: throw new Error('Unapproved Solid proof action');
+          }
+        }
+      });
     },
     verifyPds:opts=>verifyPdsReadiness({
       ...opts,plcDirectoryUrl:plc,fetchImpl:mockFetch

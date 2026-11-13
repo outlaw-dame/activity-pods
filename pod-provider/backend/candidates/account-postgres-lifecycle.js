@@ -250,24 +250,81 @@ function createAccountPostgresLifecycleCandidate({
       });
     },
 
+    /**
+     * Advance only AFTER verifying the live PDS over XRPC. The immutable
+     * signed-genesis row alone does not establish a working PDS.
+     * No unsigned client-supplied digest is accepted as verification.
+     */
     async markIdentitiesReady(input) {
       baseInput(input);
       if (!DID.test(input.did || '') || !CID.test(input.repoRootCid || '') ||
-          !requiredString(input.repoRev, 64) || !digest(input.signedRepoProofDigest)) {
+          !requiredString(input.repoRev, 64) ||
+          !requiredString(input.handle, 253) ||
+          !requiredString(input.expectedPdsUrl, 2048)) {
         fail('ACCOUNT_LEDGER_UNVERIFIED_IDENTITY', 400);
       }
+      if (typeof verifyPds !== 'function') {
+        fail('ACCOUNT_LEDGER_LIVE_PDS_VERIFIER_REQUIRED', 503);
+      }
+      // One indexed row read (no scan); remote verification happens without
+      // an open DB transaction, which keeps pool/lock cost bounded.
+      const evidence = await pool.query(
+        `SELECT did, root_cid, repo_rev, signing_key_did, car_sha256
+         FROM paper_account_candidate.signed_genesis
+         WHERE operation_id=$1::uuid`, [input.operationId]
+      );
+      if (evidence.rowCount !== 1) fail('ACCOUNT_LEDGER_GENESIS_NOT_STAGED', 503);
+      const staged = evidence.rows[0];
+      if (staged.did !== input.did || staged.root_cid !== input.repoRootCid ||
+          staged.repo_rev !== input.repoRev) {
+        fail('ACCOUNT_LEDGER_GENESIS_CONFLICT', 409);
+      }
+      let remote;
+      try {
+        remote = await verifyPds({
+          did:input.did,handle:input.handle,
+          expectedPdsUrl:input.expectedPdsUrl,
+          expectedRootCid:input.repoRootCid, expectedRev:input.repoRev
+        });
+      } catch (_) {
+        fail('ACCOUNT_LEDGER_PDS_NOT_VERIFIED', 503);
+      }
+      if (remote?.did !== input.did ||
+          remote.rootCid !== input.repoRootCid ||
+          remote.rev !== input.repoRev ||
+          remote.keyDid !== staged.signing_key_did ||
+          remote.pdsUrl !== input.expectedPdsUrl ||
+          !Buffer.isBuffer(remote.carSha256) ||
+          !staged.car_sha256.equals(remote.carSha256)) {
+        fail('ACCOUNT_LEDGER_PDS_NOT_VERIFIED', 503);
+      }
+      // Store a compact replay-safe proof fingerprint. The canonical live
+      // proof remains the PDS's signed CAR + PLC directory document.
+      const liveProof = crypto.createHash('sha256')
+        .update(['pds-sync-v1',input.did,input.handle,
+          input.expectedPdsUrl,input.repoRootCid,input.repoRev,
+          staged.car_sha256.toString('hex')].join('\0'))
+        .digest();
       return transaction(pool, async client => {
         const updated = await client.query(
-          `UPDATE ${TABLE}
-           SET state='identities_ready', atproto_did=$3,
-               pds_repo_root_cid=$4, pds_repo_rev=$5,
-               signed_repo_proof_digest=$6, version=version+1,
-               updated_at=clock_timestamp()
-           WHERE operation_id=$1::uuid AND lease_token=$2::uuid
-             AND state='account_created' AND lease_expires_at > clock_timestamp()
-           RETURNING operation_id, state, canonical_webid, atproto_did, version`,
-          [input.operationId, input.leaseToken, input.did,
-            input.repoRootCid, input.repoRev, input.signedRepoProofDigest]
+          `UPDATE ${TABLE} AS op
+           SET state='identities_ready',
+               atproto_did=g.did, pds_repo_root_cid=g.root_cid,
+               pds_repo_rev=g.repo_rev,
+               signed_repo_proof_digest=g.car_sha256,
+               pds_sync_proof_digest=$3,
+               version=op.version+1, updated_at=clock_timestamp()
+           FROM paper_account_candidate.signed_genesis AS g
+           WHERE op.operation_id=$1::uuid AND op.lease_token=$2::uuid
+             AND op.state='account_created'
+             AND op.lease_expires_at > clock_timestamp()
+             AND g.operation_id=op.operation_id
+             AND g.did=$4 AND g.root_cid=$5 AND g.repo_rev=$6
+             AND g.signing_key_did=$7 AND g.car_sha256=$8
+           RETURNING op.operation_id,op.state,op.canonical_webid,op.atproto_did,op.version`,
+          [input.operationId,input.leaseToken,liveProof,
+            input.did,input.repoRootCid,input.repoRev,
+            staged.signing_key_did,staged.car_sha256]
         );
         if (updated.rowCount !== 1) fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
         return publicResult(updated.rows[0]);

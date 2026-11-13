@@ -1,0 +1,48 @@
+name: Paper Account PostgreSQL Lifecycle Candidate
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql'
+      - 'pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql'
+      - '.github/workflows/paper-account-postgres-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-postgres:
+    name: PostgreSQL 18 lifecycle constraints
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+      - name: Start isolated PostgreSQL 18 database
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name paper-account-pg-test \
+            -e POSTGRES_PASSWORD=disposable-ci-only \
+            -e POSTGRES_DB=paper_account_disposable \
+            postgres:18
+          for attempt in $(seq 1 90); do
+            if docker exec paper-account-pg-test pg_isready -U postgres -d paper_account_disposable >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs paper-account-pg-test 2>&1 | tail -n 70
+          exit 1
+      - name: Verify candidate schema and fail-closed transitions
+        run: |
+          set -euo pipefail
+          docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
+            < pod-provider/backend/sql/paper-account-postgres-lifecycle-candidate-v1.sql
+          docker exec -i -e PGPASSWORD=disposable-ci-only paper-account-pg-test \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d paper_account_disposable \
+            < pod-provider/backend/tests/sql/paper-account-postgres-lifecycle-proof.sql
+      - name: Remove disposable database
+        if: always()
+        run: docker rm -f paper-account-pg-test >/dev/null 2>&1 || true

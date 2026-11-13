@@ -8,10 +8,13 @@ CREATE TABLE paper_account_candidate.operations (
   operation_id uuid PRIMARY KEY,
   provider_id text NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 255),
   app_client_id text NOT NULL CHECK (length(app_client_id) BETWEEN 1 AND 2048),
-  -- SHA-256 of opaque idempotency key (not a password or bearer token).
+  -- Domain-separated HMAC-SHA-256 of the opaque app idempotency key,
+  -- with a provider-held secret kept OUTSIDE the database. Never plain
+  -- SHA-256: client keys can be short or guessable.
   idempotency_digest bytea NOT NULL CHECK (octet_length(idempotency_digest) = 32),
-  -- SHA-256 of a canonically serialized authorized request; never store its
-  -- raw password, email, user credential or authorization header.
+  -- Domain-separated HMAC-SHA-256 over the approved canonical request.
+  -- No raw password, email, authorization header or bearer token is stored.
+  -- The key version and rotation protocol are required at activation.
   request_digest bytea NOT NULL CHECK (octet_length(request_digest) = 32),
   username_key text NOT NULL CHECK (
     length(username_key) BETWEEN 1 AND 128 AND username_key = lower(username_key)

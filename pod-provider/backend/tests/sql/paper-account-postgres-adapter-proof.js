@@ -16,7 +16,10 @@ const pa = new Pool(connection);
 const pb = new Pool(connection);
 const a = createAccountPostgresLifecycleCandidate({pool:pa});
 const b = createAccountPostgresLifecycleCandidate({pool:pb});
-const h = value => crypto.createHash('sha256').update(value).digest();
+// Isolated synthetic provider HMAC key. Never reuse an unkeyed SHA-256 digest
+// of request fields or client idempotency keys in production.
+const fixtureKey = crypto.randomBytes(32);
+const h = value => crypto.createHmac('sha256', fixtureKey).update(value).digest();
 const newId = () => crypto.randomUUID();
 const base = (name, key, client = 'https://client.example') => ({
   operationId: newId(), leaseToken: newId(), providerId: 'provider-candidate',

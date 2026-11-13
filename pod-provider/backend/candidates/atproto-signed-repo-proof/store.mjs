@@ -90,8 +90,11 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
       [did, row.head_cid]
     );
     if (outbox.rowCount !== 1 || outbox.rows[0].kind !== 'at.commit.v1' ||
-        outbox.rows[0].rev !== row.rev || outbox.rows[0].blocked_at !== null) {
+        outbox.rows[0].rev !== row.rev) {
       fail('ATPROTO_REPO_OUTBOX_MISSING', 'Native event outbox must be committed with the repository');
+    }
+    if (outbox.rows[0].blocked_at !== null) {
+      fail('ATPROTO_REPO_OUTBOX_BLOCKED', 'Native event needs explicit provider recovery');
     }
     return Object.freeze({
       accountId, did,

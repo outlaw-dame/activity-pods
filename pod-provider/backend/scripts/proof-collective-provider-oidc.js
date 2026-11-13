@@ -246,6 +246,28 @@ async function main() {
     'OIDC authorized app does not match its registered client identifier');
   assert.equal(canonicalClientId, app + '/app',
     'Solid-OIDC and SAI must share one exact app URI');
+  // An unregistered browser Origin must never receive an ACAO wildcard or
+  // an attacker-origin echo from the mounted native token endpoint. Use an
+  // invalid code so this probe cannot issue a credential.
+  const hostileOrigin = 'https://unregistered-e2e.example';
+  const hostile = await response(discovery.token_endpoint, {
+    method: 'POST',
+    headers: {
+      origin: hostileOrigin,
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: canonicalClientId,
+      code: 'nonexistent-probe-code',
+      redirect_uri: callback,
+      code_verifier: verifier
+    }).toString()
+  });
+  const allowOrigin = hostile.headers.get('access-control-allow-origin');
+  assert(allowOrigin !== '*' && allowOrigin !== hostileOrigin,
+    'Unregistered OIDC token browser Origin received permissive CORS');
+
   // Do not accept disjoint success from two unrelated test users: the very
   // WebID in the signed native OIDC token must grant the same canonical
   // app URI through the existing native SAI registration endpoint.

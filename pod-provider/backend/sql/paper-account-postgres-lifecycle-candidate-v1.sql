@@ -3,7 +3,11 @@
 -- This schema does not replace Solid-OIDC, SAI, the PLC directory or a PDS.
 -- A schema change here is NOT a reviewed production migration.
 BEGIN;
-CREATE SCHEMA paper_account_candidate;
+-- This operational-signup experiment shares the schema namespace with
+-- the preexisting nonactivated canonical-account lifecycle candidate.
+-- Neither adapter is an active writer. This script may be loaded after
+-- the base candidate for compatibility testing, not as a second authority.
+CREATE SCHEMA IF NOT EXISTS paper_account_candidate;
 
 CREATE TABLE paper_account_candidate.operations (
   operation_id uuid PRIMARY KEY,

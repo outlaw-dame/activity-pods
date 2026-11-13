@@ -49,6 +49,11 @@ export function createNewSignupCrossAuthority({
   }
 
   async function verify(scope) {
+    // A previously constructed disposable adapter cannot become callable
+    // merely because its process later changes environment or configuration.
+    if (process.env.NODE_ENV === 'production' ||
+        process.env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
+        process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') unavailable();
     // The caller has already verified the external app and produced HMAC
     // digests. Never accept a public idempotency key or user-supplied actor.
     const operation = await accountAuthority.readSignup(scope);

@@ -83,7 +83,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       const next=await writer.write({
         accountId:acc,did:subject,expectedCommitCid:first.commitCid,
         expectedRev:first.rev,action:'create',path,record:record('Hello!'),
-        ...signed,rev:makeTid()
+        ...signed
       });
       assert.equal(next.verified,true);
       assert.equal(next.path,path);
@@ -135,7 +135,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       const input={
         accountId:acc,did:subject,expectedCommitCid:current.commitCid,
         expectedRev:current.rev,action:'update',path,record:record('Updated'),
-        ...signed,rev:makeTid()
+        ...signed
       };
       await rejects(writer.write(input),'SINGLE_RECORD_PROJECTION_NOT_APPLIED');
       await rejects(writer.write({...input,expectedCommitCid:first.commitCid}),
@@ -168,7 +168,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       current=await writer.write({
         accountId:acc,did:subject,expectedCommitCid:old.commitCid,
         expectedRev:old.rev,action:'update',path,record:record('Updated'),
-        ...signed,rev:makeTid()
+        ...signed
       });
       assert.equal(current.generation,3);
       assert.notEqual(current.rootCid,old.rootCid);
@@ -195,7 +195,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       current=await writer.write({
         accountId:acc,did:subject,expectedCommitCid:old.commitCid,
         expectedRev:old.rev,action:'delete',path,record:null,
-        ...signed,rev:makeTid()
+        ...signed
       });
       assert.equal(current.generation,4);
       assert.equal(current.rootCid,first.rootCid);
@@ -239,7 +239,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       const batch=await Promise.allSettled(Array.from({length:8},()=>writer.write({
         accountId:bob,did:bobDid,expectedCommitCid:original.commitCid,
         expectedRev:original.rev,action:'create',path,record:record('Race'),
-        ...own,rev:makeTid()
+        ...own
       })));
       assert.equal(batch.filter(x=>x.status==='fulfilled').length,1);
       assert.equal(batch.filter(x=>x.status==='rejected' &&

@@ -78,7 +78,7 @@ const ATOMIC_GRANT_REVOKE_BATCH = [
   "  redis.call('DEL', KEYS[1])",
   "end",
   "return #tokens"
-].join('\\n');
+].join('\n');
 
 function revokeMarker(grantId) {
   return 'grant-revoked:' + grantId;

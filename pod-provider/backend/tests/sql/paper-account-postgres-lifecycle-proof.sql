@@ -77,16 +77,16 @@ BEGIN
   IF NOT invalid_completion_rejected THEN
     RAISE EXCEPTION 'completed without signed genesis evidence';
   END IF;
-  -- SQL-alone proof uses deliberately synthetic CAR bytes. The separate
+  -- SQL-alone proof uses deliberately synthetic CAR digest/length evidence. The separate
   -- Node + PostgreSQL adapter proof validates a genuine signed v3 CAR and
   -- independent PLC/PDS XRPC before this storage transition.
   INSERT INTO paper_account_candidate.signed_genesis (
-    operation_id,did,root_cid,repo_rev,signing_key_did,car_bytes,car_sha256
+    operation_id,did,root_cid,repo_rev,signing_key_did,car_byte_length,car_sha256
   ) VALUES (
     op,'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
     'bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa','3kskdumj2wvab',
     'did:key:z' || repeat('1',40),
-    decode(repeat('ab',64),'hex'),decode(repeat('77',32),'hex')
+    64,decode(repeat('77',32),'hex')
   );
   UPDATE paper_account_candidate.operations SET
     state='identities_ready',

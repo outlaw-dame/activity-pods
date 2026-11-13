@@ -36,18 +36,26 @@ second_output="$(mktemp)"
 trap 'rm -f "$first_output" "$second_output"' EXIT
 psql_ci -c "$first_sql" >"$first_output" 2>&1 &
 first_pid=$!
-sleep 1
-# The second reservation must not succeed even on a separate database client.
-if psql_ci -c "$second_sql" >"$second_output" 2>&1; then
-  wait "$first_pid" || true
-  echo "::error::Concurrent unique username reservation unexpectedly succeeded" >&2
+psql_ci -c "$second_sql" >"$second_output" 2>&1 &
+second_pid=$!
+# Scheduling is nondeterministic under load. Either client may win, but
+# exactly one must succeed and the other must fail by unique constraint.
+first_status=0
+second_status=0
+wait "$first_pid" || first_status=$?
+wait "$second_pid" || second_status=$?
+if [ "$first_status" -eq 0 ] && [ "$second_status" -ne 0 ]; then
+  rejected_output="$second_output"
+elif [ "$second_status" -eq 0 ] && [ "$first_status" -ne 0 ]; then
+  rejected_output="$first_output"
+else
+  echo "::error::Expected exactly one successful reservation across clients" >&2
   exit 1
 fi
-wait "$first_pid"
 # Confirm that the expected constraint, not a transient network/SQL error,
 # caused the rejection. No production payloads are used in this fixture.
-if ! grep -q 'duplicate key value violates unique constraint' "$second_output"; then
-  sed -n '1,18p' "$second_output" >&2
+if ! grep -q 'duplicate key value violates unique constraint' "$rejected_output"; then
+  sed -n '1,18p' "$rejected_output" >&2
   echo "::error::Concurrent reservation failed for an unexpected reason" >&2
   exit 1
 fi

@@ -91,6 +91,43 @@ describe('unified account completion is fail-closed after side effects', () => {
     }
   });
 
+  it('rejects old WebID/DID import before reserving a capability or calling the signup RPC', async () => {
+    const reserve = jest.fn();
+    const create = jest.fn();
+    const broker = new ServiceBroker({ logger: false });
+    broker.createService({ name: 'api', actions: { addRoute: () => true } });
+    broker.createService({
+      name: 'provider-capabilities',
+      actions: {
+        reserveAccountProvisioning: reserve,
+        failAccountProvisioning: jest.fn()
+      }
+    });
+    broker.createService({ name: 'unified-account', actions: { create } });
+    broker.createService(api);
+    await broker.start();
+    try {
+      for (const injected of [
+        { webId: 'https://existing.example/alice' },
+        { atproto: { existingDid: 'did:plc:abcdefghijklmnopqrstuvwx' } },
+        { protocols: { atproto: { force: true } } },
+        { migration: true }
+      ]) {
+        await expect(broker.call('unified-account-api.create', {
+          appClientId: 'https://client.example',
+          username: 'new-account', password: 'example-password',
+          ...injected
+        })).rejects.toMatchObject({
+          code: 400, type: 'UNIFIED_ACCOUNT_NEW_ONLY'
+        });
+      }
+      expect(reserve).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      await broker.stop();
+    }
+  });
+
   it('denies the process-local idempotency backend for production reservations', () => {
     const old = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';

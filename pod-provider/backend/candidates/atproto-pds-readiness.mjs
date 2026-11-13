@@ -25,11 +25,15 @@ function origin(input, fixture=false) {
   try { u=new URL(input); } catch { fail('PDS_PROOF_INVALID_ORIGIN'); }
   const host=u.hostname.toLowerCase().replace(/\.$/,'');
   const local=host==='localhost'||host.endsWith('.test');
+  const loopback=host==='localhost'||host==='127.0.0.1'||host==='[::1]';
   if (!u.hostname || !host || u.username || u.password ||
       u.search || u.hash || u.pathname!=='/' ||
       (!fixture && (u.protocol!=='https:' || isIP(host) || local ||
         host.endsWith('.local') || host.endsWith('.internal'))) ||
-      (fixture && !['http:','https:'].includes(u.protocol))) {
+      // An opt-in fixture must NEVER turn the HTTP client into an SSRF
+      // proxy for the metadata IP, another container, or a private LAN.
+      // Real HTTPS domains run through the ordinary production validator.
+      (fixture && (!loopback || !['http:','https:'].includes(u.protocol)))) {
     fail('PDS_PROOF_INVALID_ORIGIN');
   }
   return u.origin;

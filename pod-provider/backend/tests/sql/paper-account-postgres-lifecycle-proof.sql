@@ -59,12 +59,42 @@ BEGIN
     activitypub_actor_id='https://pods.example/alice',
     version=version+1 WHERE operation_id=op AND lease_token=lease;
   IF NOT FOUND THEN RAISE EXCEPTION 'could not advance account lifecycle'; END IF;
+  -- A forged in-process status + digest is NOT enough to complete:
+  -- storage must have matching immutable genesis evidence too.
+  invalid_completion_rejected := false;
+  BEGIN
+    UPDATE paper_account_candidate.operations SET
+      state='completed',
+      atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
+      pds_repo_root_cid='bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      pds_repo_rev='3kskdumj2wv',
+      signed_repo_proof_digest=decode(repeat('77',32),'hex'),
+      pds_sync_proof_digest=decode(repeat('88',32),'hex')
+    WHERE operation_id=op;
+  EXCEPTION WHEN check_violation THEN
+    invalid_completion_rejected := true;
+  END;
+  IF NOT invalid_completion_rejected THEN
+    RAISE EXCEPTION 'completed without signed genesis evidence';
+  END IF;
+  -- SQL-alone proof uses deliberately synthetic CAR bytes. The separate
+  -- Node + PostgreSQL adapter proof validates a genuine signed v3 CAR and
+  -- independent PLC/PDS XRPC before this storage transition.
+  INSERT INTO paper_account_candidate.signed_genesis (
+    operation_id,did,root_cid,repo_rev,signing_key_did,car_bytes,car_sha256
+  ) VALUES (
+    op,'did:plc:abcdefghijklmnopqrstuvwx',
+    'bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa','3kskdumj2wv',
+    'did:key:z' || repeat('1',40),
+    decode(repeat('ab',64),'hex'),decode(repeat('77',32),'hex')
+  );
   UPDATE paper_account_candidate.operations SET
     state='identities_ready',
     atproto_did='did:plc:abcdefghijklmnopqrstuvwx',
     pds_repo_root_cid='bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     pds_repo_rev='3kskdumj2wv',
     signed_repo_proof_digest=decode(repeat('77',32),'hex'),
+    pds_sync_proof_digest=decode(repeat('88',32),'hex'),
     version=version+1
   WHERE operation_id=op AND state='account_created' AND lease_token=lease;
   IF NOT FOUND THEN RAISE EXCEPTION 'could not advance identity lifecycle'; END IF;

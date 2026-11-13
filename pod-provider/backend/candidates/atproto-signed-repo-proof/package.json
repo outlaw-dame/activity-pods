@@ -8,7 +8,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 proof.test.mjs provider-authority.test.mjs projection-recovery.test.mjs pod-operation-ticket.test.mjs pod-account-lookup.test.mjs new-signup-cross-authority.test.mjs sync-xrpc-candidate.test.mjs single-record-writer.test.mjs native-outbox-dispatch.test.mjs"
+    "test": "node --test --test-concurrency=1 proof.test.mjs provider-authority.test.mjs projection-recovery.test.mjs pod-operation-ticket.test.mjs pod-account-lookup.test.mjs new-signup-cross-authority.test.mjs sync-xrpc-candidate.test.mjs single-record-writer.test.mjs native-outbox-dispatch.test.mjs signed-record-projection.test.mjs"
   },
   "dependencies": {
     "@ipld/car": "5.4.7",

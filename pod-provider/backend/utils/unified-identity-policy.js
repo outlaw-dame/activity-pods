@@ -58,4 +58,4 @@ function assertUnifiedResult(input) {
   }
   return true;
 }
-module.exports = Object.freeze({ IDENTITY_PROTOCOLS, assertUnifiedRequest, assertUnifiedResult });
+module.exports = Object.freeze({ IDENTITY_PROTOCOLS, assertUnifiedRequest, assertUnifiedResult, isCanonicalHttpsWebId });

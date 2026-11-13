@@ -38,6 +38,17 @@ module.exports = {
   },
   actions: {
     async signup(ctx) {
+      // This version cannot construct a real signed PDS repository: the
+      // ATProto adapter still writes a placeholder CID/revision. Refuse
+      // production signups BEFORE creating accounts, keys or irreversible
+      // PLC directory operations. Existing login/refresh paths are untouched.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'New accounts require verified signed PDS repository provisioning',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+        );
+      }
       const { username, email, password, ...rest } = ctx.params;
 
       ctx.meta.skipObjectsWatcher = true;

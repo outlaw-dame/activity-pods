@@ -86,12 +86,15 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
       fail('ATPROTO_REPO_HEAD_MISMATCH', 'Stored head and independently verified CAR disagree');
     }
     const outbox = await pool.query(
-      'SELECT id, kind, status, rev FROM paper_atproto_repo_proof.native_event_outbox WHERE did = $1 AND commit_cid = $2',
+      'SELECT id, kind, status, rev, blocked_at FROM paper_atproto_repo_proof.native_event_outbox WHERE did = $1 AND commit_cid = $2',
       [did, row.head_cid]
     );
     if (outbox.rowCount !== 1 || outbox.rows[0].kind !== 'at.commit.v1' ||
         outbox.rows[0].rev !== row.rev) {
       fail('ATPROTO_REPO_OUTBOX_MISSING', 'Native event outbox must be committed with the repository');
+    }
+    if (outbox.rows[0].blocked_at !== null) {
+      fail('ATPROTO_REPO_OUTBOX_BLOCKED', 'Native event needs explicit provider recovery');
     }
     return Object.freeze({
       accountId, did,

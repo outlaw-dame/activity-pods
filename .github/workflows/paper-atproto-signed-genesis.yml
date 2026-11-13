@@ -5,6 +5,8 @@ on:
     paths:
       - 'pod-provider/backend/candidates/atproto-repo-genesis.mjs'
       - 'pod-provider/backend/tests/atproto-signed-genesis-proof.mjs'
+      - 'pod-provider/backend/candidates/atproto-pds-readiness.mjs'
+      - 'pod-provider/backend/tests/atproto-pds-readiness-proof.mjs'
       - '.github/workflows/paper-atproto-signed-genesis.yml'
   workflow_dispatch:
 
@@ -31,6 +33,8 @@ jobs:
           mkdir -p "$proof/candidates" "$proof/tests"
           cp pod-provider/backend/candidates/atproto-repo-genesis.mjs "$proof/candidates/"
           cp pod-provider/backend/tests/atproto-signed-genesis-proof.mjs "$proof/tests/"
+          cp pod-provider/backend/candidates/atproto-pds-readiness.mjs "$proof/candidates/"
+          cp pod-provider/backend/tests/atproto-pds-readiness-proof.mjs "$proof/tests/"
           npm install --prefix "$proof" --no-save --ignore-scripts --no-audit --no-fund \
             @atproto/repo@0.11.5 @atproto/crypto@0.5.7 @atproto/lex-cbor@0.1.10
       - name: Verify full signed CAR with separate key callback
@@ -38,3 +42,4 @@ jobs:
         run: |
           set -euo pipefail
           node "$RUNNER_TEMP/paper-atproto-proof/tests/atproto-signed-genesis-proof.mjs"
+          node "$RUNNER_TEMP/paper-atproto-proof/tests/atproto-pds-readiness-proof.mjs"

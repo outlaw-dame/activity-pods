@@ -21,7 +21,7 @@ const doc={
 };
 const latest={cid:genesis.rootCid,rev:genesis.rev};
 const routes={
-  [plc+'/'+did]:new Response(JSON.stringify(doc),{status:200,headers:{'content-type':'application/json'}}),
+  [plc+'/'+encodeURIComponent(did)]:new Response(JSON.stringify(doc),{status:200,headers:{'content-type':'application/json'}}),
   [pds+'/xrpc/com.atproto.sync.getLatestCommit?did='+did]:
     new Response(JSON.stringify(latest),{status:200,headers:{'content-type':'application/json'}}),
   [pds+'/xrpc/com.atproto.sync.getRepo?did='+did]:
@@ -59,7 +59,7 @@ const wrongDoc={...doc,verificationMethod:[{
   type:'Multikey',publicKeyMultibase:changedKey.did().replace('did:key:','')
 }]};
 await expectError({fetchImpl:async url=>(
-  url===plc+'/'+did ? new Response(JSON.stringify(wrongDoc)) : routes[url].clone()
+  url===plc+'/'+encodeURIComponent(did) ? new Response(JSON.stringify(wrongDoc)) : routes[url].clone()
 )},'REPO_GENESIS_SIGNATURE_NOT_VERIFIED');
 await expectError({fetchImpl:async url=>(
   url===pds+'/xrpc/com.atproto.sync.getRepo?did='+did ?

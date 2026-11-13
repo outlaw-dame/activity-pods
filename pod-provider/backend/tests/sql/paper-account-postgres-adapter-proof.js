@@ -7,8 +7,8 @@ const crypto = require('node:crypto');
 const { Pool } = require('pg');
 const { createAccountPostgresLifecycleCandidate } =
   require('../../candidates/account-postgres-lifecycle');
-const { verifyNewSignupSolidAuthority } =
-  require('../../candidates/solid-new-signup-proof');
+const { createNewSignupPostgresAuthority } =
+  require('../../candidates/new-signup-postgres-authority');
 
 const connection = {
   host:'127.0.0.1',port:15432,database:'paper_account_disposable',
@@ -63,37 +63,31 @@ async function main() {
     assert(response, 'unexpected external fixture URL');
     return response.clone();
   };
-  const checkExisting = async ({usernameKey}) => {
-    assert.equal(typeof usernameKey,'string');
-    return !usernameKey.startsWith('legacy');
+  const authoritativeCall=async (action,params)=>{
+    switch(action){
+      case 'auth.account.findByUsername':
+        return params.username.startsWith('legacy')
+          ? {'@id':'https://pods.example/auth/legacy-account'} : null;
+      case 'auth.account.findByWebId':
+        return {'@id':'https://pods.example/auth/account-1',disabled:false};
+      case 'identitybindings.getByCanonicalAccountId':
+        return {
+          webId:params.canonicalAccountId,
+          activityPubActorId:params.canonicalAccountId,
+          atprotoDid:did,atprotoSource:'local',atprotoManaged:true
+        };
+      case 'auth.awaitBootstrapComplete':
+        return {webId:params.webId,complete:true};
+      default: throw new Error('Unapproved authority lookup');
+    }
   };
-  const factory=pool=>createAccountPostgresLifecycleCandidate({
-    pool, assertFreshAccount:checkExisting,
+  const factory=pool=>createNewSignupPostgresAuthority({
+    pool,call:authoritativeCall,
     resolveTrustedKeyDid:async claimed=>{
       assert.equal(claimed,did);
       return key.did();
     },
     verifyGenesis:verifySignedGenesisEvidence,
-    verifySolid:async ({webId, did:claimedDid, operationId})=>{
-      assert.equal(claimedDid,did);
-      return verifyNewSignupSolidAuthority({
-        webId,did:claimedDid,operationId,
-        call:async (action)=>{
-          switch(action){
-            case 'auth.account.findByWebId':
-              return {'@id':'https://pods.example/auth/account-1',disabled:false};
-            case 'identitybindings.getByCanonicalAccountId':
-              return {
-                webId,activityPubActorId:webId,atprotoDid:did,
-                atprotoSource:'local',atprotoManaged:true
-              };
-            case 'auth.awaitBootstrapComplete':
-              return {webId,complete:true};
-            default: throw new Error('Unapproved Solid proof action');
-          }
-        }
-      });
-    },
     verifyPds:opts=>verifyPdsReadiness({
       ...opts,plcDirectoryUrl:plc,fetchImpl:mockFetch
     })

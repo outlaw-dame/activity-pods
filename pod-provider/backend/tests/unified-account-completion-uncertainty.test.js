@@ -38,6 +38,59 @@ describe('unified account completion is fail-closed after side effects', () => {
     }
   });
 
+  it.each([
+    {
+      caseName: 'timed-out or rejected identity RPC',
+      create: () => { throw new Error('Transport closed after PLC submission'); },
+      complete: () => ({ ok: true, stored: true }),
+      expectedType: 'ACCOUNT_PROVISIONING_UNCERTAIN'
+    },
+    {
+      caseName: 'successfully returned account with a lost completion record',
+      create: () => ({ canonicalAccountId: 'https://pods.example/alice' }),
+      complete: () => ({ ok: true, stored: false }),
+      expectedType: 'ACCOUNT_COMPLETION_UNCERTAIN'
+    }
+  ])('keeps reservation blocked for $caseName', async ({ create, complete, expectedType }) => {
+    const failure = jest.fn();
+    const commit = jest.fn(complete);
+    const broker = new ServiceBroker({ logger: false });
+    broker.createService({ name: 'api', actions: { addRoute: () => true } });
+    broker.createService({
+      name: 'provider-capabilities',
+      actions: {
+        reserveAccountProvisioning: () => ({
+          allowed: true, capabilityId: 'provider.account.provisioning',
+          idempotencyKey: 'durable-key',
+          idempotency: { key: 'durable-key', state: 'reserved', replay: false }
+        }),
+        completeAccountProvisioning: commit,
+        failAccountProvisioning: failure
+      }
+    });
+    broker.createService({ name: 'unified-account', actions: { create } });
+    broker.createService(api);
+    await broker.start();
+    try {
+      await expect(broker.call('unified-account-api.create', {
+        appClientId: 'https://client.example',
+        username: 'alice', email: 'alice@example.test',
+        password: 'example-password'
+      }, { meta: { $headers: { 'idempotency-key': 'durable-key' } } }))
+        .rejects.toMatchObject({
+          code: 503, type: expectedType, data: { retryable: false }
+        });
+      expect(failure).not.toHaveBeenCalled();
+      if (expectedType === 'ACCOUNT_PROVISIONING_UNCERTAIN') {
+        expect(commit).not.toHaveBeenCalled();
+      } else {
+        expect(commit).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      await broker.stop();
+    }
+  });
+
   it('denies the process-local idempotency backend for production reservations', () => {
     const old = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';

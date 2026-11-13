@@ -182,3 +182,58 @@ This distinction matters for multi-replica durability. For example, PG worker A 
 The per-Pod proof now requires a real Solid-OIDC ID-token audience array containing both the application client identifier (the 'azp') and the special 'solid' audience, along with a syntactically valid DPoP confirmation thumbprint ('cnf.jkt'). A conventional app-only ID token is not sufficient for this permission path. The fixture explicitly rejects app-only, missing-'solid' and unbound tokens. Source: https://solid.github.io/solid-oidc/ (Token Instantiation and DPoP-bound OIDC ID Token).
 
 **The native 'jwk.verifyToken' action currently checks signed JWT validity, NOT the request's DPoP proof.** Checking the 'cnf.jkt' field makes token shape stricter but does not establish proof of private-key possession. The native Solid-OIDC OP's emitted audience/cnf claims and the resource server's DPoP verification must be tested end-to-end (including method/URL, replay, nonce and key thumbprint). Do not activate this candidate by just enabling its feature flags.
+
+
+## Read-only XRPC sync candidate (November 13)
+
+The non-activated `sync-xrpc-candidate.mjs` implements the exact response
+formats for three public AT Protocol sync lexicons:
+
+- `com.atproto.sync.getRepo` → a complete cryptographically verified CARv1
+  for the currently supported **empty** v3 signed repository
+  (`application/vnd.ipld.car`)
+- `com.atproto.sync.getLatestCommit` → JSON `{cid, rev}` from the same
+  verified head
+- `com.atproto.sync.getRepoStatus` → currently hosted active status or
+  explicit suspension/deactivation/takedown state
+
+The module is **not loaded by any production Moleculer or HTTP gateway**.
+Its constructor and every request fail closed in production and without the
+disposable proof marker. The trusted provider must supply an indexed DID→local
+account lookup, current public signing key, hosted PDS origin, provider
+managed-repository verifier and applied PG/Jena projection readiness
+verifier. No caller can supply a WebID, signing-key reference, arbitrary
+PDS endpoint or unsigned repository head.
+
+Before exporting bytes it independently confirms the current identity and
+active account status, provider/DID/handle/PDS association, signed CAR/CIDs,
+native event outbox, complete protected RDF projection and current grant,
+then re-reads hosting status. It refuses to serve a CAR for deactivated,
+deleted, suspended or taken-down accounts. Public read-only responses use
+explicit no-store and no-credentials wildcard CORS; no OIDC tokens are
+accepted or generated.
+
+This candidate **does not** support incremental `getRepo?since=<tid>`
+requests. It returns XRPC 501 `NotImplemented` instead of incorrectly
+serving a full CAR as a diff. It also does not implement non-empty MST writes,
+record CRUD/XRPC, blob management, account recovery/migration, relay firehose,
+production hosting state transitions or high-volume CAR streaming. The
+128 KiB cap is only suitable for the current two-block empty-repository
+proof; it must not be copied into a production full-repository exporter.
+
+The new disposable HTTP acceptance test starts a loopback Node server and
+returns a **real PG18-backed, secp256k1-signed CAR**. It checks the actual
+bytes with the existing independent CAR signature verifier, then tests
+`getLatestCommit`, `getRepoStatus`, invalid DID and duplicate query params,
+unsupported deltas, deleted/takendown status, PDS drift, revoked grants,
+tampered stored blocks and the production fail-closed guard. Identity,
+PLC and RDF authorization callbacks remain injected fixtures; the separate
+real Jena/PG integration workflow covers durable fencing but is not a
+production HTTP integration test.
+
+Based on the primary AT Protocol
+[repository](https://atproto.com/specs/repository),
+[sync](https://atproto.com/specs/sync),
+and [XRPC](https://atproto.com/specs/xrpc) specifications plus the
+maintained `com.atproto.sync.*` Lexicon documents. This does not unblock
+the production `auth.signup` gate.

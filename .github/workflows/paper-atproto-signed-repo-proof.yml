@@ -70,6 +70,9 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-fence-child.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.test.mjs
+          node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
         shell: bash
@@ -87,6 +90,7 @@ jobs:
       - name: Run complete signed-repository and transaction acceptance
         env:
           ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
           ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
         shell: bash
         run: |

@@ -5,6 +5,7 @@ on:
     paths:
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v2-signup-ledger.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v3-evidence-seal.sql'
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
       - 'pod-provider/backend/candidates/solid-new-signup-proof.js'
       - 'pod-provider/backend/tests/solid-new-signup-proof.test.js'

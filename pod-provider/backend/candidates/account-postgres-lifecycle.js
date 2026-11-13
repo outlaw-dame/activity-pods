@@ -295,11 +295,15 @@ function createAccountPostgresLifecycleCandidate({
           remote.keyDid !== staged.signing_key_did ||
           remote.pdsUrl !== input.expectedPdsUrl ||
           !Buffer.isBuffer(remote.carSha256) ||
-          !staged.car_sha256.equals(remote.carSha256)) {
+          remote.carSha256.length !== 32) {
         fail('ACCOUNT_LEDGER_PDS_NOT_VERIFIED', 503);
       }
-      // Store a compact replay-safe proof fingerprint. The canonical live
-      // proof remains the PDS's signed CAR + PLC directory document.
+      // A PDS can encode the same signed repository CID as a CAR with
+      // different block order or packing. Do not require byte-for-byte CAR
+      // equality; both locally staged and remotely served blocks are
+      // independently CID-checked and the signed root CID must match.
+      // Store a compact proof fingerprint; the live authority remains PLC
+      // and the verified PDS commit.
       const liveProof = crypto.createHash('sha256')
         .update(['pds-sync-v1',input.did,input.handle,
           input.expectedPdsUrl,input.repoRootCid,input.repoRev,

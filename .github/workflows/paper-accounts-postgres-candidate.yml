@@ -6,6 +6,7 @@ on:
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-lifecycle.js'
+      - 'pod-provider/backend/scripts/proof-postgres-account-backup-restore.sh'
       - '.github/workflows/paper-accounts-postgres-candidate.yml'
       - 'docs/activitypods-postgres-account-lifecycle-candidate.md'
   workflow_dispatch:
@@ -36,8 +37,15 @@ jobs:
             -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=bench \
             -e POSTGRES_DB=paper_accounts_test \
             -p 127.0.0.1:5547:5432 postgres:18
-          for i in $(seq 1 60); do
-            if docker exec paper-accounts-pg18 pg_isready -U postgres -d paper_accounts_test >/dev/null 2>&1; then exit 0; fi
+          # The initdb temporary postmaster can report readiness immediately
+          # before shutting down. Probe the final TCP server twice.
+          for i in $(seq 1 90); do
+            if docker exec -e PGPASSWORD=bench paper-accounts-pg18 \
+                psql -h 127.0.0.1 -U postgres -X -Atqc 'SELECT 1' -d paper_accounts_test 2>/dev/null | grep -qx 1; then
+              sleep 1
+              if docker exec -e PGPASSWORD=bench paper-accounts-pg18 \
+                  psql -h 127.0.0.1 -U postgres -X -Atqc 'SELECT 1' -d paper_accounts_test 2>/dev/null | grep -qx 1; then exit 0; fi
+            fi
             sleep 1
           done
           docker logs paper-accounts-pg18
@@ -48,6 +56,11 @@ jobs:
           PAPER_ACCOUNTS_DISPOSABLE: confirmed
           PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
         run: node pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
+      - name: Verify PostgreSQL 18 full backup and exact account restore
+        env:
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
+        run: bash pod-provider/backend/scripts/proof-postgres-account-backup-restore.sh
+
       - name: Print bounded database diagnostics on failure
         if: failure()
         run: docker logs --tail 60 paper-accounts-pg18 || true

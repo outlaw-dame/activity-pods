@@ -30,6 +30,9 @@ const routes={
 const options={
   did,handle,expectedPdsUrl:pds,plcDirectoryUrl:plc,
   expectedRootCid:genesis.rootCid,expectedRev:genesis.rev,
+  // A trusted fixture resolver represents DNS TXT or HTTPS well-known
+  // lookup outside the PDS; the DID document alone is insufficient.
+  resolveHandle:async claimed=>claimed===handle ? did : 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb',
   fetchImpl:async (url, opts)=>{
     assert.equal(opts.redirect,'manual');
     assert.equal(opts.method,'GET');
@@ -46,6 +49,11 @@ assert.equal(verified.carSha256.length,32);
 console.log('atproto_pds_plc_repo_and_car_consistency_passed');
 const expectError=async (modified,code)=>assert.rejects(
   verifyPdsReadiness({...options,...modified}),err=>err.code===code);
+await expectError({resolveHandle:undefined},'PDS_PROOF_HANDLE_RESOLVER_REQUIRED');
+await expectError({resolveHandle:async()=> 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb'},
+  'PDS_PROOF_HANDLE_MISMATCH');
+await expectError({resolveHandle:async()=>{throw new Error('DNS unavailable');}},
+  'PDS_PROOF_HANDLE_RESOLUTION_UNAVAILABLE');
 await expectError({expectedRootCid:'bafy'+'a'.repeat(50)},'PDS_PROOF_LATEST_COMMIT_MISMATCH');
 await expectError({expectedPdsUrl:'http://127.0.0.1:4000'},'PDS_PROOF_INVALID_ORIGIN');
 await expectError({expectedPdsUrl:'https://user:pass@pds.example'},'PDS_PROOF_INVALID_ORIGIN');

@@ -29,6 +29,18 @@ module.exports = {
 
   actions: {
     async create(ctx) {
+      // This entry point requires an *actual* verified signed PDS repo,
+      // durable PostgreSQL account ledger, and enforceable SAI authority.
+      // The current candidates are deliberately nonactivated. Do not
+      // allow a config toggle to turn fixture booleans into live accounts.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Unified account release gate is closed until canonical PDS, PostgreSQL and SAI verification',
+          503,
+          'UNIFIED_ACCOUNT_RELEASE_GATE_CLOSED',
+          { retryable: false }
+        );
+      }
       let provisioningGrant = null;
       let accountCreationStarted = false;
 

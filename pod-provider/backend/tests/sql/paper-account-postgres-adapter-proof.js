@@ -19,6 +19,7 @@ const h=value=>crypto.createHmac('sha256',fixtureKey).update(value).digest();
 const newId=()=>crypto.randomUUID();
 const base=(name,key,client='https://client.example')=>({
   operationId:newId(),leaseToken:newId(),providerId:'provider-candidate',
+  operationKind:'new_signup',
   appClientId:client,
   idempotencyDigest:h('idempotency:'+key),
   requestDigest:h('request:'+key),
@@ -60,8 +61,12 @@ async function main() {
     assert(response, 'unexpected external fixture URL');
     return response.clone();
   };
+  const checkExisting = async ({usernameKey}) => {
+    assert.equal(typeof usernameKey,'string');
+    return !usernameKey.startsWith('legacy');
+  };
   const factory=pool=>createAccountPostgresLifecycleCandidate({
-    pool,
+    pool, assertFreshAccount:checkExisting,
     resolveTrustedKeyDid:async claimed=>{
       assert.equal(claimed,did);
       return key.did();
@@ -77,6 +82,18 @@ async function main() {
     })
   });
   const a=factory(pa),b=factory(pb);
+  const excluded = base('legacyuser','legacy-key');
+  await reject(a.reserve(excluded),'ACCOUNT_LEDGER_EXISTING_ACCOUNT');
+  await reject(a.reserve({...excluded,operationKind:'legacy_migration'}),
+    'ACCOUNT_LEDGER_NEW_SIGNUP_ONLY');
+  const missingFresh=createAccountPostgresLifecycleCandidate({pool:pa});
+  await reject(missingFresh.reserve(base('newuserwithoutpreflight','key')),
+    'ACCOUNT_LEDGER_NEW_ACCOUNT_CHECK_REQUIRED');
+  const failingFresh=createAccountPostgresLifecycleCandidate({
+    pool:pa,assertFreshAccount:async()=>{throw new Error('Solid datastore down');}
+  });
+  await reject(failingFresh.reserve(base('accountwhenlegacydown','key')),
+    'ACCOUNT_LEDGER_EXISTING_ACCOUNT_CHECK_UNAVAILABLE');
   const input=base('accountcandidatealice','candidate-key-1');
   assert.equal((await a.reserve(input)).state,'reserved');
   await reject(a.reserve(input),'ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');

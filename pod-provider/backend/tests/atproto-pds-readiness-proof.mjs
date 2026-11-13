@@ -22,9 +22,9 @@ const doc={
 const latest={cid:genesis.rootCid,rev:genesis.rev};
 const routes={
   [plc+'/'+encodeURIComponent(did)]:new Response(JSON.stringify(doc),{status:200,headers:{'content-type':'application/json'}}),
-  [pds+'/xrpc/com.atproto.sync.getLatestCommit?did='+did]:
+  [pds+'/xrpc/com.atproto.sync.getLatestCommit?did='+encodeURIComponent(did)]:
     new Response(JSON.stringify(latest),{status:200,headers:{'content-type':'application/json'}}),
-  [pds+'/xrpc/com.atproto.sync.getRepo?did='+did]:
+  [pds+'/xrpc/com.atproto.sync.getRepo?did='+encodeURIComponent(did)]:
     new Response(genesis.car,{status:200,headers:{'content-type':'application/vnd.ipld.car'}})
 };
 const options={
@@ -62,7 +62,7 @@ await expectError({fetchImpl:async url=>(
   url===plc+'/'+encodeURIComponent(did) ? new Response(JSON.stringify(wrongDoc)) : routes[url].clone()
 )},'REPO_GENESIS_SIGNATURE_NOT_VERIFIED');
 await expectError({fetchImpl:async url=>(
-  url===pds+'/xrpc/com.atproto.sync.getRepo?did='+did ?
+  url===pds+'/xrpc/com.atproto.sync.getRepo?did='+encodeURIComponent(did) ?
   new Response(new Uint8Array(256*1024+1)) : routes[url].clone()
 )},'PDS_PROOF_RESPONSE_TOO_LARGE');
 console.log('atproto_pds_readiness_refusal_and_bounded_io_passed');

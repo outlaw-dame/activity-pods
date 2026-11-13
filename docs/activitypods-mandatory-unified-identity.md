@@ -150,10 +150,30 @@ automatic identity recreation, even after an unknown database commit.
 The **real PDS server**, durable blockstore, identity-proof persistence,
 provider-held HMAC key rotation, real PLC submission replay, Solid-OIDC/SAI
 consent and live provisioning single-writer cutover are still not activated.
-These tests use disposable PostgreSQL and simulated PDS XRPC transport;
-no production accounts were created or migrated. The bounded SQL proof
-does not establish production throughput or cost metrics. See the
-dedicated latest CI in PR #134.
+The PostgreSQL proof uses disposable PostgreSQL and controlled PDS/PLC
+XRPC responses. A separate new CI proof now also starts **real loopback
+HTTP listeners** for PDS and PLC and verifies a genuinely signed v3 CAR
+over actual GET requests. Both proofs have hostile mismatch, oversize and
+unsafe redirect cases. They are test fixtures: no production PDS blockstore,
+public PLC submission, real user, or account migration is involved.
+The bounded SQL proof does not establish production throughput or cost
+metrics. See the exact-head workflow results in PR #134.
+
+**Bidirectional AT Protocol handle authority:** the new-signup verifier
+requires a DID document claim `at://handle` AND an independent resolution
+of that handle back to the same DID. The provider-controlled DNS TXT
+resolver queries only `_atproto.<new-account-handle>` within the configured
+provider domain, enforces record/response bounds and a lookup deadline,
+rejects conflicting or malformed DID records, and never follows an
+untrusted HTTPS URL from a signup field. Existing/custom handles remain
+outside this initial rollout. Fixture-only HTTP origins are confined to
+loopback; production rejects private and loopback origins and requires
+independently enforced DNS/egress filtering against rebinding.
+
+This check follows the official handle specification:
+https://atproto.com/specs/handle . Its existence does not replace
+real PDS credential, repository writing, Blob, service-auth or complete
+account lifecycle integration.
 
 **One PostgreSQL account authority at activation:** the repository already
 contains the older, also nonactivated `paper_account_candidate.accounts`

@@ -156,9 +156,9 @@ test('signed PG generation 1→2→3 recovers through monotone RDF projection CA
           'SET previous_root_cid=$2 WHERE did=$1 AND generation=2',
           [did, second.rootCid]
         );
-        await assert.rejects(writer.verify({
+        await errors(writer.verify({
           ...params, publicKeyPem: identity.publicKeyPem
-        }), /Signed repository mutation unavailable|CID mismatch|Missing/i);
+        }), 'SINGLE_RECORD_ROOT_MISSING');
       } finally {
         await pool.query(
           'UPDATE paper_atproto_repo_proof.record_mutations ' +

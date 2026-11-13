@@ -75,7 +75,16 @@ module.exports = {
         });
 
         accountData = await ctx.call('auth.account.attachWebId', { accountUri: accountData['@id'], webId });
-        ctx.emit('auth.registered', { webId, profileData, accountData });
+        // Auth event handlers operate across the settings and per-Pod datasets.
+        // Do not propagate the caller's current user/dataset routing metadata:
+        // a nested signup call can have changed it (including on a remote cell).
+        // Match SemApps' SSO registration contract. The event consumers derive
+        // their storage authority from the actual WebID/accountData, not ctx.meta.
+        ctx.emit(
+          'auth.registered',
+          { webId, profileData, accountData },
+          { meta: { webId: null, dataset: null } }
+        );
 
         let activityPubProvisioning = null;
         let atprotoProvisioning = null;
@@ -163,7 +172,7 @@ module.exports = {
 
         const isRetryableBootstrapTimeout = error => {
           const message = String(error?.message || '');
-          return /after\s+30s|still has not been created after\s+30s|timed out waiting/i.test(message);
+          return /after\s+30s|still has not been created after\s+30s|timed out waiting|Waiting for resource failed\. No results after [0-9]+ tries\./i.test(message);
         };
 
         const callBootstrapReadiness = async (actionName, params) => {

@@ -1,5 +1,10 @@
 'use strict';
 
+// The provider schema imports runtime configuration solely for its settings
+// dataset; this unit test verifies the local ontology declaration without
+// requiring an unrelated deployed server's environment variables.
+jest.mock('../config/config', () => ({ AUTH_ACCOUNTS_DATASET: 'settings' }));
+
 const AdspLocalOntologyRegistrationMiddleware = require('../middlewares/adsp-local-ontology-registration');
 const {
   DEFAULT_READINESS_ACTIONS,
@@ -29,6 +34,13 @@ function wireLocalAction(options, broker, actionName, next = jest.fn(async ctx =
 }
 
 describe('ADSP distributed local ontology registration middleware', () => {
+  test('provider baseline includes unique ActivityStreams and signature vocabularies before dynamic startup', () => {
+    const provider = require('../services/core/ontologies');
+    const prefixes = provider.settings.ontologies.map(ontology => ontology.prefix);
+    expect(prefixes.slice(0, 2)).toEqual(['as', 'sec']);
+    expect(new Set(prefixes).size).toBe(prefixes.length);
+  });
+
   test('is absent when disabled', () => {
     expect(AdspLocalOntologyRegistrationMiddleware({ enabled: false })).toBeNull();
   });

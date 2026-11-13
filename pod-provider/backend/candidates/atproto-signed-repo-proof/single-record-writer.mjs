@@ -19,6 +19,22 @@ const ROOT = 'paper_atproto_repo_proof';
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const CID_RE = /^bafyre[a-z2-7]{53}$/u;
 const MAX_GENERATION = Number.MAX_SAFE_INTEGER;
+const TID_ALPHABET = '234567abcdefghijklmnopqrstuvwxyz';
+function nextTidAfter(previous) {
+  assertTid(previous);
+  let value = 0n;
+  for (const symbol of previous) {
+    const digit = TID_ALPHABET.indexOf(symbol);
+    if (digit < 0) fail('SINGLE_RECORD_REVISION_INVALID');
+    value = (value << 5n) | BigInt(digit);
+  }
+  const priorMicros = value >> 10n;
+  const currentMicros = BigInt(Date.now()) * 1000n;
+  // Never rely on randomized clock IDs to make two same-millisecond
+  // commits monotonic. Advance at least one microsecond when needed.
+  const micros = currentMicros > priorMicros ? currentMicros : priorMicros + 1n;
+  return makeTid(micros);
+}
 function fail(code) {
   const e = new Error('Signed repository mutation unavailable');
   e.code = code;
@@ -146,7 +162,7 @@ export function createSignedSingleRecordWriter({
   }
   async function write({
     accountId,did,expectedCommitCid,expectedRev,
-    action,path,record=null,signer,publicKeyPem,rev=makeTid(),
+    action,path,record=null,signer,publicKeyPem,rev=null,
     testFailAfterBlocks=false,testFailAfterOutbox=false
   }) {
     requireReleased();
@@ -155,8 +171,9 @@ export function createSignedSingleRecordWriter({
         !['create','update','delete'].includes(action)) {
       fail('SINGLE_RECORD_WRITE_INPUT_INVALID');
     }
-    assertTid(expectedRev);assertTid(rev);checkRecordPath(path);
-    if (rev <= expectedRev) fail('SINGLE_RECORD_REVISION_NOT_INCREASING');
+    assertTid(expectedRev);
+    if (rev !== null) assertTid(rev);
+    checkRecordPath(path);
     if (action !== 'delete' && (!record || record.$type !== path.split('/')[0])) {
       fail('SINGLE_RECORD_WRITE_INPUT_INVALID');
     }
@@ -167,6 +184,8 @@ export function createSignedSingleRecordWriter({
     const previous = await verify({accountId,did,publicKeyPem});
     if (previous.commitCid !== expectedCommitCid ||
         previous.rev !== expectedRev) fail('SINGLE_RECORD_STALE_HEAD');
+    const nextRev = rev === null ? nextTidAfter(previous.rev) : rev;
+    if (nextRev <= previous.rev) fail('SINGLE_RECORD_REVISION_NOT_INCREASING');
     if (previous.generation >= MAX_GENERATION) {
       fail('SINGLE_RECORD_GENERATION_EXHAUSTED');
     }
@@ -178,7 +197,7 @@ export function createSignedSingleRecordWriter({
       fail('SINGLE_RECORD_PATH_NOT_FOUND');
     }
     const signed = await buildSignedSingleRecordSnapshot({
-      did,rev,signer,publicKeyPem,
+      did,rev:nextRev,signer,publicKeyPem,
       path:action==='delete'?null:path,
       record:action==='delete'?null:record
     });

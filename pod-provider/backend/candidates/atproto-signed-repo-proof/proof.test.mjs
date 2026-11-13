@@ -173,6 +173,55 @@ test('PG18 signed v3 empty repository proof — trusted signing, atomic DB, reco
       );
     });
 
+    await t.test('lost COMMIT reply requires read-only recovery, never a second genesis', async () => {
+      const f = fixture();
+      const acc = account('commit-unknown');
+      const id = did('commitunknown');
+      let disconnected = false;
+      const lostAcknowledgmentPool = {
+        query: (...args) => pool.query(...args),
+        async connect() {
+          const c = await pool.connect();
+          return {
+            async query(...args) {
+              if (args[0] === 'COMMIT') {
+                await c.query(...args); // Truly commit the signed repo and outbox.
+                throw new Error('simulated lost PostgreSQL COMMIT acknowledgment');
+              }
+              return c.query(...args);
+            },
+            release(discard) {
+              disconnected = discard === true;
+              c.release(discard);
+            }
+          };
+        }
+      };
+      const uncertain = createSignedRepoProofStore({
+        pool: lostAcknowledgmentPool, fixtureOnly: true
+      });
+      await assert.rejects(
+        uncertain.bootstrap({ accountId: acc, did: id, ...f }),
+        error => error.code === 'ATPROTO_REPO_COMMIT_OUTCOME_UNKNOWN'
+      );
+      assert.equal(disconnected, true, 'unknown COMMIT connection must be discarded');
+      const committed = await store.verify({ accountId: acc, did: id, publicKeyPem: f.publicKeyPem });
+      assert.equal(committed.verified, true);
+      assert.equal(committed.outboxStatus, 'pending');
+      const row = await pool.query(
+        'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.native_event_outbox WHERE did=$1',
+        [id]
+      );
+      assert.equal(row.rows[0].n, 1);
+      const replay = await store.bootstrap({ accountId: acc, did: id, ...f });
+      assert.equal(replay.replay, true);
+      assert.equal(replay.commitCid, committed.commitCid);
+      const after = await pool.query(
+        'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.blocks WHERE did=$1', [id]
+      );
+      assert.equal(after.rows[0].n, 2, 'replayed genesis must not duplicate CAR blocks');
+    });
+
     await t.test('crash before outbox INSERT rolls back repo and blocks atomically', async () => {
       const f = fixture();
       const id = did('rollback');

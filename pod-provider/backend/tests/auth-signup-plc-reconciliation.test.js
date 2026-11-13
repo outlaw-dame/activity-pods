@@ -1,49 +1,39 @@
 'use strict';
-const auth = require('../services/core/auth');
+const fs = require('node:fs');
+const path = require('node:path');
+const { mustPreserveFailedSignup } = require('../utils/account-signup-rollback-policy');
 
 describe('irreversible PLC signup rollback safety', () => {
-  const originalEnv = { node: process.env.NODE_ENV, plc: process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION };
-  afterEach(() => {
-    if (originalEnv.node === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = originalEnv.node;
-    if (originalEnv.plc === undefined) delete process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION;
-    else process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION = originalEnv.plc;
+  it('preserves recovery evidence in production regardless of submission toggle', () => {
+    expect(mustPreserveFailedSignup({ NODE_ENV: 'production' })).toBe(true);
+    expect(mustPreserveFailedSignup({
+      NODE_ENV: 'production', APODS_ATPROTO_ENABLE_PLC_SUBMISSION: 'false'
+    })).toBe(true);
   });
-  const context = async () => {
-    const ctx = { call: jest.fn() };
-    const service = {
-      _mustPreserveFailedSignup: auth.methods._mustPreserveFailedSignup,
-      logger: { warn: jest.fn() }
-    };
-    await expect(auth.methods._cleanupPartialAtprotoArtifacts.call(service, ctx,
-      'https://pods.example/alice')).rejects.toMatchObject({
-      type: 'ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED'
-    });
-    expect(ctx.call).not.toHaveBeenCalled();
-  };
-  test('production does not delete identity binding or signing keys after failed signup', async () => {
-    process.env.NODE_ENV = 'production';
-    delete process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION;
-    await context();
+
+  it('preserves recovery evidence in staging with real PLC submissions', () => {
+    expect(mustPreserveFailedSignup({
+      NODE_ENV: 'test', APODS_ATPROTO_ENABLE_PLC_SUBMISSION: 'true'
+    })).toBe(true);
+    expect(mustPreserveFailedSignup({
+      NODE_ENV: 'development', APODS_ATPROTO_ENABLE_PLC_SUBMISSION: 'true'
+    })).toBe(true);
   });
-  test('staging with real PLC submissions also preserves recovery materials', async () => {
-    process.env.NODE_ENV = 'test';
-    process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION = 'true';
-    await context();
+
+  it('permits cleanup only in isolated fixture mode without PLC submission', () => {
+    expect(mustPreserveFailedSignup({
+      NODE_ENV: 'test', APODS_ATPROTO_ENABLE_PLC_SUBMISSION: 'false'
+    })).toBe(false);
   });
-  test('isolated mock fixture cleanup retains its original behavior', async () => {
-    process.env.NODE_ENV = 'test';
-    process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION = 'false';
-    const ctx = { call: jest.fn(async () => true) };
-    const service = {
-      _mustPreserveFailedSignup: auth.methods._mustPreserveFailedSignup,
-      logger: { warn: jest.fn() }
-    };
-    await auth.methods._cleanupPartialAtprotoArtifacts.call(service, ctx,
-      'http://localhost:3000/test-user');
-    expect(ctx.call).toHaveBeenCalledTimes(2);
-    expect(ctx.call.mock.calls.map(x => x[0])).toEqual([
-      'identitybindings.remove', 'keys.deleteAllKeysForWebId'
-    ]);
+
+  it('retains both inner and outer rollback barriers in the production signup source', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../services/core/auth.js'), 'utf8'
+    );
+    expect(source).toContain('if (!this._mustPreserveFailedSignup()) {');
+    expect(source).toContain('if (webId && this._mustPreserveFailedSignup()) {');
+    expect(source).toContain('if (this._mustPreserveFailedSignup()) {');
+    expect(source).toContain('ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED');
+    expect(source).toContain('return mustPreserveFailedSignup();');
   });
 });

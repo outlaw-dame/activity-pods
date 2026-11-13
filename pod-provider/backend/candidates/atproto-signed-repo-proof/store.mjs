@@ -120,6 +120,8 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
     const signed = await buildSignedEmptyRepo({ did, rev, signer, publicKeyPem });
     const client = await pool.connect();
     let transactionOpen = false;
+    let commitAttempted = false;
+    let discardConnection = false;
     let replay = false;
     try {
       await client.query('BEGIN');
@@ -165,18 +167,26 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
           [accountId, did, signed.commitCid, signed.rootCid, signed.rev]
         );
       }
+      // A lost COMMIT reply can mean the signed repo, blocks, outbox
+      // and RDF intent ALL committed. Never assume it rolled back.
+      commitAttempted = true;
       await client.query('COMMIT');
       transactionOpen = false;
     } catch (error) {
+      if (commitAttempted) {
+        discardConnection = true;
+        fail('ATPROTO_REPO_COMMIT_OUTCOME_UNKNOWN',
+          'Repository commit acknowledgment uncertain; reconcile by verified head and outbox');
+      }
       if (transactionOpen) {
-        try { await client.query('ROLLBACK'); } catch { /* transaction already aborted or disconnected */ }
+        try { await client.query('ROLLBACK'); } catch { discardConnection = true; }
       }
       throw error;
     } finally {
       // Critically release before any post-commit verification query:
       // verification uses the same bounded connection pool. Holding this
       // client across read-back deadlocks concurrent replays at max pool size.
-      client.release();
+      client.release(discardConnection);
     }
     // Read back from authoritative DB AFTER releasing transaction client;
     // reject missing/corrupt signature, CIDs, CAR or outbox.

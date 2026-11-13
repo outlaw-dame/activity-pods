@@ -34,6 +34,21 @@ function fixture(){
 }
 const rejects=(promise,code)=>assert.rejects(promise,e=>e?.code===code);
 
+async function acknowledgeDisposableProjection(accountId,identityDid,commitCid) {
+  // This only simulates an already-applied protected Jena fence on the exact
+  // disposable PG18 test database. Never use as a production Jena writer.
+  const rows=await pool.query(
+    "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
+    "state='applied',lease_epoch=lease_epoch+1,applied_at=clock_timestamp() "+
+    "WHERE account_id=$1 AND did=$2 AND state='pending' AND head_cid=$3 "+
+    "RETURNING generation,lease_epoch",
+    [accountId,identityDid,commitCid]
+  );
+  assert.equal(rows.rowCount,1,'signed head must be explicitly projected before next write');
+  return rows.rows[0];
+}
+
+
 test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',async t=>{
   let priorEnv=process.env.NODE_ENV;
   try{
@@ -68,6 +83,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
     assert.equal(original.path,null);
     assert.equal(original.recordCid,null);
     assert.equal(original.generation,1);
+    await acknowledgeDisposableProjection(acc,subject,first.commitCid);
 
     await t.test('mutation cannot run in production or without fixture gate',async()=>{
       const closed=createSignedSingleRecordWriter({pool,authorize:async()=>true});
@@ -125,7 +141,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       assert.equal(Number(job.rows[0].generation),2);
       assert.equal(job.rows[0].applied_at,null);
       assert.equal(job.rows[0].head_cid,next.commitCid);
-      assert.equal(Number(job.rows[0].lease_epoch),0);
+      assert.equal(Number(job.rows[0].lease_epoch),1);
       assert(authorizations>=2);
     });
     let current=await writer.verify({
@@ -148,20 +164,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       assert.equal((await writer.verify({accountId:acc,did:subject,
         publicKeyPem:signed.publicKeyPem})).commitCid,current.commitCid);
     });
-    async function project(verified){
-      // SQL fixture simulates a completed protected Jena fence. This is NOT
-      // an actual SAI grant or atomic Fuseki projection; those have their
-      // separate real-Jena acceptance job.
-      const ack=await pool.query(
-        "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
-        "state='applied',lease_epoch=lease_epoch+1,applied_at=clock_timestamp() "+
-        "WHERE account_id=$1 AND did=$2 AND state='pending' AND head_cid=$3 "+
-        "RETURNING generation,lease_epoch",
-        [acc,subject,verified.commitCid]
-      );
-      assert.equal(ack.rowCount,1);
-      return ack.rows[0];
-    }
+    const project=verified=>acknowledgeDisposableProjection(acc,subject,verified.commitCid);
     await project(current);
     await t.test('signed update preserves one canonical record and old immutable blocks',async()=>{
       const old=current;
@@ -236,6 +239,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       const bob=account('bob'),bobDid=did('bob');
       const own=fixture();
       const original=await genesis.bootstrap({accountId:bob,did:bobDid,...own});
+      await acknowledgeDisposableProjection(bob,bobDid,original.commitCid);
       const batch=await Promise.allSettled(Array.from({length:8},()=>writer.write({
         accountId:bob,did:bobDid,expectedCommitCid:original.commitCid,
         expectedRev:original.rev,action:'create',path,record:record('Race'),
@@ -258,6 +262,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
       const original=await genesis.bootstrap({
         accountId:charlie,did:charlieDid,...own
       });
+      await acknowledgeDisposableProjection(charlie,charlieDid,original.commitCid);
       await rejects(writer.write({
         accountId:charlie,did:charlieDid,
         expectedCommitCid:original.commitCid,expectedRev:original.rev,
@@ -277,6 +282,7 @@ test('PG18 signed v3 single-record commit CAS + atomic blocks/outbox/fence',asyn
     await t.test('lost COMMIT reply forces reconciliation and never reports rollback',async()=>{
       const dave=account('dave'),daveDid=did('dave'),own=fixture();
       const original=await genesis.bootstrap({accountId:dave,did:daveDid,...own});
+      await acknowledgeDisposableProjection(dave,daveDid,original.commitCid);
       let discarded=false;
       const lostPool={
         query:(...args)=>pool.query(...args),

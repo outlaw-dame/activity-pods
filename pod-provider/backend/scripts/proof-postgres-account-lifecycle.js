@@ -131,22 +131,24 @@ async function main(){
 
     // A real PostgreSQL journal may ask the authoritative Solid provider
     // to verify one exact new account without importing existing identities.
+    const signupIdentity={...identity('signup-user'),
+      atprotoDid:'did:plc:abcdefghijklmnopqrstuvwx'};
     const signupBind=await model.change({providerId:provider,accountId:signupId,
       operationId:id(),expectedGeneration:1,kind:'bind_unified_identity',
-      ...identity('signup-user')});
+      ...signupIdentity});
     assert.equal(signupBind.generation,2);
     let solidCalls=0;
     const solidCall=async (action,params)=>{
       solidCalls++;
       if(action==='auth.account.findByWebId'){
-        assert.equal(params.webId,identity('signup-user').webId);
+        assert.equal(params.webId,signupIdentity.webId);
         return {'@id':params.webId,disabled:false};
       }
       if(action==='identitybindings.getByCanonicalAccountId'){
-        assert.equal(params.canonicalAccountId,identity('signup-user').webId);
+        assert.equal(params.canonicalAccountId,signupIdentity.webId);
         return {webId:params.canonicalAccountId,
           activityPubActorId:params.canonicalAccountId,
-          atprotoDid:identity('signup-user').atprotoDid,
+          atprotoDid:signupIdentity.atprotoDid,
           atprotoSource:'local',atprotoManaged:true};
       }
       if(action==='auth.awaitBootstrapComplete')return {webId:params.webId,complete:true};
@@ -164,7 +166,7 @@ async function main(){
         : action==='identitybindings.getByCanonicalAccountId'
           ? {webId:params.canonicalAccountId,
               activityPubActorId:'https://evil.example/other',
-              atprotoDid:identity('signup-user').atprotoDid,
+              atprotoDid:signupIdentity.atprotoDid,
               atprotoSource:'local',atprotoManaged:true}
           : {webId:params.webId,complete:true}
     }), 'SOLID_SIGNUP_PROOF_IDENTITY_MISMATCH');

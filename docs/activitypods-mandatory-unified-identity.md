@@ -53,6 +53,15 @@ missing. Existing account login is unchanged. This fail-fast gate must only
 be replaced by reviewed and verified real PDS bootstrap integration; an
 environment variable or boolean binding is not sufficient evidence.
 
+**Unknown RPC outcomes:** the API sets an irreversible-work boundary before
+invoking `unified-account.create`. If the call times out, throws after
+partial work, or returns but the completion ledger cannot confirm storage,
+it now returns `ACCOUNT_PROVISIONING_UNCERTAIN` or
+`ACCOUNT_COMPLETION_UNCERTAIN` without declaring the claim failed or
+allowing a new identity to be issued. Both paths have regression coverage.
+This conservatively preserves the reservation until explicit reconciliation,
+not indefinitely retried automatic signup.
+
 **Critical durability limitation:** `provider-capabilities` idempotency and
 `account-provisioning-state` phases currently use per-process Maps. Both
 must reject production reservations/starts, because a second Moleculer cell

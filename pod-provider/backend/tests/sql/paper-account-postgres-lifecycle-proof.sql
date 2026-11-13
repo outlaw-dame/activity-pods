@@ -98,7 +98,22 @@ BEGIN
     version=version+1
   WHERE operation_id=op AND state='account_created' AND lease_token=lease;
   IF NOT FOUND THEN RAISE EXCEPTION 'could not advance identity lifecycle'; END IF;
-  UPDATE paper_account_candidate.operations SET state='completed', version=version+1
+  -- A forged PDS proof does not replace a real Solid bootstrap verdict.
+  invalid_completion_rejected := false;
+  BEGIN
+    UPDATE paper_account_candidate.operations SET
+      state='completed', version=version+1
+    WHERE operation_id=op AND state='identities_ready' AND lease_token=lease;
+  EXCEPTION WHEN check_violation THEN
+    invalid_completion_rejected := true;
+  END;
+  IF NOT invalid_completion_rejected THEN
+    RAISE EXCEPTION 'completed without verified Solid bootstrap';
+  END IF;
+  UPDATE paper_account_candidate.operations SET
+    state='completed',
+    solid_bootstrap_proof_digest=decode(repeat('99',32),'hex'),
+    version=version+1
   WHERE operation_id=op AND state='identities_ready' AND lease_token=lease;
   IF NOT FOUND THEN RAISE EXCEPTION 'could not advance verified completion'; END IF;
   IF (SELECT state FROM paper_account_candidate.operations WHERE operation_id=op) <> 'completed'

@@ -15,6 +15,7 @@
  * raw SHA-256 of credentials, emails or predictable client keys is unsafe.
  * A lease is NOT authority to overwrite a completed identity.
  */
+const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { isCanonicalHttpsWebId } = require('../utils/unified-identity-policy');
 const TABLE = 'paper_account_candidate.operations';
@@ -91,7 +92,9 @@ async function transaction(pool, fn) {
   }
 }
 
-function createAccountPostgresLifecycleCandidate({ pool } = {}) {
+function createAccountPostgresLifecycleCandidate({
+  pool, resolveTrustedKeyDid, verifyGenesis, verifyPds
+} = {}) {
   if (!pool || typeof pool.connect !== 'function') {
     throw new TypeError('ACCOUNT_LEDGER_PG_POOL_REQUIRED');
   }
@@ -159,6 +162,91 @@ function createAccountPostgresLifecycleCandidate({ pool } = {}) {
         );
         if (updated.rowCount !== 1) fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
         return publicResult(updated.rows[0]);
+      });
+    },
+
+    /**
+     * Store one immutable signed genesis archive after resolving the actual
+     * did:plc document and verifying every CAR block + commit signature.
+     * Never accept signing authority supplied in a client request.
+     *
+     * Verification is kept OUTSIDE the SQL transaction to avoid holding a
+     * row lock while fetching a DID or parsing CAR bytes.
+     */
+    async stageSignedGenesis(input) {
+      baseInput(input);
+      const genesis = input.genesis;
+      if (!DID.test(genesis?.did || '') || !CID.test(genesis?.rootCid || '') ||
+          !requiredString(genesis?.rev, 64) ||
+          !Buffer.isBuffer(genesis?.car) ||
+          genesis.car.length < 32 || genesis.car.length > 256 * 1024) {
+        fail('ACCOUNT_LEDGER_INVALID_GENESIS', 400);
+      }
+      if (typeof resolveTrustedKeyDid !== 'function' ||
+          typeof verifyGenesis !== 'function') {
+        fail('ACCOUNT_LEDGER_GENESIS_VERIFIER_REQUIRED', 503);
+      }
+      const trustedKeyDid = await resolveTrustedKeyDid(genesis.did);
+      if (typeof trustedKeyDid !== 'string' ||
+          !/^did:key:z[1-9A-HJ-NP-Za-km-z]{30,160}$/.test(trustedKeyDid)) {
+        fail('ACCOUNT_LEDGER_UNVERIFIED_SIGNING_AUTHORITY', 503);
+      }
+      let verified;
+      try {
+        verified = await verifyGenesis({
+          did: genesis.did, rootCid: genesis.rootCid,
+          rev: genesis.rev, car: genesis.car, trustedKeyDid
+        });
+      } catch (_error) {
+        fail('ACCOUNT_LEDGER_INVALID_SIGNED_GENESIS', 503);
+      }
+      if (verified?.did !== genesis.did ||
+          verified.rootCid !== genesis.rootCid ||
+          verified.rev !== genesis.rev ||
+          verified.keyDid !== trustedKeyDid ||
+          !Buffer.isBuffer(verified.car) ||
+          !verified.car.equals(genesis.car)) {
+        fail('ACCOUNT_LEDGER_INVALID_SIGNED_GENESIS', 503);
+      }
+      const digestBytes = crypto.createHash('sha256').update(genesis.car).digest();
+      return transaction(pool, async client => {
+        const owner = await client.query(
+          `SELECT state, lease_expires_at FROM ${TABLE}
+           WHERE operation_id=$1::uuid AND lease_token=$2::uuid
+             AND state='account_created'
+             AND lease_expires_at > clock_timestamp()
+           FOR UPDATE`, [input.operationId, input.leaseToken]
+        );
+        if (owner.rowCount !== 1) fail('ACCOUNT_LEDGER_RECONCILIATION_REQUIRED');
+        const inserted = await client.query(
+          `INSERT INTO paper_account_candidate.signed_genesis
+           (operation_id, did, root_cid, repo_rev, signing_key_did,
+            car_bytes, car_sha256)
+           VALUES ($1::uuid,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT DO NOTHING RETURNING operation_id`,
+          [input.operationId, genesis.did, genesis.rootCid, genesis.rev,
+            trustedKeyDid, genesis.car, digestBytes]
+        );
+        if (inserted.rowCount !== 1) {
+          const existing = await client.query(
+            `SELECT did,root_cid,repo_rev,signing_key_did,car_sha256
+             FROM paper_account_candidate.signed_genesis
+             WHERE operation_id=$1::uuid`, [input.operationId]
+          );
+          if (existing.rowCount !== 1 ||
+              existing.rows[0].did !== genesis.did ||
+              existing.rows[0].root_cid !== genesis.rootCid ||
+              existing.rows[0].repo_rev !== genesis.rev ||
+              existing.rows[0].signing_key_did !== trustedKeyDid ||
+              !existing.rows[0].car_sha256.equals(digestBytes)) {
+            fail('ACCOUNT_LEDGER_GENESIS_CONFLICT');
+          }
+        }
+        return Object.freeze({
+          operationId: input.operationId, did: genesis.did,
+          rootCid: genesis.rootCid, rev: genesis.rev,
+          staged: true, replay: inserted.rowCount !== 1
+        });
       });
     },
 

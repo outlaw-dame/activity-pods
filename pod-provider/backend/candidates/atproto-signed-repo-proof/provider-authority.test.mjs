@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { base58btc } from 'multiformats/bases/base58';
@@ -271,6 +273,91 @@ test('provider-authorized bridge: actual PG18 signed repo, identity drift and du
       const verified = await service.actions.verifyReady.handler(ctx);
       assert.equal(verified.commitCid, result.commitCid);
       assert.equal((await service.actions.inspectRecovery.handler(ctx)).bindingMatch, true);
+      // Cross the REAL ActivityPods provisioning method -> protected
+      // Moleculer action -> PG18 signed repository readback boundary.
+      // This does not register a production service or open a public API.
+      const oldEnv = {
+        NODE_ENV: process.env.NODE_ENV,
+        APODS_ATPROTO_REQUIRE_VERIFIED_REPO:
+          process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO,
+        APODS_ATPROTO_MANAGED_REPO_CAPABILITY:
+          process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY
+      };
+      try {
+        process.env.NODE_ENV = 'test';
+        process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO = 'true';
+        process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY = capability;
+        const source = await fs.readFile(
+          new URL('../../services/core/atproto-provisioning.js', import.meta.url), 'utf8');
+        const moduleMock = { exports: {} };
+        class LocalError extends Error {
+          constructor(message, status, type) {
+            super(message); this.code = status; this.type = type;
+          }
+        }
+        const requireLocal = createRequire(import.meta.url);
+        const loader = vm.runInNewContext(
+          '(function(require,module){\\n' + source + '\\n})',
+          { process, URL, Buffer, console, setTimeout, clearTimeout }
+        );
+        loader(name => {
+          if (name === 'crypto') return crypto;
+          if (name === 'moleculer') return { Errors: { MoleculerError: LocalError } };
+          if (name === '../../utils/atproto-managed-repo-proof-policy') {
+            return requireLocal('../../utils/atproto-managed-repo-proof-policy.js');
+          }
+          throw Error('Unexpected production service dependency: ' + name);
+        }, moduleMock);
+        const methods = {
+          ...moduleMock.exports.methods,
+          _resolveLocalPdsUrl: () => pds,
+          _signingCallMeta: () => ({}),
+          settings: { repoBootstrapRootCid: 'bafyreigenesisplaceholder', repoBootstrapRev: '0' }
+        };
+        let repoCalls = 0;
+        const request = { call: async (action, params, options) => {
+          if (action.startsWith('atproto-managed-repository.')) {
+            assert.equal(options?.meta?.providerRepoCapability, capability);
+            repoCalls += 1;
+            const method = action.split('.')[1];
+            assert(method === 'bootstrapAndVerify' || method === 'verifyReady');
+            return service.actions[method].handler({
+              broker, caller: 'atproto-provisioning', params,
+              meta: { providerRepoCapability: options.meta.providerRepoCapability }
+            });
+          }
+          if (action === 'identitybindings.upsertRepoBootstrap') {
+            assert.equal(params.canonicalAccountId, webId);
+            assert.equal(params.did, id);
+            assert.equal(params.handle, userHandle);
+            binding = { ...binding, repoInitialized: true,
+              repoRootCid: params.rootCid, repoRev: params.rev };
+            return { ok: true };
+          }
+          if (action === 'signing.getAtprotoPublicKey') {
+            assert.equal(params.canonicalAccountId, webId);
+            return { publicKeyMultibase: keys.publicKeyMultibase };
+          }
+          throw Error('Unexpected provisioning call: ' + action);
+        } };
+        binding = { ...binding, repoInitialized: false, repoRootCid: null, repoRev: null };
+        const initialized = await methods.initializeRepoState(request, {
+          canonicalAccountId: webId, did: id, handle: userHandle
+        });
+        assert.equal(initialized.rootCid, result.rootCid);
+        assert.equal(initialized.rev, result.rev);
+        await methods.verifyProvisionedState(request, {
+          canonicalAccountId: webId, binding: { ...binding }, didMethod: 'plc'
+        });
+        assert.equal(repoCalls, 2);
+        assert.equal(signed, 1, 'readiness replay must not mint a second commit');
+      } finally {
+        for (const [name, value] of Object.entries(oldEnv)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+
       assert(observed.some(x => x.name === 'signing.signAtprotoCommit'));
       assert(observed.some(x => x.name === 'atproto-verification.verifyDelegatedIdentity'));
     });

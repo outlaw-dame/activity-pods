@@ -74,6 +74,9 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-login.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-live.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-projection-worker-role.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-projection-ops.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-projection-worker-live.test.mjs
           node --check pod-provider/backend/utils/atproto-canonical-pg-authority.js
           node --check pod-provider/backend/services/utils/atproto-sai-native-fence.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.mjs
@@ -170,6 +173,13 @@ jobs:
           ATPROTO_REPO_WRITER_ROLE_TEST_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-live.test.mjs
+          # Different restricted projection login: lease, exact signed head,
+          # Jena-readback-gated ACK, stale epoch, and canonical revoke.
+          NODE_ENV=test \
+          ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
+          ATPROTO_PROJECTION_ROLE_TEST_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
+            node --test pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-projection-worker-live.test.mjs
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.test.mjs

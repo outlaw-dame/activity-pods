@@ -45,6 +45,9 @@ export async function assertRestrictedRepoWriterLogin(pool){
       "pg_catalog.has_function_privilege(current_user,"+
       "'paper_atproto_authority.block_consent(text,text,text,bigint)','EXECUTE') AS revoke_execute, "+
       "pg_catalog.has_function_privilege(current_user,"+
+      "'paper_atproto_authority.lock_writer_consent(text,text,text,text,bigint)',"+
+      "'EXECUTE') AS consent_lock_execute, "+
+      "pg_catalog.has_function_privilege(current_user,"+
       "'paper_atproto_repo_proof.reset_after_signed_commit(text,text,text,text,text,bigint,text,text,text,bigint)',"+
       "'EXECUTE') AS reset_execute "+
       "FROM pg_catalog.pg_roles r WHERE r.rolname=current_user"
@@ -62,7 +65,8 @@ export async function assertRestrictedRepoWriterLogin(pool){
      !x.repo_head_update||!x.projection_lock_update||
      x.projection_state_update||x.event_ack_update||
      x.repo_genesis_insert||x.identity_insert||x.consent_insert||
-     x.consent_update||x.revoke_execute||!x.reset_execute){
+     x.consent_update||x.revoke_execute||
+     !x.consent_lock_execute||!x.reset_execute){
     deny();
   }
   return Object.freeze({restricted:true,role:'paper_atproto_repo_writer',

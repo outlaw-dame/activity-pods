@@ -32,7 +32,7 @@ const mode=process.env.DATASET_ADMIN_ORDINARY_MODE;
 const dataset=mode==='mismatch'?'claimtest-999999999999':ticket.claim.dataset;
 try{
   const result=await createDelegatedDisposableDataset({
-    dataset,ticket
+    dataset,ticket:mode==='missing'?undefined:ticket
   });
   assert.equal(mode,'valid','Mismatched or missing ticket must not succeed');
   assert.equal(result.created,true);

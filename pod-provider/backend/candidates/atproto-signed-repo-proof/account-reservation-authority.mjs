@@ -160,6 +160,10 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') AS ledger_dml,
       has_table_privilege(current_user, 'paper_account_reservation_proof.daily_usage',
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') AS quota_dml,
+      has_any_column_privilege(current_user, 'paper_account_reservation_proof.reservations',
+        'SELECT,INSERT,UPDATE,REFERENCES') AS ledger_column_dml,
+      has_any_column_privilege(current_user, 'paper_account_reservation_proof.daily_usage',
+        'SELECT,INSERT,UPDATE,REFERENCES') AS quota_column_dml,
       pg_has_role(current_user, 'pg_read_all_data', 'member') AS read_all,
       pg_has_role(current_user, 'pg_write_all_data', 'member') AS write_all,
       pg_has_role(current_user, 'pg_monitor', 'member') AS monitor,
@@ -182,7 +186,8 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
     row.owner_member === false && row.extra_roles === 0 &&
     row.bad_role_options === 0 && row.inherited_extra_roles === 0 &&
     row.schema_create === false && row.ledger_dml === false &&
-    row.quota_dml === false && row.read_all === false &&
+    row.quota_dml === false && row.ledger_column_dml === false &&
+    row.quota_column_dml === false && row.read_all === false &&
     row.write_all === false && row.monitor === false &&
     row.can_reserve === (kind === 'worker') &&
     row.can_start === (kind === 'worker') &&

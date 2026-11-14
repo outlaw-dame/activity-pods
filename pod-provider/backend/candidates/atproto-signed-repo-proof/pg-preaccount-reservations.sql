@@ -28,6 +28,8 @@ CREATE TABLE paper_account_reservation_proof.reservations (
   PRIMARY KEY (provider_id, app_client_id, idempotency_hash),
   UNIQUE (provider_id, username),
   UNIQUE (expected_webid),
+  UNIQUE (activitypub_actor_id),
+  UNIQUE (atproto_did),
   CHECK ((state = 'reserved') = (started_at IS NULL)),
   CHECK ((state = 'completed') = (completed_at IS NOT NULL)),
   CHECK ((state = 'completed') = (atproto_did IS NOT NULL)),
@@ -149,9 +151,9 @@ CREATE FUNCTION paper_account_reservation_proof.complete(
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE changed integer;
 BEGIN
-  IF p_webid IS NULL OR p_ap_actor IS NULL OR p_ap_actor !~ '^https://'
+  IF p_webid IS NULL OR p_ap_actor IS NULL OR p_ap_actor !~ '^https://' OR length(p_ap_actor) > 512
      OR p_did IS NULL OR p_did !~ '^did:plc:[a-z2-7]{24}$'
-     OR p_pds_url IS NULL OR p_pds_url !~ '^https://'
+     OR p_pds_url IS NULL OR p_pds_url !~ '^https://' OR length(p_pds_url) > 512
      OR p_evidence IS NULL OR octet_length(p_evidence) <> 32 THEN
     RETURN false;
   END IF;

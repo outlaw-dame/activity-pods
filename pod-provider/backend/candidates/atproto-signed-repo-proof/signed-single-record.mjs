@@ -33,7 +33,7 @@ export function checkRecordPath(path) {
   }
   return path;
 }
-async function cid(bytes) {
+export async function cid(bytes) {
   return CID.create(1, cbor.code, await sha256.digest(bytes));
 }
 function keyFor(pem) {
@@ -47,7 +47,7 @@ function keyFor(pem) {
     return key;
   } catch { deny('SINGLE_RECORD_KEY_INVALID'); }
 }
-function decodeCanonical(bytes) {
+export function decodeCanonical(bytes) {
   let decoded;
   try { decoded = cbor.decode(bytes); }
   catch { deny('SINGLE_RECORD_CBOR_INVALID'); }
@@ -56,7 +56,7 @@ function decodeCanonical(bytes) {
   }
   return decoded;
 }
-function checkRecord(record, path) {
+export function checkRecord(record, path) {
   if (!record || typeof record !== 'object' || Array.isArray(record) ||
       record.$type !== path.split('/')[0]) {
     deny('SINGLE_RECORD_LEXICON_MISMATCH');
@@ -69,7 +69,7 @@ function checkRecord(record, path) {
   if (roundtrip.$type !== record.$type) deny('SINGLE_RECORD_LEXICON_MISMATCH');
   return bytes;
 }
-function signatureFrom(answer) {
+export function signatureFrom(answer) {
   let bytes;
   if (typeof answer === 'string' && /^[A-Za-z0-9_-]{86}$/u.test(answer)) {
     bytes = Buffer.from(answer, 'base64url');

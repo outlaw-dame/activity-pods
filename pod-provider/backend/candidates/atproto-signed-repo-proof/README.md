@@ -456,3 +456,67 @@ tampered/legacy predecessor rejection, revoked grant refusal, and a
 head/revision change during external SAI verification with unchanged
 lease owner and epoch. No provider route or production mint authority is
 activated here. Full real Pod grant and production cutover remain blocked.
+
+
+## Full upstream MST: multi-record signed PostgreSQL candidate
+
+**NONACTIVATED.** A new reference-mst-writer.mjs replaces the hardcoded
+zero/one-leaf limit **only for an explicitly gated disposable candidate**.
+It consumes the maintained MIT/Apache-licensed `@atproto/repo` MST API
+(`MST.load/add/update/delete/getUnstoredBlocks`), pinned to v0.11.0
+in the independent integration workflow. The production service loader
+does not import it. Before real integration, the production provider MUST
+pin and lock that package, review its transitive dependencies and verify
+that the installed API and security posture match the release tests.
+
+### Incremental storage and scaling
+
+The repo head and content-addressed blocks stay in the existing
+paper_atproto_repo_proof PostgreSQL schema. A per-request lazy blockstore
+implements bounded CID-keyed reads by DID, hashes every returned DAG-CBOR
+block, and limits reads to 192 requests / 2 MiB. A mutation uses the
+upstream MST to read the targeted path, compute a new immutable root and
+stage only its new/changed MST nodes plus an optional record block and
+signed commit. Each transaction is capped at 96 new blocks and 1 MiB
+staged bytes. No account-wide record enumeration, in-memory full-tree
+rebuild, new shadow record index or cross-Pod query is introduced.
+
+The trusted caller supplies the exact expected commit CID/revision. A
+provider-owned authorization callback runs before and after signing,
+without holding a PostgreSQL transaction across external checks. The
+writer validates a canonical bounded record and strict secp256k1 low-S
+signed v3 commit. PostgreSQL serializes the head with `FOR UPDATE` and
+an exact generation/commit/revision CAS; stale writers fail instead of
+rebasing automatically. Content-addressed block inserts, signed head,
+one-action immutable mutation audit, native pending event and the
+monotone-fenced Jena projection recovery intent persist atomically.
+Unprojected generations or blocked historical outbox events deny further
+writes; a lost COMMIT ACK remains an unknown outcome requiring read-only
+verification.
+
+A per-request verified read validates commit and root block hashes,
+signature, revision and the requested record path. It **does not yet
+claim a complete audit of every untouched historical tree subtree**,
+a complete CAR export, production blob storage, GC, or valid firehose
+diff bytes. Those require dedicated archival/export, traversal safety
+and native event acceptance before exposing public XRPC.
+
+### Real acceptance
+
+After the existing normal proof suite, the same CI job injects the
+separately pinned upstream MST into the disposable writer and runs
+against PostgreSQL 18. The tests create 36 distinct signed records,
+compare every new MST root against an independent in-memory upstream
+tree, update and delete distant leaves, inspect untouched record CIDs,
+verify changed block count for one edit, reject an unprojected head,
+race eight writers with exactly one winner, deny revoked authorization,
+reject tampered immutable blocks, verify historical outbox blocking and
+roll back injected transaction failure after outbox insertion.
+
+This advances the repository data-plane foundation, **not** the final
+account release gate. Public `com.atproto.repo.*` writes, signed
+multi-record CAR exports, native `#commit` diff materialization and
+publisher, real protected Solid/SAI provider mutation authority,
+managed handle/PLC recovery, a revocation-safe PostgreSQL completion
+seal, backup/restore and measured replica-level throughput remain
+blocked. Existing-account/ATProto migration remains deferred.

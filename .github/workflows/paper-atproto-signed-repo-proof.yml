@@ -81,6 +81,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-outbox-dispatch.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/signed-record-projection.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-generation-ticket.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.test.mjs
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
@@ -117,6 +119,12 @@ jobs:
           export ATPROTO_REFERENCE_REPO_ENTRY="$RUNNER_TEMP/atproto-reference/node_modules/@atproto/repo/dist/index.js"
           test -f "$ATPROTO_REFERENCE_REPO_ENTRY"
           node pod-provider/backend/candidates/atproto-signed-repo-proof/reference-interop.mjs
+          # The full-MST candidate is still nonactivated and cannot pull a
+          # runtime version from npm. The exact same separately pinned
+          # upstream library is injected for its disposable PG18 proof.
+          ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
+            node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.test.mjs
 
 
   real-fuseki-rdf-projection-fence:

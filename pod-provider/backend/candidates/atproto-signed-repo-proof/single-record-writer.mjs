@@ -20,7 +20,7 @@ const DID = /^did:plc:[a-z2-7]{24}$/u;
 const CID_RE = /^bafyre[a-z2-7]{53}$/u;
 const MAX_GENERATION = Number.MAX_SAFE_INTEGER;
 const TID_ALPHABET = '234567abcdefghijklmnopqrstuvwxyz';
-function nextTidAfter(previous) {
+export function nextTidAfter(previous) {
   assertTid(previous);
   let value = 0n;
   for (const symbol of previous) {

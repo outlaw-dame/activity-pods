@@ -51,7 +51,7 @@ function active(account,did,pdsOrigin){
      account.atprotoSource!=='local'||typeof account.handle!=='string') {
     deny('PDS_WRITE_HOSTING_NOT_FOUND',404);
   }
-  if(account.status!=='active')deny('PDS_WRITE_ACCOUNT_INACTIVE',403);
+  if(account.status!=='active')deny('Forbidden',403);
   return account;
 }
 function same(a,b){
@@ -256,7 +256,7 @@ export function createAuthenticatedRecordWriteXrpc({
     }catch(e){
       const code=typeof e?.code==='string'&&
         ['InvalidRequest','InvalidSwap','RecordAlreadyExists','RecordNotFound',
-          'RepoNotFound',
+          'RepoNotFound','Forbidden',
           'AuthRequired','MethodNotImplemented'].includes(e.code)?e.code:
         'InternalError';
       const status=code==='InternalError'?503:

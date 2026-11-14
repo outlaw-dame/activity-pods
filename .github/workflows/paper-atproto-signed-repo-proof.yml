@@ -81,6 +81,9 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-multirecord-xrpc.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pds-write-xrpc-candidate.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pds-write-xrpc.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/hosted-signup-pds-attestation.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-signup-completion-evidence.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-hosted-signup.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-record-write-consent-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/signed-single-record.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/single-record-writer.mjs
@@ -174,6 +177,16 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/pds-write-xrpc.test.mjs
+          # The new-account release probe reads current Solid/PG evidence,
+          # independently requests real loopback XRPC over HTTP, verifies
+          # the signed genesis CAR and only then enters the v4 PG completion.
+          NODE_ENV=test \
+          PAPER_ACCOUNTS_DISPOSABLE=confirmed \
+          PAPER_ACCOUNT_COMPLETION_DISPOSABLE=confirmed \
+          ATPROTO_PDS_ATTESTATION_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
+            node --test pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-hosted-signup.test.mjs
 
 
       - name: Start disposable pinned Redpanda 26.2.7 broker (local Kafka listener only)

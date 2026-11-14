@@ -7,6 +7,7 @@
  */
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
+const http=require('node:http');
 const Redis=require('ioredis');
 const {
   SignJWT,generateKeyPair,exportJWK
@@ -188,6 +189,94 @@ async function main(){
    assert.equal((await candidate.authorize(params(token,putProof,'put'))).action,'put');
    const deleteProof=await signedProof(token,{endpoint:origin+'/xrpc/com.atproto.repo.deleteRecord'});
    assert.equal((await candidate.authorize(params(token,deleteProof,'delete'))).action,'delete');
+   // The HTTP edge itself must consume a single signed DPoP proof and
+   // perform its post-commit authorization through the same request-local
+   // closure without running verifyProof a second time.
+   const {createAuthenticatedRecordWriteXrpc}=await import(
+     pathToFileURL(resolve(__dirname,
+       '../candidates/atproto-signed-repo-proof/pds-write-xrpc-candidate.mjs')).href
+   );
+   let head='bafyre'+'a'.repeat(53),records=0;
+   const nextHead='bafyre'+'b'.repeat(53);
+   const recordCid='bafyre'+'c'.repeat(53);
+   let onProjected=null;
+   const writer={
+     verify:async()=>({
+       commitCid:head,rootCid:'bafyre'+'d'.repeat(53),
+       rev:records?'2222222222223':'2222222222222',
+       recordCid:records?recordCid:null,generation:records+1
+     }),
+     write:async args=>{
+       assert.equal(args.expectedCommitCid,head);
+       assert.equal(args.accountId,webId);
+       assert.equal(args.did,did);
+       records++;head=records===1?nextHead:'bafyre'+'e'.repeat(53);
+       return {verified:true,accountId:webId,did,commitCid:head,
+         rootCid:'bafyre'+'d'.repeat(53),rev:records===1?
+           '2222222222223':'2222222222224',
+         recordCid,generation:records+1};
+     }
+   };
+   const edge=createAuthenticatedRecordWriteXrpc({
+     pdsOrigin:origin,fixtureOnly:true,
+     resolveHostedAccount:async()=>({
+       webId,activityPubActorId:webId,did,
+       pdsUrl:origin,handle:'writer.paper.example.org',
+       atprotoManaged:true,atprotoSource:'local',status:'active'
+     }),
+     authorizeOwner:candidate.authorize,
+     resolveSigner:async()=>({publicKeyPem:'disposable-public-key',
+       signer:async()=>Buffer.alloc(64)}),
+     createFencedWriter:async()=>writer,
+     finalizeProjection:async args=>{
+       if(onProjected)await onProjected();
+       return {ready:true,accountId:webId,did,commitCid:args.commitCid,
+         rev:args.rev};
+     }
+   });
+   const server=http.createServer((req,res)=>edge.handle(req,res));
+   try{
+     await new Promise((done,fail)=>{server.once('error',fail);
+       server.listen(0,'127.0.0.1',done);});
+     const route='http://127.0.0.1:'+server.address().port+path;
+     const body=()=>({
+       repo:did,collection,rkey:'3jzm3xwpf2222',swapCommit:head,
+       record:{$type:collection,text:'authenticated',createdAt:
+         '2026-11-14T00:00:00.000Z'}
+     });
+     const post=async(proof,tokenValue=token)=>{
+       const response=await fetch(route,{method:'POST',headers:{
+         'content-type':'application/json',
+         authorization:'DPoP '+tokenValue,dpop:proof
+       },body:JSON.stringify(body()),signal:AbortSignal.timeout(6000)});
+       return {status:response.status,data:await response.json()};
+     };
+     const initialProof=await signedProof();
+     const proofsBefore=proofVerifications;
+     const accepted=await post(initialProof);
+     assert.equal(accepted.status,200,JSON.stringify(accepted.data));
+     assert.equal(records,1);
+     assert.equal(proofVerifications,proofsBefore+1,
+       'HTTP request proof must be consumed only once even after commit');
+     assert.equal(accepted.data.commit.cid,nextHead);
+     const replay=await post(initialProof);
+     assert.equal(replay.status,401);
+     assert.equal(replay.data.error,'AuthRequired');
+     assert.equal(records,1);
+     onProjected=async()=>{
+       pg={...pg,state:'blocked',revision:'2'};
+     };
+     const duringRevocation=await post(await signedProof());
+     assert.equal(duringRevocation.status,503,
+       'after durable signed write, revocation must withhold success');
+     assert.equal(records,2);
+     assert.equal(duringRevocation.data.error,'InternalError');
+     pg={...pg,state:'active',revision:'1'};
+     onProjected=null;
+   }finally{
+     await new Promise((ok,fail)=>server.close(e=>e?fail(e):ok()));
+   }
+
    // A revoked canonical PG consent invalidates the request-local closure,
    // regardless of a still cryptographically valid, unexpired token.
    pg={...pg,state:'blocked',revision:'2'};

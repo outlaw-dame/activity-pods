@@ -38,11 +38,18 @@ migration. It grants the signed writer:
   PostgreSQL permits `SELECT ... FOR UPDATE` on the job. It cannot
   directly change projected head, generation, lease, status,
   `applied_at`, or evidence.
-- EXECUTE of exactly one carefully restricted SECURITY DEFINER
-  `reset_after_signed_commit` function, which moves an **applied**
-  preceding generation to **pending** only when the new PG head,
-  durable pending outbox and immutable mutation history all match.
-  A duplicate or stale replay returns no row and does nothing.
+- EXECUTE of two narrowly scoped SECURITY DEFINER functions:
+  `lock_writer_consent` in the canonical authority schema checks the
+  **exact DID, owner, approved app, SAI grant and revision** and takes
+  PostgreSQL `FOR SHARE` locks until the caller's transaction commits.
+  This is required because ordinary PostgreSQL `SELECT ... FOR SHARE`
+  itself needs an UPDATE grant; the signed writer must **never** receive
+  UPDATE on canonical identity or consent. A false/missing match
+  rejects the signed commit.
+  `reset_after_signed_commit` moves an **applied** preceding generation
+  to **pending** only when the new PG head, durable pending outbox
+  and immutable mutation history all match. A duplicate or stale
+  replay returns no row and does nothing.
 
 The definer has a trusted `search_path=pg_catalog,pg_temp` and fully
 qualified table references. PUBLIC function execution is revoked in
@@ -53,8 +60,10 @@ the signed-head compare-and-swap. A separately reviewed projection
 worker must prove Jena's monotone CAS and mark PostgreSQL applied.
 
 The writer's existing PG transaction still locks the exact repository
-and RDF projection job, checks current canonical consent with
-`FOR SHARE`, writes changed blocks + signed commit + native outbox
+and RDF projection job, uses the restricted security-definer
+`lock_writer_consent` to take `FOR SHARE` on the canonical grant within
+that exact **same connection and transaction**, and writes changed blocks +
+signed commit + native outbox
 atomically, and calls the guarded definer **before COMMIT**. No
 network call takes place while PG locks are held, and uncertain
 COMMIT outcomes are never blindly retried.

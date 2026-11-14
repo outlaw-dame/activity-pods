@@ -12,6 +12,7 @@ const {
 const restrictedRole = {
   rolsuper:false,rolcreatedb:false,rolcreaterole:false,
   rolreplication:false,rolbypassrls:false,rolcanlogin:true,
+  importer_member:false,owner_member:false,
   schema_create:false,identity_read:true,consent_read:true,
   identity_insert:false,identity_update:false,identity_delete:false,
   identity_truncate:false,consent_insert:false,consent_update:false,
@@ -80,7 +81,8 @@ test('role validation rejects privileged importer or schema-owner credentials',a
   for(const violation of [
     {rolsuper:true},{identity_insert:true},{identity_update:true},
     {identity_delete:true},{identity_truncate:true},{consent_update:true},
-    {schema_create:true},{revoke_execute:false},{identity_read:false}
+    {schema_create:true},{importer_member:true},{owner_member:true},
+    {revoke_execute:false},{identity_read:false}
   ]){
     await expect(assertRestrictedPgAuthorityLogin({
       query:async()=>({rowCount:1,rows:[{...restrictedRole,...violation}]})

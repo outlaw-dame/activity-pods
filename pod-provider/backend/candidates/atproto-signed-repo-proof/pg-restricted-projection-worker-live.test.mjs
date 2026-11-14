@@ -84,6 +84,30 @@ test('PG18 separately credentialed projection worker refuses stale ACK and forbi
     await forbidden(assertRestrictedProjectionWorkerLogin(signerPool),
       'PROJECTION_WORKER_ROLE_REQUIRED');
 
+    // Adversarial real column grants: PostgreSQL table-level UPDATE
+    // inspection alone misses these. The worker's next startup must
+    // refuse every leaked INSERT or UPDATE grant even if narrow.
+    for(const grantCase of [
+      {priv:'UPDATE',column:'state',table:'paper_atproto_repo_proof.rdf_projection_jobs'},
+      {priv:'UPDATE',column:'head_cid',table:'paper_atproto_repo_proof.repos'},
+      {priv:'UPDATE',column:'status',table:'paper_atproto_repo_proof.native_event_outbox'},
+      {priv:'INSERT',column:'block',table:'paper_atproto_repo_proof.blocks'},
+      {priv:'UPDATE',column:'revision',table:'paper_atproto_authority.consents'},
+      {priv:'INSERT',column:'source_proof_sha256',table:'paper_atproto_authority.identities'}
+    ]){
+      const statement=grantCase.priv+' ('+grantCase.column+') ON '+
+        grantCase.table;
+      await admin.query('GRANT '+statement+' TO '+id(worker));
+      try{
+        await forbidden(assertRestrictedProjectionWorkerLogin(workerPool),
+          'PROJECTION_WORKER_ROLE_REQUIRED');
+      }finally{
+        await admin.query('REVOKE '+statement+' FROM '+id(worker));
+      }
+      assert.equal((await assertRestrictedProjectionWorkerLogin(workerPool)).restricted,
+        true,'valid restricted privileges restored after adversarial grant');
+    }
+
     const keys=crypto.generateKeyPairSync('ec',{namedCurve:'secp256k1'});
     const key={
       publicKeyPem:keys.publicKey.export({format:'pem',type:'spki'}).toString(),
@@ -258,6 +282,7 @@ test('PG18 separately credentialed projection worker refuses stale ACK and forbi
     console.log('RESTRICTED_PROJECTION_PG18_PROOF '+JSON.stringify({
       independentLogins:true,roleAttestation:true,
       noSigning:true,noRegrant:true,noDirectProjectionUpdate:true,
+      injectedColumnGrantRefusal:true,
       noSetRole:true,singleLeaseWinner:true,staleAckDenied:true,
       wrongHeadAckDenied:true,readbackBeforeAck:true,
       verifiedSignedGenesis:true,canonicalRevocationDenied:true,

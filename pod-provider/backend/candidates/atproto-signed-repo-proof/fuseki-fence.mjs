@@ -47,12 +47,23 @@ function accountCheck(accountId) {
  */
 export function buildFencedRepoProjectionSparql({
   resourceUri, graphUri = null, accountId, did, rootCid, rev, fence,
+  expectedPreviousRootCid = null, expectedPreviousRev = null,
   consentFence = null
 } = {}) {
   accountCheck(accountId);
   if (!DID.test(did || '') || !CID.test(rootCid || '') || !TID.test(rev || '') ||
       typeof fence !== 'string' || !FENCE.test(fence) || BigInt(fence) > MAX) {
     refused('Invalid signed repository projection or lease epoch');
+  }
+  // A signed record update is permitted only when the Jena projection
+  // still holds either the exact independently verified prior PG head or
+  // the already-applied new head from a crash-before-ACK replay.
+  const hasPrior = expectedPreviousRootCid !== null ||
+    expectedPreviousRev !== null;
+  if (hasPrior && (!CID.test(expectedPreviousRootCid || '') ||
+      !TID.test(expectedPreviousRev || '') ||
+      expectedPreviousRev >= rev)) {
+    refused('A record projection needs the exact signed preceding root and revision');
   }
   const subject = iri(resourceUri);
   const graph = graphUri === null ? inner => inner :
@@ -98,12 +109,24 @@ export function buildFencedRepoProjectionSparql({
   }).join(' ');
 
   // Reject *any* malformed, equal or higher fence, not merely the first value.
-  // Also refuse replacing an existing different CID or rev. Only a genesis
-  // replay with the same immutable PG head may advance the fence.
-  const immutable = 'FILTER NOT EXISTS { ' + subject + ' apods:repoRootCid ?differentRoot . ' +
-    'FILTER(STR(?differentRoot) != ' + literal(rootCid) + ') } ' +
+  // Genesis is immutable. A subsequent signed record mutation may update
+  // only the *exact* verified parent projection. A crash after Jena CAS but
+  // before PG ACK can replay the same signed new head at a higher lease fence.
+  // Reject mixed root/rev pairs or duplicate contradictory RDF values.
+  const immutable = hasPrior ?
+    'FILTER(BOUND(?oldRoot) && BOUND(?oldRev) && BOUND(?oldFence) && (' +
+      '(STR(?oldRoot) = ' + literal(expectedPreviousRootCid) +
+      ' && STR(?oldRev) = ' + literal(expectedPreviousRev) + ') || ' +
+      '(STR(?oldRoot) = ' + literal(rootCid) +
+      ' && STR(?oldRev) = ' + literal(rev) + '))) ' +
+    'FILTER NOT EXISTS { ' + subject + ' apods:repoRootCid ?differentRoot . ' +
+      'FILTER(STR(?differentRoot) != STR(?oldRoot)) } ' +
     'FILTER NOT EXISTS { ' + subject + ' apods:repoRev ?differentRev . ' +
-    'FILTER(STR(?differentRev) != ' + literal(rev) + ') } ';
+      'FILTER(STR(?differentRev) != STR(?oldRev)) } ' :
+    'FILTER NOT EXISTS { ' + subject + ' apods:repoRootCid ?differentRoot . ' +
+      'FILTER(STR(?differentRoot) != ' + literal(rootCid) + ') } ' +
+    'FILTER NOT EXISTS { ' + subject + ' apods:repoRev ?differentRev . ' +
+      'FILTER(STR(?differentRev) != ' + literal(rev) + ') } ';
   const noHigher = 'FILTER NOT EXISTS { ' + subject + ' apods:repoProjectionFence ?priorFence . ' +
     'FILTER(!REGEX(STR(?priorFence), "^[0-9]+$") || ' +
     'xsd:integer(STR(?priorFence)) >= ' + fence + ') } ';

@@ -356,3 +356,41 @@ prevData, ops and diff CAR, authenticated provider publisher, Redpanda
 integration, real multi-process SIGKILL, persistent restore and relay
 acceptance remain release blockers. There is no production dispatcher
 registration in this candidate.
+
+
+## Signed record generations: predecessor-bound PG-to-Jena recovery
+
+The original recovery candidate intentionally required genesis generation 1
+and treated its root/revision as immutable. That prevented the new signed
+record writer from ever progressing a version-2 head through the existing
+Jena projection intent.
+
+The nonactivated recovery proof now accepts later generations **only** when
+the trusted evidence includes a current cryptographically verified signed
+CAR and a verified predecessor commit/root/revision matching the persisted
+immutable mutation audit. The PostgreSQL recovery row must match exactly
+the signed current generation and commit/root/revision. Genesis-only
+verifiers cannot attest to later generations, even if provided a current
+root CID string.
+
+The actual Fuseki update accepts an exact signed predecessor-root and
+revision pair for generation changes, and permits either (a) the prior
+projected head changing to the signed successor or (b) the *same*
+successor being replayed after Jena succeeded but before PostgreSQL ACK.
+The monotone Jena lease fence must advance. It rejects unrelated parents,
+partial old/new pairs, conflicting RDF triples, stale/duplicate fences,
+mismatched identities, and a mutation whose parent evidence is missing.
+Genesis retains the earlier immutable-head policy.
+
+The PG18 signed-generation tests prove create/update generation progression,
+rejection of legacy genesis-only verifiers, protected grant revocation,
+tampered parent CID denial, crash between RDF apply and PG ACK, and recovery
+using an incremented fence. The separate real Fuseki/TDB2 stage performs
+actual conditional SPARQL updates and checks the final successor after a
+persistent container restart.
+
+**Still non-production:** this does not turn the candidate RDF writer into a
+real provider Pod LDP handler, nor does it authorize account readiness,
+unblock multi-record MST, implement live SAI grants or activate sync XRPC
+for nonempty repositories. The final provider-controlled mutation/consent
+and production storage release gates remain closed.

@@ -24,6 +24,10 @@ const account = 'https://paper.example.org/users/fuseki-proof';
 const did = 'did:plc:' + 'p'.repeat(24);
 const root = 'bafyre' + 'a'.repeat(53);
 const changedRoot = 'bafyre' + 'b'.repeat(53);
+const finalRoot = 'bafyre' + 'c'.repeat(53);
+const nextRev = '2222222222223';
+const finalRev = '2222222222224';
+const mutableSubject = 'urn:paper:atproto:proof:mutable';
 const rev = '2222222222222';
 const subject = 'urn:paper:atproto:proof:binding';
 const namedSubject = 'urn:paper:atproto:proof:named';
@@ -59,7 +63,9 @@ function update(subjectIri, fence, opts = {}) {
   return buildFencedRepoProjectionSparql({
     resourceUri: subjectIri, graphUri: opts.graphUri || null,
     accountId: account, did: opts.did || did, rootCid: opts.rootCid || root,
-    rev, fence
+    rev: opts.rev || rev, fence,
+    expectedPreviousRootCid: opts.expectedPreviousRootCid || null,
+    expectedPreviousRev: opts.expectedPreviousRev || null
   });
 }
 async function check(subjectIri, opts = {}) {
@@ -79,6 +85,7 @@ async function prepare() {
   assert.throws(() => update(subject, '9223372036854775808'), e => e.code === 'RDF_FENCE_INPUT_INVALID');
   await http('update', prefix + 'INSERT DATA { ' +
     bindingTurtle(subject) +
+    bindingTurtle(mutableSubject) +
     ' GRAPH ' + iri(graph) + ' { ' + bindingTurtle(namedSubject) + ' } ' +
     bindingTurtle(badSubject, ' ; apods:repoProjectionFence "nonnumeric"') +
     bindingTurtle(duplicateSubject) +
@@ -117,6 +124,55 @@ async function prepare() {
   const conflicting = await http('query', prefix +
     'SELECT ?fence WHERE { ' + iri(duplicateSubject) + ' apods:repoProjectionFence ?fence }');
   assert.equal(conflicting.length, 0, 'ambiguous DID must prevent all fenced writes');
+  // A signed later generation may replace ONLY the precise parent
+  // root/revision; an already-applied new head may be replayed with a
+  // higher lease fence after a crash-before-PG-ACK.
+  assert.throws(() => update(mutableSubject, '2', {
+    rootCid: changedRoot, rev: nextRev, expectedPreviousRootCid: root
+  }), e => e.code === 'RDF_FENCE_INPUT_INVALID');
+  await http('update', update(mutableSubject, '1'));
+  let mutable = await check(mutableSubject);
+  assert.equal(mutable.root, root);
+  await http('update', update(mutableSubject, '2', {
+    rootCid: changedRoot, rev: nextRev,
+    expectedPreviousRootCid: root, expectedPreviousRev: rev
+  }));
+  mutable = await check(mutableSubject);
+  assert.equal(mutable.root, changedRoot);
+  assert.equal(mutable.rev, nextRev);
+  assert.equal(mutable.fence, '2');
+  // A stale writer cannot overwrite an already committed projection.
+  await http('update', update(mutableSubject, '2', {
+    rootCid: finalRoot, rev: finalRev,
+    expectedPreviousRootCid: changedRoot, expectedPreviousRev: nextRev
+  }));
+  mutable = await check(mutableSubject);
+  assert.equal(mutable.root, changedRoot);
+  assert.equal(mutable.fence, '2');
+  // A stale parent (even with a future fence) cannot replace this head.
+  await http('update', update(mutableSubject, '3', {
+    rootCid: finalRoot, rev: finalRev,
+    expectedPreviousRootCid: root, expectedPreviousRev: rev
+  }));
+  mutable = await check(mutableSubject);
+  assert.equal(mutable.root, changedRoot);
+  assert.equal(mutable.fence, '2');
+  // Crash replay: identical signed new head, strictly higher lease fence.
+  await http('update', update(mutableSubject, '3', {
+    rootCid: changedRoot, rev: nextRev,
+    expectedPreviousRootCid: root, expectedPreviousRev: rev
+  }));
+  mutable = await check(mutableSubject);
+  assert.equal(mutable.root, changedRoot);
+  assert.equal(mutable.fence, '3');
+  await http('update', update(mutableSubject, '4', {
+    rootCid: finalRoot, rev: finalRev,
+    expectedPreviousRootCid: changedRoot, expectedPreviousRev: nextRev
+  }));
+  mutable = await check(mutableSubject);
+  assert.equal(mutable.root, finalRoot);
+  assert.equal(mutable.rev, finalRev);
+  assert.equal(mutable.fence, '4');
   process.stdout.write('Real TDB2 CAS prepare: 8-way writer race, immutable DID/head, malformed and stale fence all checked.\n');
 }
 async function verify() {
@@ -128,6 +184,10 @@ async function verify() {
   const scoped = await check(namedSubject, { graphUri: graph });
   assert.equal(scoped.fence, '1');
   assert.equal(scoped.root, root);
+  const mutated = await check(mutableSubject);
+  assert.equal(mutated.root, finalRoot);
+  assert.equal(mutated.rev, finalRev);
+  assert.equal(mutated.fence, '4');
   process.stdout.write('Real TDB2 CAS verified across persistent Fuseki restart.\n');
 }
 if (stage === 'prepare') await prepare();

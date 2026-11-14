@@ -137,6 +137,9 @@ export async function proveProviderProtectedStorageBoundary({
     'projector_read_unavailable');
   await deny(ordinaryRoute+'/update','projector',noop,
     'projector_ordinary_write');
+  await deny(ordinaryRoute+'/query','projector',
+    sparqlRead('ordinary','<urn:paper:isolated:ordinary>'),
+    'projector_ordinary_read');
   await deny('/$/datasets','projector',{method:'GET'},
     'projector_admin_access');
 
@@ -148,6 +151,9 @@ export async function proveProviderProtectedStorageBoundary({
     'attestor_write_available');
   await deny(ordinaryRoute+'/update','attestor',noop,
     'attestor_ordinary_write');
+  await deny(ordinaryRoute+'/query','attestor',
+    sparqlRead('ordinary','<urn:paper:isolated:ordinary>'),
+    'attestor_ordinary_read');
   await deny('/$/datasets','attestor',{method:'GET'},
     'attestor_admin_access');
 

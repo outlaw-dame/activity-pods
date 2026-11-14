@@ -33,7 +33,7 @@ function service() {
     if (name === '../../utils/atproto-managed-repo-proof-policy') return policy;
     throw Error('Unexpected dependency: ' + name);
   }, m);
-  return { ...m.exports.methods,
+  return { ...m.exports.methods, actions: m.exports.actions,
     settings: { repoBootstrapRootCid: 'bafyreigenesisplaceholder', repoBootstrapRev: '0' },
     _resolveLocalPdsUrl: () => pds, _signingCallMeta: () => ({}) };
 }
@@ -81,6 +81,13 @@ test('production never permits disposable repository bridge', async () => {
     await assert.rejects(service().initializeRepoState(ctx,
       {canonicalAccountId:webId,did,handle}), e=>e.type==='ATPROTO_REPO_PROOF_UNAVAILABLE');
     assert.equal(calls,0);
+    // A caller invoking the Moleculer service directly must not create a
+    // key or PLC genesis while the public signup release fuse is closed.
+    await assert.rejects(service().actions.provisionForAccount.handler({
+      params: { canonicalAccountId:webId, webId: webId, didMethod:'plc' },
+      call: async () => { calls++; throw Error('identity mutation attempted'); }
+    }), e => e.type === 'ATPROTO_PDS_REPOSITORY_NOT_READY' && e.code === 503);
+    assert.equal(calls,0);
   });
 });
 test('missing provider capability refuses before binding write', async () => {
@@ -119,6 +126,24 @@ test('bound signed repository is verified, sanitized and rechecked after write',
     await assert.rejects(methods.verifyProvisionedState(ctx,{
       canonicalAccountId:webId,binding:{...binding(),repoRootCid:commitCid},didMethod:'plc'
     }),e=>e.type==='ATPROTO_REPO_BINDING_MISMATCH');
+  });
+});
+test('untrusted signed repository response does not write a ready binding', async () => {
+  await env(enabled, async () => {
+    for (const bogus of [null, { ...proof, verified:false },
+      { ...proof, pdsOrigin:'https://other.example.org' },
+      { ...proof, rootCid:'bafyreigenesisplaceholder' }]) {
+      let writes = 0;
+      const request={call:async action => {
+        if(action==='atproto-managed-repository.bootstrapAndVerify') return bogus;
+        if(action==='identitybindings.upsertRepoBootstrap') writes++;
+        throw Error('unexpected action');
+      }};
+      await assert.rejects(service().initializeRepoState(request,
+        {canonicalAccountId:webId,did,handle}),
+        e => e.type==='ATPROTO_REPO_PROOF_INVALID');
+      assert.equal(writes,0,'untrusted proof must not become signed repo state');
+    }
   });
 });
 test('ordinary development bootstrap remains explicitly fixture-only', async () => {

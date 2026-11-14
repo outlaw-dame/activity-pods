@@ -184,7 +184,8 @@ async function signedNewCommit({did,rev,rootCid,signer,publicKey}) {
  * same historical one-operation-per-commit audit. No new account DB.
  */
 export function createReferenceMstWriter({
-  pool,reference,authorize,lockCanonicalConsent=null,fixtureOnly=false
+  pool,reference,authorize,lockCanonicalConsent=null,
+  restrictedProjectionTransition=false,fixtureOnly=false
 }={}) {
   if(fixtureOnly!==true || process.env.NODE_ENV==='production' ||
      process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed') {
@@ -195,7 +196,9 @@ export function createReferenceMstWriter({
   if(typeof pool?.query!=='function' ||
      typeof pool?.connect!=='function' ||
      typeof authorize!=='function' ||
-     (lockCanonicalConsent!==null && typeof lockCanonicalConsent!=='function')){
+     (lockCanonicalConsent!==null && typeof lockCanonicalConsent!=='function') ||
+     (restrictedProjectionTransition===true && lockCanonicalConsent===null) ||
+     typeof restrictedProjectionTransition!=='boolean'){
     fail('REFERENCE_MST_CONFIGURATION_INVALID');
   }
   const auth=async(accountId,did,expectedCommitCid)=>{
@@ -457,18 +460,32 @@ export function createReferenceMstWriter({
           action,path,prior.recordCid,newCid,generation]
       );
       if(testFailAfterOutbox)fail('REFERENCE_MST_TEST_INJECTED_FAILURE');
-      const reset=await client.query(
-        'UPDATE '+TABLE+'.rdf_projection_jobs SET head_cid=$3,'+
-        'root_cid=$4,rev=$5,generation=$6,'+
-        "state='pending',lease_owner=NULL,lease_until=NULL,"+
-        'attempt_count=0,next_attempt_at=clock_timestamp(),'+
-        'last_error_code=NULL,applied_at=NULL,updated_at=clock_timestamp() '+
-        'WHERE account_id=$1 AND did=$2 AND head_cid=$7 AND root_cid=$8 '+
-        "AND rev=$9 AND generation=$10 AND state='applied' "+
-        'RETURNING generation,lease_epoch',
-        [accountId,did,signed.cid,rootCid,rev,generation,
-          prior.commitCid,prior.rootCid,prior.rev,prior.generation]
-      );
+      // When the provider runs with its least-privileged signed-writer
+      // LOGIN, it has NO UPDATE grant on the RDF projection table.
+      // A SECURITY DEFINER function checks the durable signed head,
+      // native outbox and immutable mutation row, then moves only the
+      // exact applied generation to pending. It cannot mint an 'applied'
+      // RDF state. The legacy direct SQL path remains NONACTIVATED and
+      // is tested separately until the production cutover is reviewed.
+      const reset=restrictedProjectionTransition
+        ? await client.query(
+          'SELECT generation,lease_epoch FROM '+TABLE+
+          '.reset_after_signed_commit($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+          [accountId,did,signed.cid,rootCid,rev,generation,
+            prior.commitCid,prior.rootCid,prior.rev,prior.generation]
+        )
+        : await client.query(
+          'UPDATE '+TABLE+'.rdf_projection_jobs SET head_cid=$3,'+
+          'root_cid=$4,rev=$5,generation=$6,'+
+          "state='pending',lease_owner=NULL,lease_until=NULL,"+
+          'attempt_count=0,next_attempt_at=clock_timestamp(),'+
+          'last_error_code=NULL,applied_at=NULL,updated_at=clock_timestamp() '+
+          'WHERE account_id=$1 AND did=$2 AND head_cid=$7 AND root_cid=$8 '+
+          "AND rev=$9 AND generation=$10 AND state='applied' "+
+          'RETURNING generation,lease_epoch',
+          [accountId,did,signed.cid,rootCid,rev,generation,
+            prior.commitCid,prior.rootCid,prior.rev,prior.generation]
+        );
       if(reset.rowCount!==1)fail('REFERENCE_MST_PROJECTION_NOT_APPLIED');
       commitAttempted=true;
       await client.query('COMMIT');inTransaction=false;

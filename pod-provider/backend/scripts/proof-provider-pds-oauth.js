@@ -166,6 +166,25 @@ async function main(){
    await error(candidate.authorize(params(token,await signedProof(token,{id:goodJti}))),
      'DPOP_REPLAY_DETECTED');
 
+   const wrongIssuer=await issue(allowedScope,clientId,jkt,origin,
+     'https://untrusted.example.org');
+   await error(candidate.authorize(params(wrongIssuer,
+     await signedProof(wrongIssuer))),'PDS_OAUTH_NOT_AUTHORIZED');
+   const wrongAudience=await issue(allowedScope,clientId,jkt,
+     'https://another-pds.example.org');
+   await error(candidate.authorize(params(wrongAudience,
+     await signedProof(wrongAudience))),'PDS_OAUTH_NOT_AUTHORIZED');
+   const wrongClient=await issue(allowedScope,
+     'https://unapproved.example.org/client');
+   await error(candidate.authorize(params(wrongClient,
+     await signedProof(wrongClient))),'PDS_OAUTH_NOT_AUTHORIZED');
+   const noNonce=await sign({token,proofNonce:undefined});
+   await error(candidate.authorize(params(token,noNonce)),
+     'INVALID_DPOP_NONCE');
+   const swappedToken=await issue();
+   await error(candidate.authorize(params(swappedToken,
+     await signedProof(swappedToken,{accessHash:sha(token)}))),
+     'INVALID_DPOP_ATH');
    const noAth=await signedProof(token,{accessHash:'A'.repeat(43)});
    await error(candidate.authorize(params(token,noAth)),'INVALID_DPOP_ATH');
    const forged=await signedProof(token,{proofKey:otherDpopKey,jwk:otherJwk});

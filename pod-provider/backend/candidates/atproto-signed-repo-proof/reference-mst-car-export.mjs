@@ -156,13 +156,19 @@ export function createReferenceMstCarExporter({
     await checkCurrent(pool,proof);
 
     const blocks=[];
-    const visited=new Set();
+    const visited=new Map();
     let leafCount=0,nodeCount=0;
     let payloadBytes=0;
     async function append(link,{recordPath=null,mst=false}={}){
       const text=link.toString();
       checkedCid(text);
-      if(visited.has(text))return;
+      const cached=visited.get(text);
+      if(cached!==undefined){
+        // A single CID can legitimately be shared by multiple record keys.
+        // Each path still needs its own collection-to-$type check.
+        if(recordPath!==null)checkRecord(decodeCanonical(cached),recordPath);
+        return;
+      }
       if(blocks.length>=MAX_BLOCKS)deny('REFERENCE_CAR_BLOCK_LIMIT');
       const bytes=await loadBlock(pool,did,link);
       payloadBytes+=bytes.length+96;
@@ -177,7 +183,7 @@ export function createReferenceMstCarExporter({
           deny('REFERENCE_CAR_MST_INVALID');
         }
       }
-      visited.add(text);
+      visited.set(text,bytes);
       blocks.push({cid:link,bytes});
     }
     // Root commit must be first in the CAR block ordering as well as the
@@ -229,6 +235,8 @@ export function createReferenceMstCarExporter({
     await checkCurrent(pool,proof);
     if((await authorize(operation))!==true)deny('REFERENCE_CAR_NOT_AUTHORIZED');
     const carBytes=await encodeCar(blocks,maxBytes);
+    await checkCurrent(pool,proof);
+    if((await authorize(operation))!==true)deny('REFERENCE_CAR_NOT_AUTHORIZED');
     return Object.freeze({
       verified:true,releaseAuthorized:false,accountId,did,
       commitCid:proof.commitCid,rootCid:proof.rootCid,

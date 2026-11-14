@@ -244,8 +244,9 @@ async function main(){
        record:{$type:collection,text:'authenticated',createdAt:
          '2026-11-14T00:00:00.000Z'}
      });
-     const post=async(proof,tokenValue=token)=>{
-       const response=await fetch(route,{method:'POST',headers:{
+     const post=async(proof,tokenValue=token,method='createRecord')=>{
+       const endpointUrl=route.replace('createRecord',method);
+       const response=await fetch(endpointUrl,{method:'POST',headers:{
          'content-type':'application/json',
          authorization:'DPoP '+tokenValue,dpop:proof
        },body:JSON.stringify(body()),signal:AbortSignal.timeout(6000)});
@@ -266,7 +267,10 @@ async function main(){
      onProjected=async()=>{
        pg={...pg,state:'blocked',revision:'2'};
      };
-     const duringRevocation=await post(await signedProof());
+     const duringRevocation=await post(
+       await signedProof(token,{endpoint:origin+'/xrpc/com.atproto.repo.putRecord'}),
+       token,'putRecord'
+     );
      assert.equal(duringRevocation.status,503,
        'after durable signed write, revocation must withhold success');
      assert.equal(records,2);

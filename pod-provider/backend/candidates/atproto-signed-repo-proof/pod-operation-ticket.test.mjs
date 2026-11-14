@@ -15,7 +15,8 @@ const rootCid = 'bafyre' + 'a'.repeat(53);
 const rev = '2222222222222';
 const scope = Object.freeze({
   accountId, appUri, grantUri, did, epoch: '1',
-  operation: 'project', projectionFence: '1', rootCid, rev
+  operation: 'project', projectionFence: '1', rootCid, rev,
+  generation: 1, previousRootCid: null, previousRev: null
 });
 const consent = consentSubject(accountId, appUri);
 
@@ -31,7 +32,10 @@ test('provider HMAC ticket is 30-second, operation and exact immutable-head scop
     { ...scope, epoch: '2' },
     { ...scope, projectionFence: '2' },
     { ...scope, projectionFence: null },
-    { ...scope, operation: 'revoke', projectionFence: null, rootCid: null, rev: null },
+    { ...scope, generation: 2, previousRootCid: 'bafyre' + 'b'.repeat(53),
+      previousRev: '2222222222221' },
+    { ...scope, operation: 'revoke', projectionFence: null, rootCid: null,
+      rev: null, generation: null },
     { ...scope, appUri: 'https://evil.example/app' },
     { ...scope, grantUri: 'https://evil.example/grant' },
     { ...scope, did: 'did:plc:' + 'b'.repeat(24) }
@@ -39,8 +43,8 @@ test('provider HMAC ticket is 30-second, operation and exact immutable-head scop
     assert.throws(() => authority.verify(signed, mismatch),
       e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
   }
-  // A recycled v1 operation ticket is missing independent PG recovery
-  // fencing and cannot authorize any v2 project operation.
+  // Prior tickets without a signed generation/parent or current lease
+  // fence must not authorize v3 projection operations.
   assert.throws(() => authority.issue({
     ...scope, projectionFence: undefined
   }), e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
@@ -48,6 +52,34 @@ test('provider HMAC ticket is 30-second, operation and exact immutable-head scop
   assert.equal(authority.verify(second, { ...scope, projectionFence: '2' }).projectionFence, '2');
   assert.throws(() => authority.verify(second, scope),
     e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
+  const successor = {
+    ...scope, rootCid: 'bafyre' + 'c'.repeat(53), rev: '2222222222224',
+    projectionFence: '3', generation: 2,
+    previousRootCid: rootCid, previousRev: rev
+  };
+  const mutationTicket = authority.issue(successor);
+  assert.equal(authority.verify(mutationTicket, successor).generation, 2);
+  for (const incorrect of [
+    { ...successor, generation: 1, previousRootCid: null, previousRev: null },
+    { ...successor, generation: 3 },
+    { ...successor, previousRootCid: 'bafyre' + 'd'.repeat(53) },
+    { ...successor, previousRev: '2222222222223' },
+    { ...successor, rootCid: rootCid },
+    { ...successor, rev: rev },
+    { ...successor, projectionFence: '4' }
+  ]) {
+    assert.throws(() => authority.verify(mutationTicket, incorrect),
+      e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
+  }
+  assert.throws(() => authority.issue({
+    ...successor, previousRootCid: null
+  }), e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
+  assert.throws(() => authority.issue({
+    ...successor, previousRev: successor.rev
+  }), e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
+  assert.throws(() => authority.issue({
+    ...scope, generation: undefined
+  }), e => e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');
   const tampered = signed.slice(0,-1) + (signed.endsWith('A') ? 'B' : 'A');
   assert.throws(() => authority.verify(tampered, scope), e =>
     e.code === 'POD_PROJECTION_PROVIDER_UNAUTHORIZED');

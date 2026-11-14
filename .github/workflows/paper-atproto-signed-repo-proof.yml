@@ -70,6 +70,10 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pod-fence-child.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket-canonical-gate.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
+          node --check pod-provider/backend/utils/atproto-canonical-pg-authority.js
+          node --check pod-provider/backend/services/utils/atproto-sai-native-fence.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-xrpc-candidate.mjs
@@ -115,6 +119,23 @@ jobs:
         run: |
           set -euo pipefail
           npm test --prefix pod-provider/backend/candidates/atproto-signed-repo-proof
+
+      - name: Verify canonical-PG requirement for signed projection tickets
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node --test pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket-canonical-gate.test.mjs
+
+      - name: Prove restricted canonical PG roles and competing revocation
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
 
       - name: Independently verify against Bluesky reference repository implementation
         shell: bash
@@ -265,6 +286,17 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/pod-per-user-live.mjs prepare
+
+      - name: Prove forged privileged Fuseki consent cannot revive revoked PG authority
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+          FUSEKI_URL: http://127.0.0.1:3040
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
 
       - name: Restart persistent Fuseki TDB2
         run: |

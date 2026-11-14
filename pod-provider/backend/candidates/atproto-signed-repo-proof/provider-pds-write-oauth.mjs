@@ -141,7 +141,8 @@ export function createProviderPdsWriteAuthorization({
          consent.canonicalAccountId!==webId||
          consent.clientId!==clientId||
          !scopeAllows(consent.scope,collection,action)||
-         grant?.status!=='active'||
+         grant?.state!=='active'||
+         grant?.identityState!=='active'||
          !canonical(grant.grantUri)||
          !EPOCH.test(String(grant.revision)))deny();
       return Object.freeze({verified:true,ownerDid:did,ownerWebId:webId,

@@ -51,8 +51,10 @@ export async function assertRestrictedRdfAttestorLogin(pool){
     x.attestation_truncate||x.attestation_trigger||
     x.attestation_references||!x.can_attest||x.can_ack||
     x.can_legacy_ack||x.can_claim||x.can_revoke)deny();
-  try{await assertExactRuntimePrivileges(pool,{role:'rdf-attestor'});}
-  catch{deny();}
+  try{
+    await assertExactRuntimePrivileges(pool,{role:'rdf-attestor'});
+    await assertNoDirectAttestationTablePrivileges(pool);
+  }catch{deny();}
   return Object.freeze({independent:true,mayWriteRdfSql:false,
     mayAck:false,mayRegrant:false,postgresVersion:x.version});
 }

@@ -150,7 +150,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE changed integer;
 BEGIN
   IF p_webid IS NULL OR p_ap_actor IS NULL OR p_ap_actor !~ '^https://'
-     OR p_did IS NULL OR p_did !~ '^did:plc:[a-z2-7]{24}
+     OR p_did IS NULL OR p_did !~ '^did:plc:[a-z2-7]{24}$'
      OR p_pds_url IS NULL OR p_pds_url !~ '^https://'
      OR p_evidence IS NULL OR octet_length(p_evidence) <> 32 THEN
     RETURN false;
@@ -176,56 +176,6 @@ CREATE FUNCTION paper_account_reservation_proof.dataset_binding_is_live(
   p_dataset text, p_webid text
 ) RETURNS boolean
 LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM paper_account_reservation_proof.reservations r
-    WHERE r.provider_id = p_provider AND r.app_client_id = p_app
-      AND r.reservation_id = p_reservation AND r.fence_token = p_fence
-      AND r.username = p_dataset AND r.expected_webid = p_webid
-      AND r.state = 'side_effects_started'
-      AND r.lease_expires_at > clock_timestamp()
-  );
-$$;
-
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA paper_account_reservation_proof FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.reserve(
-  text, text, bytea, bytea, text, text, integer, integer
-) TO paper_account_proof_worker;
-GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.start_side_effects(
-  text, text, bytea, uuid, uuid
-) TO paper_account_proof_worker;
-GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.complete(
-  text, text, bytea, uuid, uuid, text, text, text, text, bytea
-) TO paper_account_proof_worker;
-GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.dataset_binding_is_live(
-  text, text, uuid, uuid, text, text
-) TO paper_account_proof_issuer;
-COMMIT;
-
-     OR p_pds_url !~ '^https://'
-     OR octet_length(p_evidence) <> 32 THEN
-    RETURN false;
-  END IF;
-  UPDATE paper_account_reservation_proof.reservations r
-    SET state = 'completed', completed_at = clock_timestamp(),
-        activitypub_actor_id = p_ap_actor, atproto_did = p_did,
-        atproto_pds_url = p_pds_url, evidence_hash = p_evidence
-    WHERE r.provider_id = p_provider AND r.app_client_id = p_app
-      AND r.idempotency_hash = p_key_hash AND r.reservation_id = p_reservation
-      AND r.fence_token = p_fence AND r.state = 'side_effects_started'
-      AND r.expected_webid = p_webid;
-  GET DIAGNOSTICS changed = ROW_COUNT;
-  RETURN changed = 1;
-END;
-$$;
-
--- Separate, least-privileged issuer credential. Claim signer must query the
--- authoritative reservation before issuing a short-lived dataset ticket.
--- No table enumeration, mutation or general-purpose SQL is delegated.
-CREATE FUNCTION paper_account_reservation_proof.dataset_binding_is_live(
-  p_provider text, p_app text, p_reservation uuid, p_fence uuid,
-  p_dataset text, p_webid text
-) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT EXISTS (
     SELECT 1 FROM paper_account_reservation_proof.reservations r
     WHERE r.provider_id = p_provider AND r.app_client_id = p_app

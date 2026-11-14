@@ -11,14 +11,21 @@ import {assertRestrictedRdfAttestorLogin} from './pg-protected-rdf-attestor-role
 
 const NS='http://activitypods.org/ns/core#';
 const XSD='http://www.w3.org/2001/XMLSchema#';
+const RDF_TYPE='http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+const BINDING_TYPE=NS+'AtprotoIdentityBinding';
 const FIELDS=Object.freeze([
   'canonicalAccountId','webId','activityPubActorId','atprotoDid',
   'atprotoManaged','atprotoSource','status','repoInitialized',
   'repoRootCid','repoRev','repoProjectionFence'
 ]);
-const FIELD_SET=new Set(FIELDS.map(x=>NS+x));
+const PREDICATES=Object.freeze([...FIELDS.map(x=>NS+x),RDF_TYPE]);
+const FIELD_SET=new Set(PREDICATES);
 const URI_FIELDS=new Set(['webId','activityPubActorId']);
 const BOOLEAN_FIELDS=new Set(['atprotoManaged','repoInitialized']);
+const STRING_FIELDS=new Set(FIELDS.filter(field=>
+  !URI_FIELDS.has(field)&&!BOOLEAN_FIELDS.has(field)&&
+  field!=='repoProjectionFence'
+));
 const DID=/^did:plc:[a-z2-7]{24}$/u;
 const CID=/^bafyre[a-z2-7]{53}$/u;
 const TID=/^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/u;
@@ -57,7 +64,7 @@ function scope(p,{requireLeaseOwner=true}={}){
   return p;
 }
 function one(rows,p){
-  if(!Array.isArray(rows)||rows.length!==FIELDS.length)deny('PROTECTED_RDF_CARDINALITY_INVALID');
+  if(!Array.isArray(rows)||rows.length!==PREDICATES.length)deny('PROTECTED_RDF_CARDINALITY_INVALID');
   const values=new Map();
   for(const row of rows){
     const predicate=row?.p?.value,object=row?.o;
@@ -66,6 +73,14 @@ function one(rows,p){
       deny('PROTECTED_RDF_CARDINALITY_INVALID');
     }
     values.set(predicate,object);
+  }
+  // A correct-looking field set is not a binding without the same RDF
+  // class that the atomic projection CAS requires. Other rdf:types on the
+  // resource are allowed; the fixed query selects this class specifically.
+  const type=values.get(RDF_TYPE);
+  if(!type||type.type!=='uri'||type.value!==BINDING_TYPE||
+     type.datatype!==undefined||type['xml:lang']!==undefined){
+    deny('PROTECTED_RDF_BINDING_TYPE_INVALID');
   }
   const expected={
     canonicalAccountId:p.accountId,webId:p.accountId,
@@ -77,21 +92,34 @@ function one(rows,p){
   for(const [field,want] of Object.entries(expected)){
     const val=values.get(NS+field);
     if(!val||val.value!==want)deny('PROTECTED_RDF_READBACK_MISMATCH');
-    if(URI_FIELDS.has(field)){
-      if(val.type!=='uri')deny('PROTECTED_RDF_READBACK_MISMATCH');
-    }else if(val.type==='uri')deny('PROTECTED_RDF_READBACK_MISMATCH');
-    if(BOOLEAN_FIELDS.has(field)&&val.datatype!==XSD+'boolean'){
+    if(val['xml:lang']!==undefined||val.lang!==undefined){
       deny('PROTECTED_RDF_READBACK_MISMATCH');
     }
-    if(field==='repoProjectionFence'&&val.datatype!==XSD+'integer'){
-      deny('PROTECTED_RDF_READBACK_MISMATCH');
+    if(URI_FIELDS.has(field)){
+      if(val.type!=='uri'||val.datatype!==undefined){
+        deny('PROTECTED_RDF_READBACK_MISMATCH');
+      }
+    }else{
+      if(!['literal','typed-literal'].includes(val.type)){
+        deny('PROTECTED_RDF_READBACK_MISMATCH');
+      }
+      if(STRING_FIELDS.has(field) &&
+         val.datatype!==undefined && val.datatype!==XSD+'string'){
+        deny('PROTECTED_RDF_READBACK_MISMATCH');
+      }
+      if(BOOLEAN_FIELDS.has(field)&&val.datatype!==XSD+'boolean'){
+        deny('PROTECTED_RDF_READBACK_MISMATCH');
+      }
+      if(field==='repoProjectionFence'&&val.datatype!==XSD+'integer'){
+        deny('PROTECTED_RDF_READBACK_MISMATCH');
+      }
     }
   }
   // One deterministic digest of the observed *typed* RDF terms (not a
   // hash of client assertions). SQL stores only the bounded 32-byte receipt.
-  return crypto.createHash('sha256').update(JSON.stringify(FIELDS.map(field=>{
-    const v=values.get(NS+field);
-    return [field,v.type,v.value,v.datatype||null,v['xml:lang']||null];
+  return crypto.createHash('sha256').update(JSON.stringify(PREDICATES.map(predicate=>{
+    const v=values.get(predicate);
+    return [predicate,v.type,v.value,v.datatype??null,v['xml:lang']??null];
   }))).digest();
 }
 async function boundedRead(response){
@@ -122,9 +150,13 @@ export function makeDisposableProtectedFusekiReader({
      username!=='fixture-attestor'||password!=='fixture-attestor-only'){
     deny('PROTECTED_RDF_READER_NOT_RELEASED');
   }
+  // Explicit class filter prevents extra legitimate rdf:types from
+  // affecting the bounded cardinality test. Missing or mismatched binding
+  // class still results in one absent required row, and fails closed.
   const query='SELECT ?p ?o WHERE { VALUES ?p { '+
-    FIELDS.map(f=>'<'+NS+f+'>').join(' ')+' } <'+SUBJECT+
-    '> ?p ?o . } LIMIT 16';
+    PREDICATES.map(p=>'<'+p+'>').join(' ')+' } <'+SUBJECT+
+    '> ?p ?o . FILTER(?p != <'+RDF_TYPE+'> || ?o = <'+BINDING_TYPE+
+    '>) } LIMIT 16';
   const credential='Basic '+Buffer.from(username+':'+password).toString('base64');
   return async function readProtectedRdf(){
     if(!enabled())deny('PROTECTED_RDF_READER_NOT_RELEASED');

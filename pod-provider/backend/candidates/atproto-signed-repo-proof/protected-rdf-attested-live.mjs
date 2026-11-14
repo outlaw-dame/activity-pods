@@ -115,6 +115,38 @@ async function readBinding(){
   repoProjectionFence:field('repoProjectionFence')
  };
 }
+async function withMutatedProtectedTerm(predicate,replacement,expectedFailure,check){
+ // Test fixture only: real privileged Jena mutation that the independent
+ // read-only attestor must refuse. Restore the exact original typed term,
+ // including language/datatype, even after an assertion rejects.
+ const p='<http://activitypods.org/ns/core#'+predicate+'>';
+ const original=await fuseki('query',
+  'SELECT ?o WHERE { <'+subject+'> '+p+' ?o } LIMIT 2');
+ assert.equal(original.length,1,'Mutation fixture requires unique predicate');
+ const val=original[0].o;
+ const escaped=JSON.stringify(val.value);
+ const term=val.type==='uri'?'<'+val.value+'>':
+   val['xml:lang']!==undefined?escaped+'@'+val['xml:lang']:
+   val.datatype?escaped+'^^<'+val.datatype+'>':escaped;
+ const q=(value)=>'DELETE { <'+subject+'> '+p+' ?old } '+
+   'INSERT { <'+subject+'> '+p+' '+value+' } '+
+   'WHERE { <'+subject+'> '+p+' ?old }';
+ await fuseki('update',q(replacement));
+ try{
+  await assert.rejects(check(),e=>e?.code===expectedFailure);
+ }finally{
+  await fuseki('update',q(term));
+ }
+}
+async function withMissingBindingType(check){
+ const original='<' + subject + '> a <http://activitypods.org/ns/core#AtprotoIdentityBinding> .';
+ await fuseki('update','DELETE DATA { '+original+' }');
+ try{
+  await assert.rejects(check(),e=>e?.code==='PROTECTED_RDF_CARDINALITY_INVALID');
+ }finally{
+  await fuseki('update','INSERT DATA { '+original+' }');
+ }
+}
 async function rewriteProtectedRoot(value){
  // Adversarial fixture writer, never a provider recovery fallback.
  // Simulates an independently privileged process tampering after PG ACK.
@@ -292,6 +324,24 @@ async function prepare(){
   await project(head.rootCid,head.rev,expected1.leaseEpoch);
   const digest=await attestor.verifyReadback(expected1);
   assert.equal(digest.length,32);
+  // Codex post-merge review #207: matching lexical values do not make
+  // a semantically valid RDF binding if a literal has a foreign datatype,
+  // a language tag, or the binding's required RDF class is missing.
+  // Exercise actual protected Jena SPARQL mutations, not in-memory mocks.
+  await withMutatedProtectedTerm('repoRootCid',
+    '"'+head.rootCid+'"^^<http://www.w3.org/2001/XMLSchema#anyURI>',
+    'PROTECTED_RDF_READBACK_MISMATCH',
+    ()=>attestor.attest(expected1));
+  await withMutatedProtectedTerm('status',
+    '"active"@fr','PROTECTED_RDF_READBACK_MISMATCH',
+    ()=>attestor.attest(expected1));
+  await withMutatedProtectedTerm('canonicalAccountId',
+    '"'+accountId+'"^^<http://www.w3.org/2001/XMLSchema#anyURI>',
+    'PROTECTED_RDF_READBACK_MISMATCH',
+    ()=>attestor.verifyReadback(expected1));
+  await withMissingBindingType(()=>attestor.attest(expected1));
+  assert.deepEqual(await attestor.verifyReadback(expected1),digest,
+    'Valid protected RDF survives typed-literal and missing-type attacks');
   assert.equal((await ops.ack({accountId,did,claimed:lease1,proof:head})).rowCount,0,
    'Projection login cannot ACK before independent attestor receipt');
   await attestor.attest(expected1);
@@ -424,6 +474,7 @@ async function prepare(){
     phase:'prepare',realSignedGenesis:true,oneLeaseWinner:true,
     independentRdfCredential:true,exactRoleGrantAdmission:true,
     injectedReceiptGrantRefusals:6,
+    semanticRdfAttestationRefusals:4,
     legacyAckRevoked:true,ackWithoutReceiptDenied:true,
     signedHeadMismatchDenied:true,attestedAckSucceeded:true,
     replayRequiresNewRdfFence:true,receiptRowsBounded:true,

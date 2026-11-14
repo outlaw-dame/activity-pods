@@ -19,4 +19,21 @@ CREATE TABLE paper_dataset_admin_proof.claims (
   CHECK ((state='created') = (completed_at IS NOT NULL))
 );
 REVOKE ALL ON ALL TABLES IN SCHEMA paper_dataset_admin_proof FROM PUBLIC;
+DO $
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles
+                 WHERE rolname='paper_dataset_admin_agent') THEN
+    CREATE ROLE paper_dataset_admin_agent NOLOGIN
+      NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
+END $;
+REVOKE ALL ON SCHEMA paper_dataset_admin_proof FROM paper_dataset_admin_agent;
+GRANT USAGE ON SCHEMA paper_dataset_admin_proof TO paper_dataset_admin_agent;
+GRANT SELECT (dataset,owner_webid,reservation_id,signed_ticket_sha256,
+              state,completed_at)
+  ON paper_dataset_admin_proof.claims TO paper_dataset_admin_agent;
+GRANT INSERT (dataset,owner_webid,reservation_id,signed_ticket_sha256)
+  ON paper_dataset_admin_proof.claims TO paper_dataset_admin_agent;
+GRANT UPDATE (state,completed_at)
+  ON paper_dataset_admin_proof.claims TO paper_dataset_admin_agent;
 COMMIT;

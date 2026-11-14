@@ -128,7 +128,7 @@ function readerFor(pool,ref,did,overlay=new Map()) {
   }
   return new SafeReader();
 }
-function checkedCommit(bytes,{did,headCid,rev,rootCid,publicKey}) {
+export function checkedCommit(bytes,{did,headCid,rev,rootCid,publicKey}) {
   const body=decodeCanonical(bytes);
   if(!body || body.did!==did || body.version!==3 ||
      body.prev!==null || !CID.asCID(body.data) ||

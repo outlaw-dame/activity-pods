@@ -60,6 +60,11 @@ WHERE status = 'pending' AND blocked_at IS NULL;
 CREATE INDEX pending_atproto_repo_order
 ON paper_atproto_repo_proof.native_event_outbox (did,id)
 WHERE status = 'pending';
+-- Genesis identity must be verifiable even after the oldest outbox event
+-- transitions to delivered (and leaves all partial pending indexes).
+-- The earliest per-DID event is an indexed LIMIT 1 probe, never a scan.
+CREATE INDEX native_outbox_history_did_sequence
+ON paper_atproto_repo_proof.native_event_outbox (did,id);
 -- Repository readiness must find terminally blocked *historical* events
 -- via one indexed existence probe, independent of the latest commit.
 CREATE INDEX blocked_atproto_repo_history

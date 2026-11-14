@@ -1,7 +1,7 @@
 /**
  * Non-activated public sync XRPC read prototype for a verified signed v3
- * EMPTY or bounded multi-record repository. The full multi-record path
- * supported; it is not loaded by any ActivityPods HTTP gateway.
+ * empty or bounded multi-record repository. The multi-record path
+ * requires a trusted injected exporter; no ActivityPods HTTP gateway loads it.
  *
  * The account/DID lookup is provider-owned and indexed. A public caller
  * supplies only the DID query parameter, NEVER a WebID, private signer,
@@ -168,6 +168,26 @@ export function createReadOnlySyncXrpc({
       ensureActive(postExport);
       if (identitySnapshot(postExport) !== identitySnapshot(before)) {
         failure('PDS_CANDIDATE_HOSTING_CHANGED');
+      }
+      // The exporter checks the same PostgreSQL head after encoding and
+      // re-authorizes SAI, but the intervening XRPC checks are separate.
+      // Reconfirm the independently resolved hosting/PG/RDF authority at
+      // the final HTTP-edge checkpoint, with exact generation equality.
+      const finalRepo = await repositoryAuthority.verifyReady(input);
+      const finalProjection = await projectionAuthority.readiness({
+        accountId: before.webId, did
+      });
+      const finalProof = await signedRepoStore.verify({
+        accountId: before.webId, did, publicKeyPem
+      });
+      checkSignedRepo(finalRepo, finalProof, finalProjection, before, did);
+      if (finalProof.commitCid !== proof.commitCid ||
+          finalProof.rootCid !== proof.rootCid ||
+          finalProof.rev !== proof.rev ||
+          finalProof.generation !== proof.generation ||
+          finalProjection.fence !== projection.fence ||
+          finalRepo.commitCid !== repo.commitCid) {
+        failure('PDS_CANDIDATE_SIGNED_HEAD_NOT_READY');
       }
     } else {
       // Preserve the independently tested genesis-only legacy proof path.

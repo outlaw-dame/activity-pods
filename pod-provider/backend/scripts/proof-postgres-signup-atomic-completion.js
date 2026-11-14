@@ -201,6 +201,22 @@ async function main(){
       'SIGNUP_COMPLETION_PROOF_INVALID');
     assert.equal((await getState(noHost)).account.state,'provisioning');
 
+    // A PDS endpoint is a strict origin, not a resource path or a value
+    // normalized opportunistically by URL.href. Refuse ambiguous origins.
+    const badOrigin=await setup('bad-origin','k');
+    for(const endpoint of [
+      'https://pds.paper.example.org/',
+      'https://pds.paper.example.org/pds',
+      'https://pds.paper.example.org?mode=unsafe',
+      'https://user:pass@pds.paper.example.org',
+      'http://pds.paper.example.org'
+    ]) {
+      await error(completion(badOrigin,{verifyCurrent:async()=>({
+        ...badOrigin.proof,pdsOrigin:endpoint
+      })}).complete(badOrigin.scope),'SIGNUP_COMPLETION_SCOPE_INVALID');
+    }
+    assert.equal((await getState(badOrigin)).signup.state,'evidence_sealed');
+
     const racing=await setup('racing','e');
     const racers=await Promise.allSettled([
       completion(racing).complete(racing.scope),

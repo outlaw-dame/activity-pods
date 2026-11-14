@@ -60,6 +60,11 @@ WHERE status = 'pending' AND blocked_at IS NULL;
 CREATE INDEX pending_atproto_repo_order
 ON paper_atproto_repo_proof.native_event_outbox (did,id)
 WHERE status = 'pending';
+-- Repository readiness must find terminally blocked *historical* events
+-- via one indexed existence probe, independent of the latest commit.
+CREATE INDEX blocked_atproto_repo_history
+ON paper_atproto_repo_proof.native_event_outbox (did)
+WHERE status = 'pending' AND blocked_at IS NOT NULL;
 
 
 -- A crash-safe, non-activated PG->RDF projection ledger. Genesis repo + blocks

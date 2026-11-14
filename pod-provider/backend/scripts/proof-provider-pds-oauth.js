@@ -100,7 +100,7 @@ async function main(){
      jti:id,nonce:proofNonce,ath:accessHash
    }).setProtectedHeader({typ:'dpop+jwt',alg:'ES256',jwk}).sign(proofKey);
    let pg={
-     owner:webId,app:appUri,state:'active',identityState:'active',
+     owner:webId,app:appUri,did,state:'active',
      grantUri,revision:'1'
    };
    const readCanonicalGrant=async({owner,app})=>
@@ -179,9 +179,9 @@ async function main(){
    await error(candidate.authorize(params(otherCollection,
      await signedProof(otherCollection))),'PDS_OAUTH_NOT_AUTHORIZED');
 
-   const putProof=await signedProof();
+   const putProof=await signedProof(token,{endpoint:origin+'/xrpc/com.atproto.repo.putRecord'});
    assert.equal((await candidate.authorize(params(token,putProof,'put'))).action,'put');
-   const deleteProof=await signedProof();
+   const deleteProof=await signedProof(token,{endpoint:origin+'/xrpc/com.atproto.repo.deleteRecord'});
    assert.equal((await candidate.authorize(params(token,deleteProof,'delete'))).action,'delete');
    // A revoked canonical PG consent invalidates the request-local closure,
    // regardless of a still cryptographically valid, unexpired token.

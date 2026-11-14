@@ -19,14 +19,10 @@ CREATE TABLE paper_dataset_admin_proof.claims (
   CHECK ((state='created') = (completed_at IS NOT NULL))
 );
 REVOKE ALL ON ALL TABLES IN SCHEMA paper_dataset_admin_proof FROM PUBLIC;
-DO $
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles
-                 WHERE rolname='paper_dataset_admin_agent') THEN
-    CREATE ROLE paper_dataset_admin_agent NOLOGIN
-      NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-  END IF;
-END $;
+-- A fresh disposable test database is mandatory; refuse an existing
+-- administration role rather than silently inheriting stale grants.
+CREATE ROLE paper_dataset_admin_agent NOLOGIN
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 REVOKE ALL ON SCHEMA paper_dataset_admin_proof FROM paper_dataset_admin_agent;
 GRANT USAGE ON SCHEMA paper_dataset_admin_proof TO paper_dataset_admin_agent;
 GRANT SELECT (dataset,owner_webid,reservation_id,signed_ticket_sha256,

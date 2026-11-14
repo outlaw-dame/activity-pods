@@ -236,6 +236,13 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
       const actor=await post('createRecord',{...body(current.commitCid,record('one')),
         repo:'did:plc:'+'z'.repeat(24)});
       assert.equal(actor.status,404);
+      hosted={...hosted,status:'suspended'};
+      try{
+        const suspended=await post('createRecord',body(
+          current.commitCid,record('not writable while suspended')));
+        assert.equal(suspended.status,403);
+        assert.equal(suspended.body.error,'Forbidden');
+      }finally{hosted={...hosted,status:'active'};}
       assert.deepEqual(await readState(),prior);
     });
     await t.test('valid OAuth creates real signed commit + indexed outbox and CAR',async()=>{

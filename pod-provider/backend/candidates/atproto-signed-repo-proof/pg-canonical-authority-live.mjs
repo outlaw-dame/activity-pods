@@ -330,7 +330,7 @@ async function run() {
     assert(check.rows.every(x=>x.state==='blocked' && x.revision==='2'));
     console.log(JSON.stringify({
       success:true,scope:'disposable-postgresql18-native-canonical-identity-and-consent',
-      distinctLoginConnections:4,
+      distinctLoginConnections:temporaryRoles.length,
       ordinaryDmlAndFunctionDenials:9,
       readOnlyLoginDeniedMutation:true,
       revokerDirectWritesDenied:4,

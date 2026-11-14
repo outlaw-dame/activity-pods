@@ -41,7 +41,7 @@ function leaseState(row, claim) {
 
 export function createPgLeaseTicketIssuer({
   pool, tickets, verifySignedHead, verifyCurrentSaiConsent,
-  fixtureOnly = false
+  verifyCanonicalPgConsent, fixtureOnly = false
 } = {}) {
   if (process.env.NODE_ENV === 'production' ||
       process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed' ||
@@ -54,6 +54,12 @@ export function createPgLeaseTicketIssuer({
       typeof verifySignedHead !== 'function' ||
       typeof verifyCurrentSaiConsent !== 'function') {
     rejected('PG_TICKET_CONFIG_INVALID');
+  }
+  const canonicalMode = process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED === 'true';
+  // A mutable RDF grant cannot authorize signed repository writes in
+  // canonical mode. Missing PG authority always fails closed.
+  if (canonicalMode && typeof verifyCanonicalPgConsent !== 'function') {
+    rejected('PG_TICKET_CANONICAL_AUTHORITY_REQUIRED');
   }
   const getLease = async claim => {
     const r = await pool.query(
@@ -125,6 +131,13 @@ export function createPgLeaseTicketIssuer({
       appUri, grantUri, consentRevision
     });
     if (granted !== true) rejected('PG_TICKET_SAI_NOT_CURRENT');
+    if (canonicalMode) {
+      const permitted = await verifyCanonicalPgConsent({
+        accountId: claim.accountId, did: claim.did,
+        appUri, grantUri, consentRevision
+      });
+      if (permitted !== true) rejected('PG_TICKET_CANONICAL_PERMISSION_DENIED');
+    }
 
     // Neither a CPU-heavy signature check nor a Moleculer/Jena call runs
     // while holding a database connection or transaction open.

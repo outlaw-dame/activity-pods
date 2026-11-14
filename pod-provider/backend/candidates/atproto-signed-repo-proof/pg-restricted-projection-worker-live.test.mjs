@@ -108,6 +108,36 @@ test('PG18 separately credentialed projection worker refuses stale ACK and forbi
         true,'valid restricted privileges restored after adversarial grant');
     }
 
+    for(const permission of [
+      'DELETE ON paper_atproto_repo_proof.rdf_projection_jobs',
+      'TRUNCATE ON paper_atproto_repo_proof.rdf_projection_jobs',
+      'TRIGGER ON paper_atproto_repo_proof.repos',
+      'REFERENCES ON paper_atproto_authority.consents'
+    ]){
+      await admin.query('GRANT '+permission+' TO '+id(worker));
+      try{
+        await forbidden(assertRestrictedProjectionWorkerLogin(workerPool),
+          'PROJECTION_WORKER_ROLE_REQUIRED');
+      }finally{
+        await admin.query('REVOKE '+permission+' FROM '+id(worker));
+      }
+      assert.equal((await assertRestrictedProjectionWorkerLogin(workerPool)).restricted,true);
+    }
+    const extra='paper_project_extra_'+suffix;
+    await admin.query('CREATE ROLE '+id(extra)+
+      ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION');
+    try{
+      await admin.query('GRANT '+id(extra)+' TO '+id(worker)+
+        ' WITH INHERIT FALSE,SET TRUE,ADMIN FALSE');
+      try{
+        await forbidden(assertRestrictedProjectionWorkerLogin(workerPool),
+          'PROJECTION_WORKER_ROLE_REQUIRED');
+      }finally{
+        await admin.query('REVOKE '+id(extra)+' FROM '+id(worker));
+      }
+    }finally{await admin.query('DROP ROLE '+id(extra));}
+    assert.equal((await assertRestrictedProjectionWorkerLogin(workerPool)).restricted,true);
+
     const keys=crypto.generateKeyPairSync('ec',{namedCurve:'secp256k1'});
     const key={
       publicKeyPem:keys.publicKey.export({format:'pem',type:'spki'}).toString(),
@@ -283,6 +313,7 @@ test('PG18 separately credentialed projection worker refuses stale ACK and forbi
       independentLogins:true,roleAttestation:true,
       noSigning:true,noRegrant:true,noDirectProjectionUpdate:true,
       injectedColumnGrantRefusal:true,
+      unexpectedTableGrantRefusal:true,unexpectedSetRoleRefusal:true,
       noSetRole:true,singleLeaseWinner:true,staleAckDenied:true,
       wrongHeadAckDenied:true,readbackBeforeAck:true,
       verifiedSignedGenesis:true,canonicalRevocationDenied:true,

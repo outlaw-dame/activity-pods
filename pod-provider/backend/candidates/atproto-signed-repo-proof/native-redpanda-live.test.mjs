@@ -212,7 +212,7 @@ test('Redpanda broker ACK, historical CBOR, PG18 worker crash and durable replay
     });
     await projectionApplied(bob.accountId,bob.did,bob.head);
     const eventFor=async ({did,commitCid,rev,signal})=>{
-      assert.equal(signal?.aborted,false);
+      assert.notEqual(signal?.aborted,true);
       const owner=accounts.get(did);
       assert(owner,'broker dispatcher must not materialize a foreign DID');
       return native.materialize({

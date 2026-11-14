@@ -8,6 +8,18 @@ import {Pool} from 'pg';
 import {createDisposableDatasetAdmin,
   makeDisposableDatasetAdminHttpServer} from './dataset-admin-claim-service.mjs';
 
+// A valid test-only SQL login is not evidence of isolation if a privileged
+// connection string is inherited alongside it. Reject ANY extra variables
+// instead of maintaining a fallible blacklist of secret names.
+const allowedEnvironment=new Set([
+ 'NODE_ENV','ATPROTO_FUSEKI_ISOLATION_DISPOSABLE',
+ 'ATPROTO_REPO_PROOF_DISPOSABLE','FUSEKI_ISOLATION_URL',
+ 'DATASET_ADMIN_AGENT_DSN','DATASET_ADMIN_ISSUER_PUBLIC_PEM',
+ 'DATASET_ADMIN_FUSEKI_USER','DATASET_ADMIN_FUSEKI_PASSWORD'
+]);
+if(Object.keys(process.env).some(key=>!allowedEnvironment.has(key))){
+ throw Error('Dataset administrator child inherited an unauthorized environment');
+}
 if(process.env.NODE_ENV!=='test'||
    process.env.ATPROTO_FUSEKI_ISOLATION_DISPOSABLE!=='confirmed'||
    process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed'||

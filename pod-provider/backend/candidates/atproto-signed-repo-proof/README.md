@@ -675,8 +675,8 @@ ACK for an uncompressed **1.45 MB** payload on a separate synthetic
 transport-only topic; random bytes are NEVER emitted as an ATProto
 event. The native topic carries only verified signed commit frames.
 
-In the real-broker acceptance, the dispatcher first gets a durable
-broker ACK for a signed genesis event and then intentionally crashes
+In the real-broker acceptance, the dispatcher first gets an actual
+all-ISR broker ACK for a signed genesis event and then intentionally crashes
 before the PostgreSQL ACK. A new Kafka producer session and eight
 concurrent PostgreSQL recovery workers redeliver that same event and
 its later signed revisions, without bypassing the PG lease and
@@ -697,9 +697,11 @@ identical (consumer replays can rewind).
 ### Operational and security boundaries
 
 - The CI broker is **single-node replication factor 1**. Redpanda
-  `acks=all` there proves a broker write acknowledgment, not
-  replication across failure domains or availability after losing
-  the only node. Production requires multi-node replication and
+  `acks=all` there proves a broker-reported write acknowledgment,
+  NOT an fsync or replication durability guarantee. The
+  `dev-container` mode explicitly uses `unsafe-bypass-fsync=true`;
+  the fixture also has replication factor 1. It is not guaranteed to
+  survive an unclean shutdown or loss of the only broker. Production requires multi-node replication and
   dedicated security acceptance for TLS/SASL, ACLs, loss of leader,
   broker restart, partition reassignment and retention.
 - A producer's idempotent session alone **cannot** deduplicate a

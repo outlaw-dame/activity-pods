@@ -85,7 +85,8 @@ test('bounded full signed multi-record export with exact PG/Jena head + complete
     const records=new Map();
     async function write(action,i){
       const path=pathFor(i);
-      const record=action==='delete'?null:rec(i);
+      const record=action==='delete'?null:
+        action==='update'?{...rec(i),text:'Edited signed CAR post '+i}:rec(i);
       head=await writer.write({
         accountId,did,...keys,action,path,record,
         expectedCommitCid:head.commitCid,expectedRev:head.rev

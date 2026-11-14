@@ -293,7 +293,8 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       await expectCode(untrusted,'PDS_EGRESS_CONNECTION_UNAVAILABLE');
       const wrongHostname=createFixedOriginPdsHttpsRequester({
         ...egressConfig,origin:'https://untrusted.paper.example.org:'+
-          server.address().port
+          server.address().port,
+        resolveAddresses:async()=>[{address:'127.0.0.1',family:4}]
       });
       await assert.rejects(
         wrongHostname.requestPds({...direct,
@@ -313,6 +314,20 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       await assert.rejects(requestPds({...direct,
         expectedOrigin:'https://attacker.example.org'}),
         e=>e?.code==='PDS_EGRESS_REQUEST_INVALID');
+      // Disposable fixture authority never leaks into production, even if
+      // a requester was constructed before the environment changed.
+      const old=process.env.NODE_ENV;
+      try{
+        process.env.NODE_ENV='production';
+        await expectCode({requestPds:()=>requestPds(direct)},
+          'PDS_EGRESS_DISPOSABLE_NOT_RELEASED');
+        assert.throws(()=>createFixedOriginPdsHttpsRequester(egressConfig),
+          e=>e?.code==='PDS_EGRESS_DISPOSABLE_NOT_RELEASED');
+        assert.throws(()=>createFixedOriginPdsHttpsRequester({
+          origin:'https://pds.paper.example.org',
+          approvedAddresses:['127.0.0.1']
+        }),e=>e?.code==='PDS_EGRESS_ADDRESS_FORBIDDEN');
+      }finally{process.env.NODE_ENV=old;}
     });
     await t.test('redirect and oversized response fail without contacting another destination',async()=>{
       const before=requests;

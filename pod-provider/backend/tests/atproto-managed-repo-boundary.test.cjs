@@ -59,6 +59,37 @@ function binding() {
     atprotoPdsUrl:pds, repoInitialized:true, repoRootCid:rootCid, repoRev:rev,
     atSigningKeyRef:'commit-ref', atRotationKeyRef:'rotation-ref' };
 }
+test('raw signup input cannot hide an existing identity behind protocol overrides', () => {
+  const source = fs.readFileSync(path.resolve(__dirname,
+    '../services/unified-account-api.service.js'), 'utf8');
+  const moduleMock = { exports: {} };
+  const factory = vm.runInNewContext('(function(require,module){\\n' + source + '\\n})',
+    { process, URL, Buffer, console, setTimeout, clearTimeout });
+  factory(name => {
+    if (name === 'crypto') return crypto;
+    if (name === 'moleculer') return { Errors: { MoleculerError } };
+    if (name === '../utils/unified-identity-policy') {
+      return require('../utils/unified-identity-policy');
+    }
+    throw Error('Unexpected API dependency ' + name);
+  }, moduleMock);
+  const methods = moduleMock.exports.methods;
+  const base = { username:'alice', password:'local_fixture_password',
+    protocols:{ atproto:{enabled:true}, activitypub:{enabled:true}, solid:{enabled:true} } };
+  for(const shadow of [
+    { atproto:{ existingDid:did } },
+    { activitypub:{ activityPubActorId:webId } },
+    { solid:{ existingWebId:webId } },
+    { atproto:{ force:true } }
+  ]) {
+    assert.throws(() => methods.normalizeAccountCreateParams({ ...base, ...shadow }),
+      e => e.type === 'UNIFIED_ACCOUNT_NEW_ONLY' && e.code === 400);
+  }
+  const accepted = methods.normalizeAccountCreateParams(base);
+  assert.equal(accepted.atproto.enabled,true);
+  assert.equal(accepted.protocols,undefined);
+});
+
 test('structured proof is scoped and strips unknown fields', () => {
   const clean = policy.requireVerifiedManagedRepoProof({
     canonicalAccountId:webId, did, expectedPdsOrigin:pds,

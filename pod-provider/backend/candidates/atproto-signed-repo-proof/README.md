@@ -762,3 +762,57 @@ atomically (or use a second durable effect outbox). Never run a
 network callback or Jena/SAI RPC inside a long-held PostgreSQL lock;
 the real hosted-PDS identity/SAI authorization, retention and cursor
 recovery remain release blockers.
+
+
+## Full signed multi-record CAR over isolated read-only sync XRPC
+
+**NONACTIVATED.** The earlier read-only
+`com.atproto.sync.getRepo` fixture exported genesis only, despite
+the separately accepted signed multi-record PostgreSQL writer and
+complete bounded CARv1 exporter. `sync-xrpc-candidate.mjs` now accepts
+an **optional trusted provider-injected** `repositoryExporter` and
+connects that complete exporter to the existing provider-resolved
+hosted WebID/DID/handle/PDS, signed PostgreSQL head, and RDF projection
+readiness contracts. The pre-existing empty-repository tests and
+genesis-only fallback stay untouched.
+
+The read-only gateway checks exact account status, managed-DID hosting,
+signing key and signed commit/root/revision, matching PG/Jena projection
+readiness and outbox status. It rejects an exported CAR unless its
+account ID, DID, commit/root CIDs, revision and **generation** match the
+earlier independently verified repository. It checks hosted-account
+identity again after the export, then repeats signed-head and PG/Jena
+readiness checks, including the exact monotone projection fence. A
+hosting move, suspension, unprojected newer commit, historical
+terminal outbox block, withdrawn provider authorization or changed RDF
+fence fails before responding HTTP 200 with CAR bytes.
+
+The candidate retains a strict **128 KiB maximum** buffered HTTP CAR
+response. The full exporter may support a larger bounded fixture, but
+this HTTP route fails closed at its smaller limit. `getLatestCommit`
+and `getRepoStatus` are independent small read operations. Historical
+`getRepo?since=...` continues to return 501: claiming that a full
+snapshot was a delta would confuse remote relays. No write XRPC or
+production gateway registration is introduced.
+
+Real disposable PG18 acceptance signs 20 distinct records,
+constructs a complete CAR through the HTTP request, independently
+parses its signed v3 commit and reconstructs the upstream MST and every
+record, checks latest commit/status and rejects unprojected, blocked,
+revoked, relocated, suspended, concurrent hosted-status and PG/RDF
+fence changes. It also verifies rejection of archives exceeding the
+HTTP resource bound and that an already constructed instance refuses
+requests with `NODE_ENV=production`. Independent real Fuseki/TDB2
+consent and restart tests still run in their separate workflow job;
+the HTTP fixture's projection authority is injected and **not a live
+production provider grant**.
+
+**Release blockers:** The HTTP candidate does not guarantee a fully
+atomic revocation/hosting fence against a change in the final
+microseconds before socket write. Production needs an authority-owned
+transactional decision, verified provider Solid/SAI permissions, real
+PLC/PDS authority and the protected Jena write boundary. Larger
+repositories need backpressure-aware streaming, revision snapshot
+isolation and bounded response accounting. Public XRPC writes,
+firehose subscribers, retention/cursor management, production account
+completion and existing-account migration remain disabled.

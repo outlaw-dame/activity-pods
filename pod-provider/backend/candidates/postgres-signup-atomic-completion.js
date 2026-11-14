@@ -38,7 +38,8 @@ function https(value) {
   }
   try {
     const u = new URL(value);
-    if (u.protocol !== 'https:' || !u.hostname || u.href !== value ||
+    if (u.protocol !== 'https:' || !u.hostname ||
+        (u.href !== value && u.origin !== value) ||
         u.username || u.password || u.search || u.hash) {
       deny('SIGNUP_COMPLETION_SCOPE_INVALID');
     }

@@ -2,6 +2,7 @@ const { MoleculerError } = require('moleculer').Errors;
 const urlJoin = require('url-join');
 const fetch = require('node-fetch');
 const CONFIG = require('../../config/config');
+const { createDelegatedDisposableDataset } = require('../utils/atproto-dataset-admin-delegation');
 
 const WEBACL_GRAPH = 'http://semapps.org/webacl';
 const MIRROR_GRAPH = 'http://semapps.org/mirror';
@@ -12,7 +13,10 @@ module.exports = {
   actions: {
     ensureSecureDataset: {
       params: {
-        dataset: 'string|min:1'
+        dataset: 'string|min:1',
+        // Explicit operation-scoped capability: never use ctx.meta, which
+        // Moleculer can propagate to downstream storage and other services.
+        datasetAdminTicket: { type: 'object', optional: true }
       },
       async handler(ctx) {
         const { dataset } = ctx.params;
@@ -24,6 +28,31 @@ module.exports = {
             'INVALID_DATASET_NAME',
             { dataset }
           );
+        }
+
+        // The only delegated branch is an explicitly disposable provider
+        // test. In particular, never issue a privileged admin request (or
+        // return success for an already-existing dataset) before validating
+        // the signed pre-account claim. Only the independent sidecar
+        // authenticates its Ed25519 signature and PG reservation.
+        // Do not use ctx.meta for the ticket: it can be inherited by every
+        // nested Moleculer call, including unrelated LDP and WebACL writes.
+        // The ordinary backend has no issuer key or Fuseki admin secret.
+        if (process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed') {
+          const delegated = await createDelegatedDisposableDataset({
+            dataset,
+            ticket: ctx.params?.datasetAdminTicket
+          });
+          // The admin process may commit just before the call returns.
+          // Keep the established SemApps readiness and WebACL/Mirror graph
+          // initialization; do not create a second storage authority.
+          await ctx.call('triplestore.dataset.waitForCreation', { dataset },
+            { timeout: 5000 });
+          await this.ensureSemappsNamedGraphs(ctx, dataset);
+          return {
+            dataset, created: !delegated.idempotent,
+            strategy: delegated.strategy
+          };
         }
 
         const exists = await ctx.call('triplestore.dataset.exist', { dataset });

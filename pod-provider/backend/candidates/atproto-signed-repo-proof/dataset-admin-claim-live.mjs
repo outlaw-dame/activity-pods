@@ -100,6 +100,51 @@ async function stop(child){
  child.kill('SIGTERM');
  await stopped;
 }
+async function runOrdinaryProviderClient(config,mode){
+ // The ordinary backend cannot inherit the harness PG admin DSN, Jena
+ // admin password, issuer private key, trusted attestor, or projector.
+ const file=fileURLToPath(new URL(
+   './dataset-admin-ordinary-client-child.mjs',import.meta.url));
+ const env={
+  NODE_ENV:'test',ATPROTO_REPO_PROOF_DISPOSABLE:'confirmed',
+  ATPROTO_FUSEKI_ISOLATION_DISPOSABLE:'confirmed',
+  FUSEKI_ISOLATION_URL:'http://127.0.0.1:3041',
+  APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE:'confirmed',
+  DATASET_ADMIN_ORDINARY_MODE:mode,
+  DATASET_ADMIN_ORDINARY_TICKET:Buffer.from(
+    JSON.stringify(config.ticket),'utf8').toString('base64')
+ };
+ assert.equal(Object.hasOwn(env,'ATPROTO_REPO_PROOF_DSN'),false);
+ assert.equal(Object.hasOwn(env,'DATASET_ADMIN_FUSEKI_PASSWORD'),false);
+ assert.equal(Object.hasOwn(env,'DATASET_ADMIN_SIGNER_PRIVATE_KEY'),false);
+ const child=spawn(process.execPath,[file],{
+  env,stdio:['ignore','pipe','pipe']
+ });
+ let stdout='',stderr='';
+ const result=await new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{
+   child.kill('SIGKILL');
+   reject(Error('Ordinary provider request exceeded its 12s bound'));
+  },12000);
+  child.stdout.on('data',part=>{
+   stdout=(stdout+String(part)).slice(-1024);
+  });
+  child.stderr.on('data',part=>{
+   stderr=(stderr+String(part)).slice(-512);
+  });
+  child.once('error',err=>{clearTimeout(timer);reject(err);});
+  child.once('exit',code=>{clearTimeout(timer);resolve(code);});
+ });
+ assert.equal(result,0,'Ordinary provider proof failed: '+stderr.slice(0,100));
+ const proof=stdout.split('\\n').find(line=>
+  line.startsWith('ORDINARY_PROVIDER_DATASET_DELEGATION '));
+ assert(proof,'Missing ordinary provider admission receipt');
+ const observed=JSON.parse(proof.slice(
+  'ORDINARY_PROVIDER_DATASET_DELEGATION '.length));
+ assert.equal(observed.mode,mode);
+ assert.equal(observed.productionStorageReleased,false);
+ return observed;
+}
 async function post(ticket,{method='POST',oversize=false}={}){
  const controller=new AbortController();
  const timer=setTimeout(()=>controller.abort(),8000);
@@ -215,6 +260,12 @@ async function prepare(){
   assert.equal(second.status,200,second.body);
   assert.equal((await post(config.ticket)).status,200,
    'Committed claim must be idempotent');
+  const ordinaryValid=await runOrdinaryProviderClient(config,'valid');
+  assert.equal(ordinaryValid.signedClaimAccepted,true);
+  for(const mode of ['mismatch','missing']){
+    const refused=await runOrdinaryProviderClient(config,mode);
+    assert.equal(refused.invalidClaimDenied,true);
+  }
   const conflict=signDisposableDatasetClaim(
    makeClaim(config.dataset),privateKey);
   assert.equal((await post(conflict)).status,409,
@@ -263,6 +314,8 @@ async function verify(){
   const body=JSON.parse(reply.body);
   assert.equal(body.idempotent,true,
    'Same durable claim must remain idempotent after process/Jena restart');
+  assert.equal((await runOrdinaryProviderClient(config,'valid')).signedClaimAccepted,true,
+    'Ordinary provider must replay claim after independent admin/Jena restart');
   const count=(await admin.query(
    'SELECT count(*)::int AS count FROM paper_dataset_admin_proof.claims')).rows[0].count;
   assert.equal(count,1);

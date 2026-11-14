@@ -9,6 +9,7 @@ on:
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
       - 'pod-provider/backend/services/core/triplestore.js'
       - 'pod-provider/backend/services/core/dataset-provisioning.js'
+      - 'pod-provider/backend/services/utils/atproto-dataset-admin-delegation.js'
       - 'pod-provider/backend/services/solid/storage.js'
       - 'pod-provider/backend/services/identitybindings.service.js'
       - 'pod-provider/backend/services/sai/access-grants.js'
@@ -74,6 +75,9 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-service.mjs
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-child.mjs
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-ordinary-client-child.mjs
+          node --check backend/services/utils/atproto-dataset-admin-delegation.js
+          node --check backend/services/core/dataset-provisioning.js
 
       - name: Prepare fresh temporary Fuseki security configuration
         run: |

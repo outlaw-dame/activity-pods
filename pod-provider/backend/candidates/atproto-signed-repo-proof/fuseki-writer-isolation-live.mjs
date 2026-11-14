@@ -26,6 +26,7 @@ const predicate = '<urn:paper:isolated:state>';
 const credentials = Object.freeze({
   admin: 'admin:fixture-admin-only',
   projector: 'fixture-projector:fixture-projector-only',
+  attestor: 'fixture-attestor:fixture-attestor-only',
   ordinary: 'fixture-ordinary:fixture-ordinary-only'
 });
 const auth = principal => principal === null ? {} : {
@@ -101,6 +102,15 @@ async function read(name, principal, subject) {
 async function proveDenied() {
   const hostileUpdate = 'DELETE WHERE { ' + subjects.protected + ' ' + predicate + ' ?v }';
   const probes = [
+    ['attestor direct SPARQL update', '/protected-proof/update', 'attestor',
+      { type: sparqlType, body: hostileUpdate }],
+    ['attestor Graph Store DELETE', '/protected-proof/data', 'attestor',
+      { method: 'DELETE' }],
+    ['attestor alternate update route', '/protected-proof/sparql', 'attestor',
+      { type: sparqlType, body: hostileUpdate }],
+    ['attestor admin access', '/$/datasets', 'attestor',
+      { type: 'application/x-www-form-urlencoded',
+        body: 'dbName=hostile-proof&dbType=tdb2' }],
     ['ordinary direct SPARQL update', '/protected-proof/update', 'ordinary',
       { type: sparqlType, body: hostileUpdate }],
     ['anonymous SPARQL update', '/protected-proof/update', null,
@@ -135,6 +145,8 @@ async function proveDenied() {
   denied(await request('/protected-proof/query', null, {
     type: queryType, body: 'ASK {}'
   }), 'anonymous protected query');
+  assert.deepEqual(await read('protected-proof', 'attestor', subjects.protected),
+    ['signed-baseline'], 'Independent read-only attestor must access protected RDF');
   assert.deepEqual(await read('protected-proof', 'projector', subjects.protected),
     ['signed-baseline'], 'Unauthorized mutations cannot alter protected RDF');
   assert.deepEqual(await read('ordinary-proof', 'ordinary', subjects.ordinary),
@@ -147,7 +159,7 @@ if (phase === 'prepare') {
   await createDataset('ordinary-proof');
   // Bounded authentication matrix: helps distinguish Shiro credential
   // rejection from the SPARQL service's separate update authorization.
-  for (const principal of ['projector', 'ordinary', 'admin']) {
+  for (const principal of ['projector', 'attestor', 'ordinary', 'admin']) {
     const response = await request('/protected-proof/query', principal, {
       type: queryType, body: 'ASK {}',
       accept: 'application/sparql-results+json'

@@ -93,6 +93,40 @@ fallback runtime paths in the new restricted-attestation composition.
    queue growth and operating cost measurements, and independent review.
    Production fuses stay closed.
 
+## Jena compatibility and security release gate (verified November 14, 2026)
+
+The disposable Fuseki/Shiro image currently used by ActivityPods tests was
+observed by CI to run **Apache Jena 3.17.0 / Java 8**. Apache's latest active
+Jena release is **6.2.0** (July 2026), requiring **Java 21+**. Apache Jena
+6.0 retired the old Fuseki WAR/webapp packaging and `jena-permissions`.
+Jena 6.2 additionally fixes a long-running **Shiro memory leak** and a
+TDB2 robustness issue following system-level errors. Consequently, simply
+swapping the existing `semapps/jena-fuseki-webacl` tag for a Jena 6 image
+would be an unverified and likely incompatible migration.
+
+Before production:
+- Inventory the exact `semapps/jena-fuseki-webacl` custom extension,
+  web ACL enforcement, authenticated SPARQL endpoints, storage hooks and
+  per-Pod dataset naming/creation semantics.
+- Select a supported, reproducible Jena 6.2+ / Java 21+ deployment or
+  explicitly justified maintained variant, build reproducibly and pin
+  its immutable image digest after validation. Do not silently bypass
+  the now-retired Jena permissions mechanism.
+- Exercise compatible, **real** Solid-OIDC/SAI read/write enforcement,
+  protected dataset endpoint ACLs and independent read-only attestor
+  against this new image. Include fresh TDB2 migration/cold restore,
+  concurrent CAS, crash consistency, data corruption detection, resource
+  growth, p95/p99 and existing application regressions.
+- Use operator backup/PITR and tested restoration procedures. Never
+  mount an old 3.x live TDB2 data directory directly into a new major
+  runtime without an accepted migration strategy.
+
+Primary Apache sources:
+- https://jena.apache.org/download/
+- https://release-catalog.apache.org/jena/index.html
+- https://github.com/apache/jena/blob/main/CHANGES.txt
+- https://jena.apache.org/documentation/fuseki2/fuseki-data-access-control.html
+
 ## Operational invariants
 
 - **Authority:** ActivityPods owns WebID, AP actor, DID, canonical consent.

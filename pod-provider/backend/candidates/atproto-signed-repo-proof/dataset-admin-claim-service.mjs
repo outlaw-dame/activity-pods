@@ -24,7 +24,6 @@ const KEYS=Object.freeze([
   'version','issuer','audience','dataset','ownerWebid',
   'reservationId','nonce','issuedAtMs','expiresAtMs'
 ]);
-const MAX=9223372036854775807n;
 function fail(code='DATASET_ADMIN_CLAIM_REFUSED',httpStatus=403){
   const error=new Error('Pre-account dataset provisioning refused');
   error.code=code;error.httpStatus=httpStatus;throw error;
@@ -95,7 +94,16 @@ export async function assertRestrictedDatasetAdminLogin(pool){
       "pg_catalog.has_table_privilege(current_user,'paper_dataset_admin_proof.claims','TRUNCATE') AS can_truncate,"+
       "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','dataset','INSERT') AS can_claim,"+
       "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','state','UPDATE') AS can_complete,"+
-      "pg_catalog.has_table_privilege(current_user,'paper_dataset_admin_proof.claims','SELECT') AS can_read_all "+
+      "pg_catalog.has_table_privilege(current_user,'paper_dataset_admin_proof.claims','SELECT') AS can_read_all,"+
+      "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','dataset','UPDATE') AS can_change_dataset,"+
+      "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','owner_webid','UPDATE') AS can_change_owner,"+
+      "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','reservation_id','UPDATE') AS can_change_reservation,"+
+      "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','signed_ticket_sha256','UPDATE') AS can_change_ticket,"+
+      "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','state','INSERT') AS can_forge_state,"+
+      "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','completed_at','INSERT') AS can_forge_completion,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+        "WHERE nspname='paper_dataset_admin_proof'),'MEMBER') AS owner_member "+
+
       "FROM pg_catalog.pg_roles x WHERE x.rolname=current_user"
     );
   }catch{fail('DATASET_ADMIN_SQL_PRIVILEGES_UNSAFE');}
@@ -104,13 +112,15 @@ export async function assertRestrictedDatasetAdminLogin(pool){
      !x.rolcanlogin||x.rolsuper||x.rolcreatedb||x.rolcreaterole||
      x.rolreplication||x.rolbypassrls||!x.allowed||x.role_switch||
      x.create_schema||x.can_delete||x.can_truncate||
-     !x.can_claim||!x.can_complete||x.can_read_all){
+     !x.can_claim||!x.can_complete||x.can_read_all||x.owner_member||
+     x.can_change_dataset||x.can_change_owner||x.can_change_reservation||
+     x.can_change_ticket||x.can_forge_state||x.can_forge_completion){
     fail('DATASET_ADMIN_SQL_PRIVILEGES_UNSAFE');
   }
   return true;
 }
 async function bounded(response){
-  if(!response.body)fail('DATASET_ADMIN_FUSEKI_UNAVAILABLE',503);
+  if(!response.body)return '';
   const reader=response.body.getReader();
   const pieces=[];let total=0;
   try{
@@ -187,7 +197,7 @@ export async function createDisposableDatasetAdmin({
     }finally{client.release();}
   }
   async function present(dataset){
-    const q=await fuseki('/'+dataset+'/query','POST','ASK { ?s ?p ?o }',
+    const q=await fuseki('/'+dataset+'/query','POST','ASK WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }',
       'application/sparql-query');
     if(q.status===404)return {exists:false,nonempty:false};
     if(q.status!==200)fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);

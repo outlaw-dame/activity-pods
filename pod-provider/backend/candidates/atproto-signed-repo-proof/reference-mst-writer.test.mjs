@@ -27,7 +27,20 @@ const pool=new Pool({
 });
 const accountId='https://paper.example.org/users/multi-mst';
 const did='did:plc:'+'m'.repeat(24);
-const pathFor=i=>'app.bsky.feed.post/3jzm3xwpf'+i.toString(36).padStart(4,'2')+'a';
+const SORTABLE='234567abcdefghijklmnopqrstuvwxyz';
+function pathFor(index) {
+  assert(Number.isSafeInteger(index) && index>=0 && index<32**4);
+  let n=index,suffix='';
+  for(let i=0;i<4;i++){
+    suffix=SORTABLE[n%32]+suffix;
+    n=Math.floor(n/32);
+  }
+  return 'app.bsky.feed.post/3jzm3xwpf'+suffix;
+}
+// Strict TID-length and collision check: a nonzero base36 padding digit can
+// silently alias two distinct integer keys and hide state-test failures.
+assert.equal(new Set(Array.from({length:128},(_,i)=>pathFor(i))).size,128);
+assert.equal(pathFor(90).split('/')[1].length,13);
 const post=(i,text)=>({
   $type:'app.bsky.feed.post',text,
   createdAt:'2026-11-13T00:00:00.000Z',langs:['en'],

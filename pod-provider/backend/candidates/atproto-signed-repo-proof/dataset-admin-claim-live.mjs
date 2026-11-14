@@ -111,7 +111,7 @@ function signUnchecked(claim,privateKey){
  const fields=['version','issuer','audience','dataset','ownerWebid',
   'reservationId','nonce','issuedAtMs','expiresAtMs'];
  const bytes=Buffer.concat([
-   Buffer.from('activitypods:dataset-admin:claim:v1\\0','utf8'),
+   Buffer.from('activitypods:dataset-admin:claim:v1\0','utf8'),
    Buffer.from(JSON.stringify(fields.map(k=>claim[k])),'utf8')
  ]);
  return {claim,signature:crypto.sign(null,bytes,privateKey).toString('base64url')};

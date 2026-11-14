@@ -211,3 +211,55 @@ timeout-bounded authenticated client to this narrow service, remove
 Jena admin credentials from ordinary SemApps processes, and run a
 live multi-replica Solid signup + grant/revocation acceptance. Only
 after that pass should a separate review consider production release.
+
+## P1b — actual provider service delegates creation in disposable acceptance
+
+`backend/services/core/dataset-provisioning.js` now has a **test-only**
+delegation branch calling the shared `backend/services/utils/atproto-dataset-admin-delegation.js`
+client. The change occurs before *any* triplestore existence check or
+admin fallback. When enabled by the exact disposable testing combination,
+the service requires `ctx.meta.atprotoDatasetTicket`, checks exact
+reservation scope and forwards the signed ticket to a fixed, local
+`POST /v1/provision` endpoint; only the independently credentialed
+administrator checks its Ed25519 signature and one-row PostgreSQL claim
+ledger. Success requires a strictly typed, bounded acknowledgment.
+
+The real service continues using SemApps' existing
+`triplestore.dataset.waitForCreation` and
+`ensureSemappsNamedGraphs` sequence after successful delegation.
+A denied or unavailable administrator **does not** fall back to
+`triplestore.dataset.create` or the legacy Fuseki admin endpoint.
+The existing legacy branch is unchanged when delegation is off.
+
+A separate subprocess executes the **same CJS client as the real
+Moleculer action** against the actual PG18/Fuseki service from #211.
+Its environment contains only seven disposable ordinary-provider
+parameters and a signed ticket. It does not receive the SQL
+administrator DSN, Jena admin password, agent credential, signing
+private key or a triplestore management connection. It tests signed
+creation replay and rejects missing or cross-dataset claims, including
+after restarting both the administrator process and persistent Jena.
+The backend unit suite independently exercises the actual
+`dataset-provisioning.ensureSecureDataset` action, verifying that
+delegation precedes triplestore existence checks and preserves its
+ordinary LDP graph-initialization behavior.
+
+**This does not release production.** The client refuses execution
+outside disposable Node tests or when *any* of the known privileged
+administrator/issuer credentials are present in the ordinary process.
+The live provider's `CONFIG.JENA_PASSWORD` and startup network
+layout have **not yet been physically removed**, and the trusted
+account-reservation issuer has not yet been integrated into
+`provider-capabilities` or `auth.signup`. The latter service still
+creates the dataset before account creation; new production signup
+remains NO-GO. The ephemeral subprocess and hardcoded loopback
+credential policies are acceptance evidence, not a production
+deployment blueprint.
+
+Next: use a trusted, durable pre-account reservation in the real
+ActivityPods account lifecycle; run dataset-administrator and ordinary
+provider in isolated network/secret scopes; remove Fuseki admin
+password from all general SemApps processes; verify actual Solid
+WebACL/bootstrap behavior with distinct storage roles; then run
+multi-replica crash/retry, private SAI grant/revocation and latency/cost
+proofs before changing the source-controlled release fuse.

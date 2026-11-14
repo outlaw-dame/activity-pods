@@ -145,6 +145,17 @@ await ready();
 if (phase === 'prepare') {
   await createDataset('protected-proof');
   await createDataset('ordinary-proof');
+  // Bounded authentication matrix: helps distinguish Shiro credential
+  // rejection from the SPARQL service's separate update authorization.
+  for (const principal of ['projector', 'ordinary', 'admin']) {
+    const response = await request('/protected-proof/query', principal, {
+      type: queryType, body: 'ASK {}',
+      accept: 'application/sparql-results+json'
+    });
+    process.stdout.write('FUSEKI_PRINCIPAL_PROBE ' +
+      JSON.stringify({ principal, endpoint: 'protected-proof/query',
+        status: response.status }) + '\n');
+  }
   accepted(await update('protected-proof', 'projector',
     'INSERT DATA { ' + subjects.protected + ' ' + predicate +
       ' "signed-baseline" . }'), 'Projection worker writes protected RDF');

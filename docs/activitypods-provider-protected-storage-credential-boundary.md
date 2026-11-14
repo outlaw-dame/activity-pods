@@ -218,7 +218,7 @@ after that pass should a separate review consider production release.
 delegation branch calling the shared `backend/services/utils/atproto-dataset-admin-delegation.js`
 client. The change occurs before *any* triplestore existence check or
 admin fallback. When enabled by the exact disposable testing combination,
-the service requires `ctx.meta.atprotoDatasetTicket`, checks exact
+the service requires the explicit operation-scoped `ctx.params.datasetAdminTicket`, checks exact
 reservation scope and forwards the signed ticket to a fixed, local
 `POST /v1/provision` endpoint; only the independently credentialed
 administrator checks its Ed25519 signature and one-row PostgreSQL claim
@@ -239,7 +239,7 @@ administrator DSN, Jena admin password, agent credential, signing
 private key or a triplestore management connection. It tests signed
 creation replay and rejects missing or cross-dataset claims, including
 after restarting both the administrator process and persistent Jena.
-The backend unit suite independently exercises the actual
+The ticket is deliberately **not** placed in inheritable Moleculer\n`ctx.meta`; nested triplestore, LDP and WebACL calls receive only their\nordinary arguments, not the signed creation capability. The backend\nunit suite independently exercises the actual
 `dataset-provisioning.ensureSecureDataset` action, verifying that
 delegation precedes triplestore existence checks and preserves its
 ordinary LDP graph-initialization behavior.

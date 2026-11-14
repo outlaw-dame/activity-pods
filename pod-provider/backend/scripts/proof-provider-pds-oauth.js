@@ -219,6 +219,7 @@ async function main(){
    const nextHead='bafyre'+'b'.repeat(53);
    const recordCid='bafyre'+'c'.repeat(53);
    let onProjected=null;
+   let nonceIssuerAvailable=true;
    const writer={
      verify:async()=>({
        commitCid:head,rootCid:'bafyre'+'d'.repeat(53),
@@ -244,6 +245,12 @@ async function main(){
        atprotoManaged:true,atprotoSource:'local',status:'active'
      }),
      authorizeOwner:candidate.authorize,
+     mintDpopNonce:async({audience})=>{
+       if(!nonceIssuerAvailable)throw Error('disposable Redis issuer unavailable');
+       return oauthDpop.actions.mintNonce.handler.call(dpopState,{
+         params:{audience}
+       });
+     },
      resolveSigner:async()=>({publicKeyPem:'disposable-public-key',
        signer:async()=>Buffer.alloc(64)}),
      createFencedWriter:async()=>writer,
@@ -269,20 +276,43 @@ async function main(){
          'content-type':'application/json',
          authorization:'DPoP '+tokenValue,dpop:proof
        },body:JSON.stringify(body()),signal:AbortSignal.timeout(6000)});
-       return {status:response.status,data:await response.json()};
+       return {status:response.status,data:await response.json(),
+         nonce:response.headers.get('dpop-nonce'),
+         challenge:response.headers.get('www-authenticate'),
+         cacheControl:response.headers.get('cache-control')};
      };
-     const initialProof=await signedProof();
+     // Exercise RFC 9449 resource-server challenge, not a manually
+     // pre-minted fixture proof: a legitimate client must be able to
+     // discover the nonce audience from the actual PDS HTTP response.
      const proofsBefore=proofVerifications;
+     const missingNonceProof=await sign({token,proofNonce:undefined});
+     const challenged=await post(missingNonceProof);
+     assert.equal(challenged.status,401);
+     assert.equal(challenged.data.error,'use_dpop_nonce');
+     assert.equal(challenged.challenge,'DPoP error="use_dpop_nonce"');
+     assert.equal(challenged.cacheControl,'no-store');
+     assert(/^[A-Za-z0-9_-]{16,128}$/.test(challenged.nonce));
+     assert.equal(records,0,'missing resource nonce never reaches signer');
+     const initialProof=await sign({token,proofNonce:challenged.nonce});
      const accepted=await post(initialProof);
      assert.equal(accepted.status,200,JSON.stringify(accepted.data));
      assert.equal(records,1);
-     assert.equal(proofVerifications,proofsBefore+1,
-       'HTTP request proof must be consumed only once even after commit');
+     assert.equal(proofVerifications,proofsBefore+2,
+       'one failed nonce challenge plus one signed HTTP request; no replay on recheck');
      assert.equal(accepted.data.commit.cid,nextHead);
      const replay=await post(initialProof);
      assert.equal(replay.status,401);
-     assert.equal(replay.data.error,'AuthRequired');
+     assert.equal(replay.data.error,'use_dpop_nonce');
+     assert.equal(replay.challenge,'DPoP error="use_dpop_nonce"');
+     assert(/^[A-Za-z0-9_-]{16,128}$/.test(replay.nonce));
      assert.equal(records,1);
+     nonceIssuerAvailable=false;
+     const failedIssuer=await post(await sign({token,proofNonce:undefined}));
+     assert.equal(failedIssuer.status,503,
+       'issuer storage failure is not an un-verifiable nonce challenge');
+     assert.equal(failedIssuer.nonce,null);
+     assert.equal(records,1);
+     nonceIssuerAvailable=true;
      onProjected=async()=>{
        pg={...pg,state:'blocked',revision:'2'};
      };
@@ -338,7 +368,8 @@ async function main(){
      replayAtomicNx:true,granularRepoScopes:true,
      collectionActionChecked:true,clientBound:true,
      canonicalConsentRechecked:true,postCommitDpopNotReplayed:true,
-     productionFuseClosed:true,
+     productionFuseClosed:true,resourceNonceChallenge:true,
+     nonceIssuerUnavailableFailsClosed:true,
      version,proofVerifications,introspections,grantReads
    }));
  }finally{

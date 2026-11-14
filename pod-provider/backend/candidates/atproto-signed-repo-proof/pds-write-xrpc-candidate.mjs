@@ -110,7 +110,7 @@ function disabled(){
 export function createAuthenticatedRecordWriteXrpc({
   pdsOrigin,resolveHostedAccount,authorizeOwner,
   resolveSigner,createFencedWriter,finalizeProjection,
-  fixtureOnly=false
+  mintDpopNonce=null,fixtureOnly=false
 }={}){
   const released=()=>fixtureOnly===true&&
     process.env.NODE_ENV==='test'&&
@@ -121,7 +121,8 @@ export function createAuthenticatedRecordWriteXrpc({
   }
   const hostedOrigin=origin(pdsOrigin);
   if([resolveHostedAccount,authorizeOwner,resolveSigner,
-    createFencedWriter,finalizeProjection].some(x=>typeof x!=='function')){
+    createFencedWriter,finalizeProjection].some(x=>typeof x!=='function')||
+    (mintDpopNonce!==null&&typeof mintDpopNonce!=='function')){
     deny('PDS_WRITE_CONFIGURATION_INVALID');
   }
   async function write(req,method){
@@ -153,6 +154,13 @@ export function createAuthenticatedRecordWriteXrpc({
       // Before signing, a rejected token/proof is a 401. Transient
       // provider/Redis/PG failures stay 503 and never reach the signer.
       const denialType=typeof e?.type==='string'?e.type:e?.code;
+      if(denialType==='INVALID_DPOP_NONCE'){
+        // OAuth checked the signed access token/DPoP binding but the
+        // resource-required nonce is absent, expired or already consumed.
+        // Issue the RFC 9449 resource-server nonce challenge only when a
+        // trusted mint callback exists, never from a client-supplied value.
+        deny('UseDpopNonce',401);
+      }
       if(['PDS_OAUTH_NOT_AUTHORIZED','INVALID_DPOP_PROOF',
           'INVALID_DPOP_NONCE','INVALID_DPOP_ATH',
           'DPOP_REPLAY_DETECTED'].includes(denialType)){
@@ -279,6 +287,28 @@ export function createAuthenticatedRecordWriteXrpc({
         'cache-control':'no-store','x-content-type-options':'nosniff'});
       res.end(JSON.stringify(result));
     }catch(e){
+      if(e?.code==='UseDpopNonce'&&typeof mintDpopNonce==='function'){
+        let nonce;
+        try{
+          const fresh=await mintDpopNonce({audience:hostedOrigin});
+          nonce=fresh?.nonce;
+        }catch{nonce=null;}
+        // Never advertise a fake challenge when issuer nonce storage is
+        // unavailable: clients would retry with a value we cannot verify.
+        if(typeof nonce==='string'&&/^[A-Za-z0-9_-]{16,128}$/u.test(nonce)){
+          if(!res.headersSent){
+            res.writeHead(401,{
+              'content-type':'application/json; charset=utf-8',
+              'cache-control':'no-store','pragma':'no-cache',
+              'x-content-type-options':'nosniff',
+              'www-authenticate':'DPoP error="use_dpop_nonce"',
+              'dpop-nonce':nonce
+            });
+          }
+          res.end(JSON.stringify({error:'use_dpop_nonce'}));
+          return;
+        }
+      }
       const code=typeof e?.code==='string'&&
         ['InvalidRequest','InvalidSwap','RecordAlreadyExists','RecordNotFound',
           'RepoNotFound','Forbidden',

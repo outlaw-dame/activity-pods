@@ -72,6 +72,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket-canonical-gate.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-login.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-live.test.mjs
           node --check pod-provider/backend/utils/atproto-canonical-pg-authority.js
           node --check pod-provider/backend/services/utils/atproto-sai-native-fence.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.mjs
@@ -161,6 +163,13 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.test.mjs
+          # Isolated PG18 logins + actual @atproto/repo MST + restricted CAS.
+          # No public route or production data is involved.
+          NODE_ENV=test \
+          ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
+          ATPROTO_REPO_WRITER_ROLE_TEST_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
+            node --test pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-live.test.mjs
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.test.mjs

@@ -89,7 +89,9 @@ function fence(input,receipt) {
 }
 const proof = username => ({
   username,webId:ROOT + username,activityPubActorId:ROOT + username,
-  atprotoDid:'did:plc:'+'a'.repeat(24),
+  atprotoDid:'did:plc:' + Array.from(
+    crypto.createHash('sha256').update(username,'utf8').digest().subarray(0,24),
+    byte => 'abcdefghijklmnopqrstuvwxyz234567'[byte % 32]).join(''),
   atprotoPdsUrl:'https://pds.paper.example.org',
   evidenceSha256:fingerprint('synthetic-cryptographic-receipt-not-production')
 });
@@ -209,7 +211,10 @@ async function prepare() {
       'SELECT ON paper_account_reservation_proof.reservations',
       'UPDATE ON paper_account_reservation_proof.reservations',
       'SELECT ON paper_account_reservation_proof.daily_usage',
-      'pg_monitor'
+      'TRUNCATE ON paper_account_reservation_proof.reservations',
+      'MAINTAIN ON paper_account_reservation_proof.daily_usage',
+      'pg_monitor',
+      'pg_read_all_data'
     ]) {
       await rootPool.query('GRANT '+grant+' TO paper_account_worker_login');
       try {
@@ -258,6 +263,23 @@ async function verify() {
     assert.equal(await service.complete(config.active,
       proof(config.input.username)),false);
     assert.equal((await service.reserve(config.input)).outcome,'completed');
+    const nextInput=account('post-crash-app',
+      'claimtest-'+crypto.randomBytes(5).toString('hex'));
+    const nextReceipt=await service.reserve(nextInput);
+    assert.equal(nextReceipt.outcome,'reserved');
+    const nextFence=fence(nextInput,nextReceipt);
+    assert.equal(await service.startSideEffects(nextFence),true);
+    await assert.rejects(
+      service.complete(nextFence,{...proof(nextInput.username),
+        atprotoDid:proof(config.input.username).atprotoDid}),
+      e=>e?.code==='23505',
+      'PG must reject a second account binding to the same ATProto DID');
+    await assert.rejects(
+      service.complete(nextFence,{...proof(nextInput.username),
+        activityPubActorId:proof(config.input.username).activityPubActorId}),
+      e=>e?.code==='23505',
+      'PG must reject a second account binding to the same ActivityPub actor');
+    assert.equal(await service.complete(nextFence,proof(nextInput.username)),true);
     assert.equal((await service.reserve(account('other-app',
       config.input.username))).outcome,'username_taken');
     assert.equal((await service.reserve(config.expiredInput)).outcome,'already_reserved');
@@ -266,7 +288,7 @@ async function verify() {
       'SELECT state,count(*)::int AS count FROM paper_account_reservation_proof.reservations '+
       'GROUP BY state ORDER BY state');
     assert.deepEqual(rows.rows.map(x=>[x.state,x.count]),
-      [['completed',1],['reserved',1]],
+      [['completed',2],['reserved',1]],
       'Post-crash state must remain monotonic and exact');
     console.log('ACCOUNT_PG_RESERVATION '+JSON.stringify({phase:'verify',
       restartedProcess:true,immutableCompletedIdentity:true,

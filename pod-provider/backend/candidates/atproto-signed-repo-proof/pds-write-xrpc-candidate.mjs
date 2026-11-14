@@ -152,9 +152,10 @@ export function createAuthenticatedRecordWriteXrpc({
     }catch(e){
       // Before signing, a rejected token/proof is a 401. Transient
       // provider/Redis/PG failures stay 503 and never reach the signer.
+      const denialType=typeof e?.type==='string'?e.type:e?.code;
       if(['PDS_OAUTH_NOT_AUTHORIZED','INVALID_DPOP_PROOF',
           'INVALID_DPOP_NONCE','INVALID_DPOP_ATH',
-          'DPOP_REPLAY_DETECTED'].includes(e?.code)){
+          'DPOP_REPLAY_DETECTED'].includes(denialType)){
         deny('AuthRequired',401);
       }
       throw e;

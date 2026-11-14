@@ -16,7 +16,7 @@ if(process.env.NODE_ENV!=='test' ||
     process.env.PAPER_ACCOUNTS_DISPOSABLE!=='confirmed' ||
     process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed' ||
     process.env.PAPER_ACCOUNT_COMPLETION_DISPOSABLE!=='confirmed' ||
-    !/^postgres(?:ql)?:\/\/postgres:bench@127\.0\.0\.1:5547\/paper_accounts_test$/u.test(dsn)) {
+    !/^postgres(?:ql)?:\/\/postgres:bench@127\.0\.0\.1:5547\/paper_account_completion_test$/u.test(dsn)) {
   throw Error('Account completion proof is restricted to the disposable PG18 database');
 }
 const pool=new Pool({connectionString:dsn,max:6,
@@ -320,6 +320,7 @@ async function main(){
   }
 }
 main().catch(e=>{
-  console.error('Atomic signup proof failed:',e?.code||e?.name||'UNKNOWN');
+  console.error('Atomic signup proof failed:',e?.code||e?.name||'UNKNOWN',
+    String(e?.message||'').slice(0,220),String(e?.stack||'').split('\n').slice(0,5).join(' | '));
   process.exitCode=1;
 });

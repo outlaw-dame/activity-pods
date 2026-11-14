@@ -223,22 +223,27 @@ test('historical signed native #commit is invertible from bounded proof CAR afte
           [did,oldRoot,bytes]
         );
       }
+      // Tamper a persisted UPDATE instead of a CREATE: the SQL audit
+      // correctly forbids a create action from having a previous CID.
+      // A plausible but incorrect prior record CID must fail at signed
+      // old/new MST reconciliation, not just the SQL CHECK constraint.
+      const auditedUpdate=journal[journal.length-2].head;
       const previousCid=(await pool.query(
         'SELECT previous_record_cid FROM paper_atproto_repo_proof.record_mutations '+
-        'WHERE did=$1 AND commit_cid=$2',[did,h.commitCid]
+        'WHERE did=$1 AND commit_cid=$2',[did,auditedUpdate.commitCid]
       )).rows[0].previous_record_cid;
       await pool.query(
         'UPDATE paper_atproto_repo_proof.record_mutations '+
         'SET previous_record_cid=$3 WHERE did=$1 AND commit_cid=$2',
-        [did,h.commitCid,'bafyre'+'b'.repeat(53)]
+        [did,auditedUpdate.commitCid,'bafyre'+'b'.repeat(53)]
       );
       try{
-        await refuse(eventFor(h),'NATIVE_COMMIT_AUDIT_MISMATCH');
+        await refuse(eventFor(auditedUpdate),'NATIVE_COMMIT_AUDIT_MISMATCH');
       }finally{
         await pool.query(
           'UPDATE paper_atproto_repo_proof.record_mutations '+
           'SET previous_record_cid=$3 WHERE did=$1 AND commit_cid=$2',
-          [did,h.commitCid,previousCid]
+          [did,auditedUpdate.commitCid,previousCid]
         );
       }
     });

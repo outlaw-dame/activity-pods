@@ -47,6 +47,9 @@ jobs:
           cp scripts/fixtures/fuseki-isolation-shiro.ini data/fuseki_isolation/shiro.ini
           chmod 0644 data/fuseki_isolation/shiro.ini
           docker compose -p paper-fuseki-isolation -f docker-compose-fuseki-isolation.yml up -d
+          # A default entrypoint may silently replace the role/URL policy.
+          # Fail before any admission proof if the mounted file was altered.
+          cmp scripts/fixtures/fuseki-isolation-shiro.ini data/fuseki_isolation/shiro.ini
 
       - name: Prove protected/ordinary SQL-independent TDB2 admission boundaries
         env:

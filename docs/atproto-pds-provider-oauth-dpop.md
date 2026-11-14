@@ -11,7 +11,11 @@ new repository writer.
 ## Trusted services reused
 
 1. `oauth-token.introspectAccessToken` cryptographically verifies JWT
-   signature, issuer, audience and expiry using the provider's JWK.
+   signature, issuer, audience, expiry, issuer-configured algorithm and
+   the exact `at+jwt` **access-token type** using the provider's JWK.
+   Other issuer-signed JWT types (including ID/session tokens) are not
+   authorization credentials for the PDS, even if they share a key,
+   subject and audience.
    Only its output may identify the DID subject, canonical WebID,
    OAuth client and token-bound `cnf.jkt`.
 2. `oauth-dpop-nonce.verifyProof` verifies a signed public P-256 JWK,

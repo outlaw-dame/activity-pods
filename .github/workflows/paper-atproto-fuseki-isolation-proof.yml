@@ -7,6 +7,12 @@ on:
       - 'pod-provider/docker-compose-fuseki-isolation.yml'
       - 'pod-provider/scripts/fixtures/fuseki-isolation-shiro.ini'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
+      - 'pod-provider/backend/services/core/triplestore.js'
+      - 'pod-provider/backend/services/core/dataset-provisioning.js'
+      - 'pod-provider/backend/services/solid/storage.js'
+      - 'pod-provider/backend/services/identitybindings.service.js'
+      - 'pod-provider/backend/services/sai/access-grants.js'
+      - 'pod-provider/backend/services/sai/data-grants.js'
   workflow_dispatch:
 
 concurrency:
@@ -63,6 +69,8 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attestor.mjs
           node --check backend/candidates/atproto-signed-repo-proof/pg-attested-projection-ops.mjs
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
 
       - name: Prepare fresh temporary Fuseki security configuration
         run: |
@@ -84,6 +92,11 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs prepare
+
+      - name: Check actual-provider generic credential segregation before restart
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs prepare
 
       - name: Install locked signed-PG proof dependencies
         run: |
@@ -108,6 +121,11 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs verify
+
+      - name: Recheck generic provider credential segregation after Fuseki restart
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs verify
 
       - name: Prove independent protected-RDF receipt after persistent Jena restart
         run: |

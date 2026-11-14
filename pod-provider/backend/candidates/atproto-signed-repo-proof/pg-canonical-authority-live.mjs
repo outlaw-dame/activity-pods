@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import { Client } from 'pg';
 
 const require = createRequire(import.meta.url);
@@ -77,45 +78,125 @@ async function seed(owner, did, app, grant) {
     [owner,app,grant,proofHash('verified-sai:'+grant)]
   );
 }
-async function probeFuseki(ownedUri) {
+async function probeFuseki({ owner, app, grant, did, pgAuthority }) {
   if (!process.env.FUSEKI_URL) return false;
   if (process.env.FUSEKI_URL !== 'http://127.0.0.1:3040' ||
       process.env.ATPROTO_REPO_FUSEKI_PROOF_DISPOSABLE !== 'confirmed') {
     throw Error('Fuseki adversarial proof requires exact disposable loopback target');
   }
-  const uri = 'urn:paper:authority:adversary:' + rand;
-  const predicate = 'http://activitypods.org/ns/core#repoConsentStatus';
+  const { consentSubject, readConsentQuery, parseConsentRows } =
+    require('./pod-consent-fence.cjs');
+  // The existing per-user Fuseki proof already created and owns the 'alice'
+  // dataset. Forge a COMPLETE grant at the ACTUAL canonical subject within
+  // that same dataset; a generic settings triple would not match SAI.
+  const subject = consentSubject(owner, app);
   const auth = 'Basic ' + Buffer.from('admin:' +
     (process.env.FUSEKI_PASSWORD || 'admin')).toString('base64');
-  // This simulates a privileged SemApps/Fuseki component inserting a forged
-  // RDF active claim in a mutable dataset. It is NOT a harmless public actor.
-  const query = 'INSERT DATA { <' + uri + '> <' + predicate + '> "active" . }';
-  const r = await fetch(process.env.FUSEKI_URL+'/settings/update', {
-    method:'POST',headers:{
-      authorization:auth,'content-type':'application/sparql-update'
-    },body:query,signal:AbortSignal.timeout(10000)
-  });
-  if(!r.ok)throw Error('Disposable Fuseki SPARQL write refused: HTTP '+r.status);
-  const check = await fetch(process.env.FUSEKI_URL+'/settings/query', {
-    method:'POST',headers:{
-      authorization:auth,'content-type':'application/sparql-query',
-      accept:'application/sparql-results+json'
-    },
-    body:'ASK WHERE { <'+uri+'> <'+predicate+'> "active" . }',
-    signal:AbortSignal.timeout(10000)
-  });
-  if(!check.ok)throw Error('Disposable Fuseki SPARQL query refused: HTTP '+check.status);
-  const value = await check.json();
-  assert.equal(value.boolean, true, 'Adversarial RDF modification must genuinely succeed');
-  // Remove only the synthetic RDF triple created by this proof.
-  const clear = await fetch(process.env.FUSEKI_URL+'/settings/update',{
-    method:'POST',headers:{
-      authorization:auth,'content-type':'application/sparql-update'
-    },
-    body:query.replace('INSERT DATA','DELETE DATA'),
-    signal:AbortSignal.timeout(10000)
-  });
-  if(!clear.ok)throw Error('Disposable RDF fixture cleanup failed: HTTP '+clear.status);
+  const prefix = 'PREFIX apods: <http://activitypods.org/ns/core#> ';
+  const triples = '<' + subject + '> apods:repoConsentStatus "active" ; ' +
+    'apods:repoConsentRevision "1"^^<http://www.w3.org/2001/XMLSchema#integer> ; ' +
+    'apods:repoConsentGrant <' + grant + '> . ';
+  async function sparql(dataset, kind, statement) {
+    if (!['settings','alice'].includes(dataset) ||
+        !['update','query'].includes(kind)) throw Error('Untrusted Fuseki target');
+    const response = await fetch(process.env.FUSEKI_URL+'/'+dataset+'/'+kind, {
+      method:'POST',headers:{
+        authorization:auth,
+        'content-type':kind==='update'?'application/sparql-update':'application/sparql-query',
+        accept:'application/sparql-results+json'
+      },body:statement,signal:AbortSignal.timeout(10000)
+    });
+    if (!response.ok) throw Error('Disposable Fuseki '+kind+' failed: HTTP '+response.status);
+    return kind==='query' ? (await response.json()).results.bindings : null;
+  }
+  // Keep the forged grant in place while the real provider SAI hook consults
+  // canonical PG. Prove the legacy RDF parser WOULD accept this exact grant.
+  await sparql('alice','update',prefix+'INSERT DATA { '+triples+' }');
+  let forgedReadWouldAuthorize = false;
+  let hookDeniedRdfFallback = false;
+  try {
+    const rows = await sparql('alice','query',readConsentQuery({subjectUri:subject}));
+    const rdf = parseConsentRows(rows,{grantUri:grant});
+    assert.equal(rdf.status,'active');
+    assert.equal(rdf.revision,'1');
+    forgedReadWouldAuthorize = true;
+    await assert.rejects(pgAuthority.verifyActiveGrant({
+      owner,app,grantUri:grant,did,consentRevision:'1'
+    }),e=>e?.code==='ATPROTO_PG_PERMISSION_DENIED');
+
+    // Execute the ACTUAL native SAI fence source with only a fake Moleculer
+    // wiring layer. The data reads use real Fuseki and the authorization
+    // adapter uses the real, restricted PostgreSQL login. Neither mock is
+    // permitted to override its returned PG permission state.
+    const file = new URL('../../services/utils/atproto-sai-native-fence.js',import.meta.url);
+    const source = await readFile(file,'utf8');
+    const m={exports:{}};
+    class MoleculerError extends Error {
+      constructor(message,status,type) {
+        super(message);this.code=status;this.type=type;
+      }
+    }
+    vm.runInNewContext(source,{
+      module:m,exports:m.exports,process,Buffer,URL,BigInt,Set,
+      require(name) {
+        if(name==='moleculer') return {Errors:{MoleculerError}};
+        if(name==='../../utils/atproto-canonical-pg-authority') {
+          return {getProviderAtprotoPgAuthority: async()=>pgAuthority};
+        }
+        if(name==='../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs') {
+          return require('./pod-consent-fence.cjs');
+        }
+        if(name==='../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs') {
+          return require('./pod-account-lookup.cjs');
+        }
+        throw Error('Unexpected provider SAI dependency: '+name);
+      }
+    },{filename:'atproto-sai-native-fence.js',timeout:3000});
+    const flags=['APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED',
+      'APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED','APODS_ATPROTO_SAI_FENCED_APPS'];
+    const old=Object.fromEntries(flags.map(key=>[key,process.env[key]]));
+    try {
+      process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED='true';
+      process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED='true';
+      process.env.APODS_ATPROTO_SAI_FENCED_APPS=app;
+      const observed=[];
+      const ctx={
+        meta:{webId:owner},
+        params:{containerUri:owner+'/data/access-grants/'},
+        async call(name,params) {
+          observed.push(name);
+          if(name==='access-grants.getContainerUri') return owner+'/data/access-grants/';
+          if(name==='webacl.resource.hasRights') return {append:true,write:true};
+          if(name==='triplestore.query') return sparql(params.dataset,'query',params.query);
+          if(name==='triplestore.update') throw Error('No RDF consent fallback permitted');
+          throw Error('Unexpected SAI action '+name);
+        }
+      };
+      const grantResource={'interop:grantedBy':owner,'interop:grantee':app};
+      const result=await m.exports.beforeSaiMutation(ctx,'access-grants',grantResource,'post');
+      assert.equal(result.checked,true);
+      assert.equal(result.blocked,true);
+      assert.equal(observed.includes('triplestore.update'),false);
+      assert.equal(observed.some(name=>name==='triplestore.query'),true,
+        'Owner account-location lookup should still run');
+      // RDF forged active grant remains legible; PG blocked consent wins.
+      assert.equal((await sparql('alice','query',
+        readConsentQuery({subjectUri:subject})).length,1);
+      hookDeniedRdfFallback=true;
+    } finally {
+      for(const [key,value] of Object.entries(old)) {
+        if(value===undefined) delete process.env[key];
+        else process.env[key]=value;
+      }
+    }
+  } finally {
+    await sparql('alice','update',prefix+'DELETE DATA { '+triples+' }');
+    assert.equal((await sparql('alice','query',
+      readConsentQuery({subjectUri:subject}))).length,0,
+      'All forged RDF triples must be cleaned up');
+  }
+  assert.equal(forgedReadWouldAuthorize,true);
+  assert.equal(hookDeniedRdfFallback,true);
   return true;
 }
 let migrationApplied=false;
@@ -147,7 +228,7 @@ async function run() {
       e=>e?.code==='ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
     await assert.rejects(assertRestrictedPgAuthorityLogin(generic),
       e=>e?.code==='ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
-    const owner='https://paper.example.test/alice';
+    const owner='https://paper.example.org/alice';
     const other='https://paper.example.test/bob';
     const app='https://writer.example.test/app';
     const grant=owner+'/data/grants/repo-access';
@@ -205,7 +286,7 @@ async function run() {
 
     const blocked=await api.revoke({owner,app,grantUri:grant,expectedRevision:'1'});
     assert.deepEqual(blocked,{state:'blocked',revision:'2'});
-    const wroteRdf=await probeFuseki(owner);
+    const wroteRdf=await probeFuseki({owner,app,grant,did:'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',pgAuthority:api});
     // A forged *active* Jena triple cannot change canonical PG authorization.
     assert.equal((await api.getConsent({owner,app})).state,'blocked');
     await assert.rejects(api.verifyActiveGrant({

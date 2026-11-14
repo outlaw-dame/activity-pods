@@ -144,7 +144,8 @@ async function main(){
    const signedProof=async(value=token,overrides={})=>sign({
      token:value,proofNonce:await nonce(),...overrides
    });
-   const goodProof=await signedProof();
+   const goodJti=crypto.randomUUID();
+   const goodProof=await signedProof(token,{id:goodJti});
    const auth=await candidate.authorize(params(token,goodProof));
    assert.equal(auth.ownerDid,did);
    assert.equal(auth.ownerWebId,webId);
@@ -158,7 +159,11 @@ async function main(){
    assert.equal((await auth.recheck()).verified,true);
    assert.equal(proofVerifications,beforeRecheck,
      'post-commit authorization must not reuse already consumed DPoP proof');
-   await error(candidate.authorize(params(token,goodProof)),'DPOP_REPLAY_DETECTED');
+   await error(candidate.authorize(params(token,goodProof)),'INVALID_DPOP_NONCE');
+   // An attacker replaying the same jti with a new nonce is also rejected
+   // by the separate shared Redis SET NX replay ledger.
+   await error(candidate.authorize(params(token,await signedProof(token,{id:goodJti}))),
+     'DPOP_REPLAY_DETECTED');
 
    const noAth=await signedProof(token,{accessHash:'A'.repeat(43)});
    await error(candidate.authorize(params(token,noAth)),'INVALID_DPOP_ATH');

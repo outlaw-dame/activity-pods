@@ -13,7 +13,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {Pool} from 'pg';
-import {signDisposableDatasetClaim} from './dataset-admin-claim-service.mjs';
+import {signDisposableDatasetClaim,assertRestrictedDatasetAdminLogin} from './dataset-admin-claim-service.mjs';
 
 const PHASE=process.argv[2];
 const ROOT='http://127.0.0.1:3042/v1/provision';
@@ -155,6 +155,40 @@ async function prepare(){
   max:1,connectionTimeoutMillis:3000,query_timeout:5000,
   allowExitOnIdle:true});
  try{
+  assert.equal(await assertRestrictedDatasetAdminLogin(user),true);
+  const injected=[
+    {
+      grant:"UPDATE (owner_webid) ON paper_dataset_admin_proof.claims",
+      label:'mutable canonical owner'
+    },
+    {
+      grant:"INSERT (state) ON paper_dataset_admin_proof.claims",
+      label:'precompleted forged claim'
+    },
+    {
+      grant:"SELECT ON paper_dataset_admin_proof.claims",
+      label:'unbounded claim table enumeration'
+    },
+    {
+      grant:"pg_monitor",
+      label:'unrelated inherited database role',
+      role:true
+    }
+  ];
+  for(const test of injected){
+    const syntax=test.role
+      ?test.grant+' TO paper_dataset_admin_login'
+      :test.grant+' TO paper_dataset_admin_login';
+    await admin.query('GRANT '+syntax);
+    try{
+      await assert.rejects(assertRestrictedDatasetAdminLogin(user),
+        e=>e?.code==='DATASET_ADMIN_SQL_PRIVILEGES_UNSAFE',test.label);
+    }finally{
+      await admin.query('REVOKE '+test.grant+' FROM paper_dataset_admin_login');
+    }
+    assert.equal(await assertRestrictedDatasetAdminLogin(user),true,
+      'Restore exact restricted PG login after each malicious grant');
+  }
   await assert.rejects(user.query(
    "UPDATE paper_dataset_admin_proof.claims SET dataset='forged'"),
    e=>e?.code==='42501');

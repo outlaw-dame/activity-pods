@@ -1,3 +1,4 @@
+import {assertExactRuntimePrivileges} from './pg-exact-runtime-privileges.mjs';
 /**
  * Exact PostgreSQL 18 startup admission for the NONACTIVATED signed
  * repository write worker. Query ONLY trusted pg_catalog metadata on
@@ -69,6 +70,8 @@ export async function assertRestrictedRepoWriterLogin(pool){
      !x.consent_lock_execute||!x.reset_execute){
     deny();
   }
+  try{await assertExactRuntimePrivileges(pool,{role:'repo-writer'});}
+  catch{deny();}
   return Object.freeze({restricted:true,role:'paper_atproto_repo_writer',
     postgresVersion:x.version,mayRegrant:false,
     mayMarkProjectionApplied:false,mayAckEvents:false});

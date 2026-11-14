@@ -1,3 +1,4 @@
+import {assertExactRuntimePrivileges} from './pg-exact-runtime-privileges.mjs';
 /**
  * PostgreSQL 18 startup privilege admission for NONACTIVATED projection
  * worker. It must not inherit signer, importer, revoker, schema-owner, or
@@ -73,6 +74,8 @@ export async function assertRestrictedProjectionWorkerLogin(pool){
      !x.can_claim||!x.can_ack||!x.can_fail||!x.can_block||x.can_revoke){
     reject();
   }
+  try{await assertExactRuntimePrivileges(pool,{role:'projection-worker'});}
+  catch{reject();}
   return Object.freeze({restricted:true,maySign:false,mayRegrant:false,
     mayBypassLeases:false,postgresVersion:x.version});
 }

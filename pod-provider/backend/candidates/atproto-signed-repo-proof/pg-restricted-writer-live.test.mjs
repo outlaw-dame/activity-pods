@@ -95,6 +95,41 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
     await forbidden(assertRestrictedRepoWriterLogin(genericPool),
       'RESTRICTED_REPO_WRITER_LOGIN_REQUIRED');
 
+    // A role with all required grants is STILL unsafe if any extra
+    // table/column mutation or SET ROLE delegation leaks into the login.
+    for(const permission of [
+      'UPDATE (lease_until) ON paper_atproto_repo_proof.rdf_projection_jobs',
+      'INSERT (delivered_at) ON paper_atproto_repo_proof.native_event_outbox',
+      'DELETE ON paper_atproto_repo_proof.blocks',
+      'TRUNCATE ON paper_atproto_repo_proof.blocks',
+      'UPDATE (revision) ON paper_atproto_authority.consents'
+    ]){
+      await admin.query('GRANT '+permission+' TO '+ident(writerLogin));
+      try{
+        await forbidden(assertRestrictedRepoWriterLogin(writerPool),
+          'RESTRICTED_REPO_WRITER_LOGIN_REQUIRED');
+      }finally{
+        await admin.query('REVOKE '+permission+' FROM '+ident(writerLogin));
+      }
+      assert.equal((await assertRestrictedRepoWriterLogin(writerPool)).restricted,true);
+    }
+    const extraRole='paper_repo_extra_'+roleSuffix;
+    await admin.query('CREATE ROLE '+ident(extraRole)+
+      ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION');
+    try{
+      await admin.query('GRANT '+ident(extraRole)+' TO '+ident(writerLogin)+
+        ' WITH INHERIT FALSE,SET TRUE,ADMIN FALSE');
+      try{
+        await forbidden(assertRestrictedRepoWriterLogin(writerPool),
+          'RESTRICTED_REPO_WRITER_LOGIN_REQUIRED');
+      }finally{
+        await admin.query('REVOKE '+ident(extraRole)+' FROM '+ident(writerLogin));
+      }
+    }finally{
+      await admin.query('DROP ROLE '+ident(extraRole));
+    }
+    assert.equal((await assertRestrictedRepoWriterLogin(writerPool)).restricted,true);
+
     const {privateKey,publicKey}=crypto.generateKeyPairSync('ec',{
       namedCurve:'secp256k1'
     });
@@ -295,6 +330,7 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
     assert.equal(idle,0);
     console.log('RESTRICTED_REPO_WRITER_PG18_PROOF '+JSON.stringify({
       roleAdmission:true,realIndependentLogin:true,
+      unexpectedGrantRefusal:true,unexpectedSetRoleRefusal:true,
       canonicalIdentityDenied:true,canonicalConsentUpdateDenied:true,
       noProjectionAppliedWrite:true,noOutboxAckWrite:true,
       realSignedReferenceMst:true,outboxPending:true,

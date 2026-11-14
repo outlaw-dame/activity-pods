@@ -30,10 +30,14 @@ function load(file, deps) {
 }
 const account = require('../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs');
 const consent = require('../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs');
+let getPgAuthority = async () => { throw Error('Canonical PostgreSQL unavailable'); };
 const native = load(path.join(backend, 'services/utils/atproto-sai-native-fence.js'), {
   moleculer: { Errors: { MoleculerError } },
   '../../candidates/atproto-signed-repo-proof/pod-account-lookup.cjs': account,
-  '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs': consent
+  '../../candidates/atproto-signed-repo-proof/pod-consent-fence.cjs': consent,
+  '../../utils/atproto-canonical-pg-authority': {
+    getProviderAtprotoPgAuthority: (...args) => getPgAuthority(...args)
+  }
 });
 
 const origin = 'https://paper.example.org';
@@ -95,7 +99,11 @@ function setup() {
 
 const oldEnabled = process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED;
 const oldApps = process.env.APODS_ATPROTO_SAI_FENCED_APPS;
+const oldCanonical = process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
 function env(enabled, apps = app) {
+  // Each test opts into canonical PG explicitly, preserving the legacy Jena
+  // fixture behavior and preventing inherited environment drift.
+  delete process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
   if (enabled) {
     process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED = 'true';
     process.env.APODS_ATPROTO_SAI_FENCED_APPS = apps;
@@ -109,6 +117,58 @@ process.on('exit', () => {
   else process.env.APODS_ATPROTO_SAI_NATIVE_FENCE_ENABLED = oldEnabled;
   if (oldApps === undefined) delete process.env.APODS_ATPROTO_SAI_FENCED_APPS;
   else process.env.APODS_ATPROTO_SAI_FENCED_APPS = oldApps;
+  if (oldCanonical === undefined) delete process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED;
+  else process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = oldCanonical;
+});
+
+test('canonical PG authority is required, never replaced by a writable RDF grant', async () => {
+  env(true);
+  process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = 'true';
+  getPgAuthority = async () => { throw Error('postgres connection unavailable'); };
+  const { ctx, calls } = setup();
+  await assert.rejects(
+    native.beforeSaiMutation(ctx, 'access-grants', resource, 'post'),
+    e => e.code === 503 && e.type === 'ATPROTO_SAI_FENCE_UNAVAILABLE'
+  );
+  assert.equal(calls.filter(x => x.name === 'triplestore.update').length, 0);
+  assert.equal(calls.filter(x => x.name === 'triplestore.query' && x.params.dataset === 'alice').length, 0);
+  env(false);
+});
+
+test('canonical PG revocation is monotonic and makes no privileged Jena write', async () => {
+  env(true);
+  process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = 'true';
+  let state = 'active';
+  let epoch = '1';
+  const operations = [];
+  getPgAuthority = async () => ({
+    async getIdentity({ owner: requestedOwner }) {
+      assert.equal(requestedOwner, owner);
+      return { owner, did:'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa', state:'active' };
+    },
+    async getConsent({ owner: requestedOwner, app: requestedApp }) {
+      assert.equal(requestedOwner, owner);
+      assert.equal(requestedApp, app);
+      return { owner, app, grantUri: grant, state, revision: epoch };
+    },
+    async revoke({ owner: requestedOwner, app: requestedApp, grantUri, expectedRevision }) {
+      operations.push({requestedOwner, requestedApp, grantUri, expectedRevision});
+      assert.equal(requestedOwner,owner);
+      assert.equal(requestedApp,app);
+      assert.equal(grantUri,grant);
+      assert.equal(expectedRevision,'1');
+      state='blocked';epoch='2';
+      return {state,revision:epoch};
+    }
+  });
+  const { ctx, calls } = setup();
+  const result = await native.beforeSaiMutation(ctx, 'access-grants', resource, 'post');
+  assert.equal(result.blocked, true);
+  assert.equal(operations.length, 1);
+  assert.equal(calls.some(x => x.name === 'triplestore.update'), false);
+  assert.equal((await native.beforeSaiMutation(ctx, 'access-grants', resource, 'post')).blocked, true);
+  assert.equal(operations.length, 1, 'blocked grant cannot re-authorize');
+  env(false);
 });
 
 test('feature-disabled SAI traffic adds no Moleculer or Jena calls', async () => {

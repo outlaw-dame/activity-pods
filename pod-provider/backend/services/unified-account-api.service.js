@@ -168,6 +168,11 @@ module.exports = {
         } : {})
       };
       try {
+        // The protocol overlay can shadow an existing identity or migration
+        // claim in the original request. Reject the raw input before grant
+        // reservation or idempotency state, then validate the normalized
+        // effective protocol selection as well.
+        assertUnifiedRequest(params);
         assertUnifiedRequest(requested);
       } catch (error) {
         throw new MoleculerError(error.message, 400, error.code);

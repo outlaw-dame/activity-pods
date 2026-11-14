@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { MoleculerError } = require('moleculer').Errors;
+const { requireVerifiedManagedRepoProof } = require('../../utils/atproto-managed-repo-proof-policy');
 
 // ATProto handle syntax (RFC-1035 hostname, ≥2 labels, TLD does not start
 // with a digit). See https://atproto.com/specs/handle
@@ -95,6 +96,18 @@ module.exports = {
         force: { type: 'boolean', optional: true, default: false }
       },
       async handler(ctx) {
+        // This direct Moleculer action is also an identity-minting entry
+        // point, even when neither HTTP signup facade is called. Apply the
+        // current production release fuse BEFORE any binding lookup, key
+        // generation, PLC submission or other irreversible side effect.
+        if (process.env.NODE_ENV === 'production') {
+          throw new MoleculerError(
+            'Managed ATProto repository creation is not released for new accounts',
+            503,
+            'ATPROTO_PDS_REPOSITORY_NOT_READY',
+            { retryable: false }
+          );
+        }
         const { canonicalAccountId, webId, requestedHandle, activityPubActorId, activityPubHandle, didMethod, force } =
           ctx.params;
 
@@ -664,37 +677,117 @@ module.exports = {
       return `did:web:${handle}`;
     },
 
-    async initializeRepoState(_ctx, { canonicalAccountId, did, handle }) {
-      // A metadata-only root CID/revision is a fixture, not a signed PDS
-      // repository. Until the provider-owned bootstrap authority is active,
-      // fail before writing an identity binding in production.
+    _requiresVerifiedManagedRepo() {
+      // Production always requires real signed repository evidence. The
+      // production signup release fuse is closed while the full PDS, PG/Jena
+      // and SAI integration remains non-activated.
+      return process.env.NODE_ENV === 'production' ||
+        process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO === 'true';
+    },
+
+    async _trustedManagedRepositoryProof(ctx, action, { canonicalAccountId, did, handle }) {
+      // The provider-owned service factory is intentionally fixture-only. A
+      // production env toggle may NEVER register it or unlock a fake PDS.
+      // Only the disposable integration suite can exercise this contract.
+      const capability = process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY;
+      if (process.env.NODE_ENV !== 'test' ||
+          process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed' ||
+          process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO !== 'true' ||
+          typeof capability !== 'string' || capability.length < 32) {
+        throw new MoleculerError(
+          'Verified managed repository authority has not been released',
+          503,
+          'ATPROTO_REPO_PROOF_UNAVAILABLE'
+        );
+      }
+      let evidence;
+      try {
+        // ctx.call preserves the atproto-provisioning service as caller.
+        // Only this exact provider action receives the one-purpose secret.
+        // The receiving adapter creates fresh broker contexts for its
+        // signing/PLC calls and never forwards the capability downstream.
+        evidence = await ctx.call(action, { canonicalAccountId, did, handle }, {
+          meta: { providerRepoCapability: capability }
+        });
+      } catch {
+        throw new MoleculerError(
+          'Signed managed repository authority is unavailable',
+          503,
+          'ATPROTO_REPO_PROOF_UNAVAILABLE'
+        );
+      }
+      try {
+        return requireVerifiedManagedRepoProof({
+          canonicalAccountId, did,
+          expectedPdsOrigin: this._resolveLocalPdsUrl(canonicalAccountId),
+          proof: evidence
+        });
+      } catch {
+        throw new MoleculerError(
+          'Signed managed repository evidence is incomplete or inconsistent',
+          503,
+          'ATPROTO_REPO_PROOF_INVALID'
+        );
+      }
+    },
+
+    async initializeRepoState(ctx, { canonicalAccountId, did, handle }) {
+      // Fail before any helper, provider RPC, RDF write or optional test flag.
+      // A future production release must replace this barrier only after
+      // the one-writer PG/Jena/SAI completion gate is fully accepted.
       if (process.env.NODE_ENV === 'production') {
         throw new MoleculerError(
           'Verified ATProto PDS repository bootstrap is unavailable',
           503,
-          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+          'ATPROTO_PDS_REPOSITORY_NOT_READY',
+          { retryable: false }
         );
       }
-      await _ctx.call('identitybindings.upsertRepoBootstrap', {
-        canonicalAccountId,
-        did,
-        handle,
+      if (this._requiresVerifiedManagedRepo()) {
+        const proof = await this._trustedManagedRepositoryProof(
+          ctx, 'atproto-managed-repository.bootstrapAndVerify',
+          { canonicalAccountId, did, handle }
+        );
+        // This is ONLY a disposable integration path. The protected
+        // generation-CAS PG->Jena writer, not this legacy upsert, must
+        // commit the final production readiness projection.
+        await ctx.call('identitybindings.upsertRepoBootstrap', {
+          canonicalAccountId, did, handle,
+          repoInitialized: true, rootCid: proof.rootCid, rev: proof.rev
+        });
+        return {
+          ok: true, canonicalAccountId, did, handle,
+          rootCid: proof.rootCid, rev: proof.rev
+        };
+      }
+
+      // Transitional NON-PRODUCTION fixture, NEVER evidence that a real
+      // signed PDS exists. Preserve until dependent test harnesses migrate.
+      await ctx.call('identitybindings.upsertRepoBootstrap', {
+        canonicalAccountId, did, handle,
         repoInitialized: true,
         rootCid: this.settings.repoBootstrapRootCid,
         rev: this.settings.repoBootstrapRev
       });
 
       return {
-        ok: true,
-        canonicalAccountId,
-        did,
-        handle,
+        ok: true, fixtureOnly: true,
+        canonicalAccountId, did, handle,
         rootCid: this.settings.repoBootstrapRootCid,
         rev: this.settings.repoBootstrapRev
       };
     },
 
     async verifyProvisionedState(ctx, { canonicalAccountId, binding, didMethod }) {
+      // No production readiness may depend on a synthetic provider fixture.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Verified ATProto PDS repository readiness is unavailable',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY',
+          { retryable: false }
+        );
+      }
       // Reject missing and fixture-only repository evidence before treating
       // the binding as ready. Preserve the verification path for pre-existing
       // accounts with actual repository metadata; migrations are separate.
@@ -702,12 +795,36 @@ module.exports = {
         !binding?.repoRootCid || !binding?.repoRev ||
         binding.repoRootCid === 'bafyreigenesisplaceholder' ||
         binding.repoRev === '0';
-      if (process.env.NODE_ENV === 'production' && placeholderRepo) {
-        throw new MoleculerError(
-          'Verified ATProto PDS repository readiness is unavailable',
-          503,
-          'ATPROTO_PDS_REPOSITORY_NOT_READY'
+      if (this._requiresVerifiedManagedRepo()) {
+        if (placeholderRepo ||
+            binding.webId !== canonicalAccountId ||
+            binding.activityPubActorId !== canonicalAccountId ||
+            binding.atprotoSource !== 'local' ||
+            binding.atprotoManaged !== true) {
+          throw new MoleculerError(
+            'A complete locally managed signed repository is required',
+            503,
+            'ATPROTO_PDS_REPOSITORY_NOT_READY'
+          );
+        }
+        // Re-read the cryptographically verified PG head after the binding
+        // write. Do not confuse matching metadata with an authoritative
+        // signed commit, current DID key, outbox and provider identity.
+        const proof = await this._trustedManagedRepositoryProof(
+          ctx, 'atproto-managed-repository.verifyReady', {
+            canonicalAccountId, did: binding.atprotoDid,
+            handle: binding.atprotoHandle
+          }
         );
+        if (proof.rootCid !== binding.repoRootCid ||
+            proof.rev !== binding.repoRev ||
+            proof.pdsOrigin !== binding.atprotoPdsUrl) {
+          throw new MoleculerError(
+            'Protected identity binding differs from the signed repository',
+            503,
+            'ATPROTO_REPO_BINDING_MISMATCH'
+          );
+        }
       }
       if (!binding?.atSigningKeyRef || !binding?.atRotationKeyRef) {
         throw new MoleculerError('Identity binding is missing AT key refs', 500, 'ATPROTO_BINDING_INVALID');

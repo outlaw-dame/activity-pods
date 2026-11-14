@@ -139,6 +139,12 @@ async function proveDenied() {
   for (const [label, route, principal, options] of probes) {
     denied(await request(route, principal, options), label);
   }
+  denied(await request('/ordinary-proof/query', 'projector', {
+    type: queryType, body: 'ASK {}'
+  }), 'projector ordinary Pod read');
+  denied(await request('/ordinary-proof/query', 'attestor', {
+    type: queryType, body: 'ASK {}'
+  }), 'attestor ordinary Pod read');
   denied(await request('/protected-proof/query', 'ordinary', {
     type: queryType, body: 'ASK {}'
   }), 'ordinary protected query');
@@ -151,7 +157,7 @@ async function proveDenied() {
     ['signed-baseline'], 'Unauthorized mutations cannot alter protected RDF');
   assert.deepEqual(await read('ordinary-proof', 'ordinary', subjects.ordinary),
     ['ordinary-baseline'], 'Projector cannot alter other datasets');
-  return probes.length + 2;
+  return probes.length + 4;
 }
 await ready();
 if (phase === 'prepare') {

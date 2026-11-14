@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { CID } from 'multiformats/cid';
 import * as cbor from '@ipld/dag-cbor';
-import { assertManagedDid, assertTid } from './genesis.mjs';
+import { assertManagedDid, assertTid, normalizeK256LowS } from './genesis.mjs';
 import {
   checkRecordPath, checkRecord, cid, decodeCanonical, signatureFrom
 } from './signed-single-record.mjs';
@@ -138,6 +138,12 @@ function checkedCommit(bytes,{did,headCid,rev,rootCid,publicKey}) {
     fail('REFERENCE_MST_COMMIT_INVALID');
   }
   assertTid(body.rev);
+  let lowS;
+  try{lowS=normalizeK256LowS(body.sig);}
+  catch{fail('REFERENCE_MST_SIGNATURE_INVALID');}
+  if(!Buffer.from(lowS).equals(Buffer.from(body.sig))) {
+    fail('REFERENCE_MST_SIGNATURE_NONCANONICAL');
+  }
   const {sig,...unsigned}=body;
   if(!crypto.verify('sha256',Buffer.from(cbor.encode(unsigned)),{
     key:publicKey,dsaEncoding:'ieee-p1363'

@@ -184,7 +184,7 @@ async function signedNewCommit({did,rev,rootCid,signer,publicKey}) {
  * same historical one-operation-per-commit audit. No new account DB.
  */
 export function createReferenceMstWriter({
-  pool,reference,authorize,fixtureOnly=false
+  pool,reference,authorize,lockCanonicalConsent=null,fixtureOnly=false
 }={}) {
   if(fixtureOnly!==true || process.env.NODE_ENV==='production' ||
      process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed') {
@@ -194,7 +194,8 @@ export function createReferenceMstWriter({
   requireReference(reference);
   if(typeof pool?.query!=='function' ||
      typeof pool?.connect!=='function' ||
-     typeof authorize!=='function'){
+     typeof authorize!=='function' ||
+     (lockCanonicalConsent!==null && typeof lockCanonicalConsent!=='function')){
     fail('REFERENCE_MST_CONFIGURATION_INVALID');
   }
   const auth=async(accountId,did,expectedCommitCid)=>{
@@ -400,6 +401,17 @@ export function createReferenceMstWriter({
          fence.rows[0].rev!==prior.rev ||
          Number(fence.rows[0].generation)!==prior.generation) {
         fail('REFERENCE_MST_PROJECTION_NOT_APPLIED');
+      }
+      // This is the final authorization fence while the signed repo head
+      // and pending RDF projection are locked. A concurrent canonical PG
+      // revocation UPDATE cannot pass the FOR SHARE consent lock before
+      // the repository transaction commits. A check performed before
+      // signing alone is not sufficient.
+      if (lockCanonicalConsent !== null &&
+          (await lockCanonicalConsent(client,{
+            accountId,did,expectedCommitCid:prior.commitCid
+          })) !== true) {
+        fail('REFERENCE_MST_CANONICAL_CONSENT_DENIED');
       }
       const blocked=await client.query(
         'SELECT 1 FROM '+TABLE+'.native_event_outbox '+

@@ -6,10 +6,13 @@ on:
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v1.sql'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v2-signup-ledger.sql'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v3-evidence-seal.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v4-atomic-completion.sql'
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
+      - 'pod-provider/backend/candidates/postgres-signup-atomic-completion.js'
       - 'pod-provider/backend/candidates/solid-new-signup-proof.js'
       - 'pod-provider/backend/tests/solid-new-signup-proof.test.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-lifecycle.js'
+      - 'pod-provider/backend/scripts/proof-postgres-signup-atomic-completion.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-backup-restore.sh'
       - '.github/workflows/paper-accounts-postgres-candidate.yml'
       - 'docs/activitypods-postgres-account-lifecycle-candidate.md'
@@ -30,12 +33,14 @@ jobs:
       - name: Check implementation and proof syntax
         run: |
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
+          node --check pod-provider/backend/candidates/postgres-signup-atomic-completion.js
+          node --check pod-provider/backend/scripts/proof-postgres-signup-atomic-completion.js
           node --check pod-provider/backend/candidates/solid-new-signup-proof.js
           node --check pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
       - name: Install isolated PostgreSQL client for disposable proof
         run: |
           mkdir -p /tmp/paper-accounts-pg
-          npm install --prefix /tmp/paper-accounts-pg --ignore-scripts --no-audit --no-fund --no-save pg@8.16.3
+          npm install --prefix /tmp/paper-accounts-pg --ignore-scripts --no-audit --no-fund --no-save pg@8.23.1
       - name: Start disposable PostgreSQL 18
         run: |
           docker run -d --rm --name paper-accounts-pg18 \
@@ -62,6 +67,16 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
           PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
         run: node pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
+      - name: Prove atomic new signup completion and revocation serialization
+        env:
+          NODE_PATH: /tmp/paper-accounts-pg/node_modules
+          NODE_ENV: test
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          PAPER_ACCOUNT_COMPLETION_DISPOSABLE: confirmed
+          PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
+        run: node pod-provider/backend/scripts/proof-postgres-signup-atomic-completion.js
+
       - name: Verify PostgreSQL 18 full backup and exact account restore
         env:
           PAPER_ACCOUNTS_DISPOSABLE: confirmed

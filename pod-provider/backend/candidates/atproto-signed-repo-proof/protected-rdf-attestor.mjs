@@ -41,14 +41,16 @@ function enabled(){
     process.env.ATPROTO_PROJECTION_ROLE_TEST_DISPOSABLE==='confirmed'&&
     process.env.ATPROTO_FUSEKI_ISOLATION_DISPOSABLE==='confirmed';
 }
-function scope(p){
+function scope(p,{requireLeaseOwner=true}={}){
   if(!p||!canonical(p.accountId)||!canonical(p.appUri)||
      !canonical(p.grantUri)||!DID.test(p.did||'')||
      !CID.test(p.commitCid||'')||!CID.test(p.rootCid||'')||
      !TID.test(p.rev||'')||!INT.test(p.leaseEpoch||'')||
      !INT.test(p.consentRevision||'')||
      BigInt(p.leaseEpoch)>MAX||BigInt(p.consentRevision)>MAX||
-     typeof p.leaseOwner!=='string'||!/^\{?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\}?$/iu.test(p.leaseOwner)||
+     (requireLeaseOwner &&
+       (typeof p.leaseOwner!=='string' ||
+        !/^\{?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\}?$/iu.test(p.leaseOwner)))||
      !Number.isSafeInteger(p.generation)||p.generation<1){
     deny();
   }
@@ -157,7 +159,8 @@ export async function createIndependentProtectedRdfAttestor({
   return Object.freeze({
     async verifyReadback(payload){
       if(!enabled())deny('PROTECTED_RDF_READER_NOT_RELEASED');
-      const p=scope({...payload,appUri,grantUri,consentRevision});
+      const p=scope({...payload,appUri,grantUri,consentRevision},
+        {requireLeaseOwner:false});
       return one(await readProtectedRdf(),p);
     },
     async attest(payload){

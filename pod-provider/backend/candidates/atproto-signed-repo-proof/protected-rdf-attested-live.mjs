@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {Pool} from 'pg';
 import {createSignedRepoProofStore} from './store.mjs';
+import {createRdfProjectionRecovery} from './projection-recovery.mjs';
 import {buildFencedRepoProjectionSparql} from './fuseki-fence.mjs';
 import {assertRestrictedRdfAttestorLogin} from './pg-protected-rdf-attestor-role.mjs';
 import {createIndependentProtectedRdfAttestor,
@@ -93,6 +94,34 @@ async function project(rootCid,rev,fence){
  await fuseki('update',buildFencedRepoProjectionSparql({
   resourceUri:subject,accountId,did,rootCid,rev,fence
  }));
+}
+async function readBinding(){
+ // The normal worker callback reads the real Jena projection. The separate
+ // attestor still verifies complete typed terms on its own read-only login.
+ const rows=await fuseki('query',prefix+
+  'SELECT ?p ?o WHERE { <'+subject+'> ?p ?o } LIMIT 30');
+ const field=name=>{
+  const values=rows.filter(row=>row.p?.value==='http://activitypods.org/ns/core#'+name);
+  assert.equal(values.length,1,'Expected unique Jena field '+name);
+  return values[0].o.value;
+ };
+ return {
+  canonicalAccountId:field('canonicalAccountId'),
+  webId:field('webId'),activityPubActorId:field('activityPubActorId'),
+  atprotoDid:field('atprotoDid'),atprotoManaged:field('atprotoManaged')==='true',
+  atprotoSource:field('atprotoSource'),status:field('status'),
+  repoInitialized:field('repoInitialized')==='true',
+  repoRootCid:field('repoRootCid'),repoRev:field('repoRev'),
+  repoProjectionFence:field('repoProjectionFence')
+ };
+}
+async function rewriteProtectedRoot(value){
+ // Adversarial fixture writer, never a provider recovery fallback.
+ // Simulates an independently privileged process tampering after PG ACK.
+ assert(/^[a-z0-9]+$/u.test(value));
+ await fuseki('update',prefix+'DELETE { <'+subject+'> apods:repoRootCid ?old } '+
+   'INSERT { <'+subject+'> apods:repoRootCid "'+value+'" } '+
+   'WHERE { <'+subject+'> apods:repoRootCid ?old }');
 }
 const reader=()=>makeDisposableProtectedFusekiReader({
  origin:process.env.FUSEKI_ISOLATION_URL,password:'fixture-attestor-only'
@@ -297,19 +326,98 @@ async function prepare(){
    'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.rdf_attestations')).rows[0].n,
    1,'Receipt must replace prior epoch, never grow per lease');
 
+  // The actual recovery state machine must be correctly composed: a
+  // restricted SQL adapter without an independent attestor is invalid.
+  const permitted=async ({accountId:owner,did:claimedDid})=>{
+    const granted=await p.worker.query(
+      'SELECT c.revision FROM paper_atproto_authority.consents AS c '+
+      'JOIN paper_atproto_authority.identities AS i '+
+      'ON i.owner_webid=c.owner_webid WHERE c.owner_webid=$1 '+
+      "AND c.app_uri=$2 AND c.grant_uri=$3 AND c.state='active' "+
+      "AND c.revision=1 AND i.did=$4 AND i.state='active' "+
+      'AND i.managed=true',[owner,appUri,grantUri,claimedDid]
+    );
+    return owner===accountId&&claimedDid===did&&granted.rowCount===1;
+  };
+  const recoveryOptions={
+    pool:p.worker,fixtureOnly:true,leaseSeconds:90,maxAttempts:8,
+    restrictedOperations:ops,independentAttestor:attestor,
+    verifyNativeEvidence:()=>store.verify({
+      accountId,did,publicKeyPem:key.publicKey.export({format:'pem',type:'spki'}).toString()
+    }),
+    authorize:permitted,readRdf:readBinding,
+    applyRdfFenced:async({rootCid,rev,fence})=>project(rootCid,rev,fence)
+  };
+  assert.throws(()=>createRdfProjectionRecovery({
+    ...recoveryOptions,independentAttestor:null
+  }),e=>e?.code==='PROJECTION_CONFIGURATION_INVALID');
+  const recovery=createRdfProjectionRecovery(recoveryOptions);
+  assert.equal(ops.requiresIndependentAttestation,true);
+  assert.equal((await p.worker.query(
+    'SELECT state FROM paper_atproto_repo_proof.rdf_projection_jobs '+
+    'WHERE account_id=$1',[accountId])).rows[0].state,'leased');
+  await assert.rejects(recovery.readiness({accountId,did}),
+    e=>e?.code==='PROJECTION_NOT_READY');
+  // A crashed worker left a valid attestor receipt but never ACKed. Its
+  // released lease cannot be inherited by a new epoch. Recovery itself
+  // must write new Jena fence, independently attest it and ACK.
+  assert.equal((await ops.finishFailure({accountId,did,claimed:lease2,
+    state:'pending',delay:0,code:'PROJECTION_RETRYABLE_ERROR'})).rowCount,1);
+  const recovered=await recovery.reconcile({accountId,did});
+  assert.equal(recovered.ready,true);
+  assert(BigInt(recovered.fence)>BigInt(lease2.lease_epoch));
+  assert.equal((await recovery.readiness({accountId,did})).ready,true);
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.rdf_attestations')).rows[0].n,
+    1,'Recovery supersedes one receipt, not an unbounded collection');
+
+  // If another privileged Jena process tampers with the protected binding
+  // after PG ACK, even a compromised worker callback claiming correct RDF
+  // cannot fool the separate read-only attestor at readiness.
+  const trustedSnapshot=await readBinding();
+  const misleadingWorker=createRdfProjectionRecovery({
+    ...recoveryOptions,readRdf:async()=>({...trustedSnapshot})
+  });
+  await rewriteProtectedRoot('forgedroot');
+  try{
+    await assert.rejects(misleadingWorker.readiness({accountId,did}),
+      e=>e?.code==='PROTECTED_RDF_READBACK_MISMATCH');
+  }finally{
+    await rewriteProtectedRoot(head.rootCid);
+  }
+  assert.equal((await recovery.readiness({accountId,did})).ready,true);
+  const spoofedAttestor=createRdfProjectionRecovery({
+    ...recoveryOptions,independentAttestor:{
+      attest:attestor.attest,verifyReadback:async()=>true
+    }
+  });
+  await assert.rejects(spoofedAttestor.readiness({accountId,did}),
+    e=>e?.code==='PROJECTION_INDEPENDENT_READBACK_INVALID');
+
+  // Fresh pending lease for canonical revocation *after* a valid receipt.
+  await admin.query("UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
+   "state='pending',applied_at=NULL,lease_owner=NULL,lease_until=NULL,"+
+   "next_attempt_at=clock_timestamp() WHERE account_id=$1",[accountId]);
+  const last=await ops.claim({...opts,owner:crypto.randomUUID()});
+  assert.equal(last.rowCount,1);
+  const revocationLease=last.rows[0];
+  assert(BigInt(revocationLease.lease_epoch)>BigInt(recovered.fence));
+  await project(head.rootCid,head.rev,String(revocationLease.lease_epoch));
+  await attestor.attest(queryClaim(null,head,revocationLease));
+
   // Canonical revocation races after attestation: SQL ACK remains fenced by
   // the active SAI grant even if the signed record and Jena are intact.
   const revoked=await p.revoker.query(
    'SELECT * FROM paper_atproto_authority.block_consent($1,$2,$3,1::bigint)',
    [accountId,appUri,grantUri]);
   assert.equal(revoked.rowCount,1);
-  assert.equal((await ops.ack({accountId,did,claimed:lease2,proof:head})).rowCount,0,
+  assert.equal((await ops.ack({accountId,did,claimed:revocationLease,proof:head})).rowCount,0,
    'Revocation between Jena readback and PG ACK is authoritative');
-  await assert.rejects(attestor.attest(queryClaim(null,head,lease2)),
+  await assert.rejects(attestor.attest(queryClaim(null,head,revocationLease)),
    e=>e?.code==='PROTECTED_RDF_SQL_ATTESTATION_REJECTED');
   assert.equal((await ops.claim({...opts,owner:crypto.randomUUID()})).rowCount,0,
    'Revoked grant cannot lease again');
-  assert.equal((await attestor.verifyReadback(queryClaim(null,head,lease2))).length,32,
+  assert.equal((await attestor.verifyReadback(queryClaim(null,head,revocationLease))).length,32,
    'RDF remains durably readback-verifiable independently of revoked authority');
 
   console.log('INDEPENDENT_PG18_JENA_ATTESTATION '+JSON.stringify({
@@ -319,7 +427,9 @@ async function prepare(){
     legacyAckRevoked:true,ackWithoutReceiptDenied:true,
     signedHeadMismatchDenied:true,attestedAckSucceeded:true,
     replayRequiresNewRdfFence:true,receiptRowsBounded:true,
-    revocationAfterAttestationDenied:true,productionStorageReleased:false
+    revocationAfterAttestationDenied:true,productionStorageReleased:false,
+    automaticRecoveryAttestation:true,readinessTamperRefused:true,
+    noMissingAttestorFallback:true
   }));
  }finally{await endPools(p);}
 }

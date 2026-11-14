@@ -142,3 +142,38 @@ Primary Apache sources:
 
 References: PostgreSQL 18 `GRANT`, role membership, `SECURITY DEFINER`;
 Apache Jena Fuseki Full Security, Data Access Control, and endpoint APIs.
+
+## Follow-on: automatic recovery and readiness composition
+
+The existing `createRdfProjectionRecovery` state machine now recognizes an
+explicit `requiresIndependentAttestation` marker from the separately
+restricted PG18 SQL operations. In that mode, constructing a worker without
+both an independent `attest` and `verifyReadback` function fails closed.
+The following operations are enforced in sequence:
+
+1. Claim the exact PG lease and current canonical grant; read and fence the
+   protected RDF using the existing trusted writer.
+2. Recheck the independently signed repo/head and authorization, then call
+   the **separate** read-only Jena attestor to record a lease-bound receipt.
+3. Require the attestor's matching acknowledgement metadata and recheck the
+   grant and signed head before the restricted SQL ACK transition.
+4. After ACK, and at **every** later readiness decision, require both the
+   existing protected RDF identity readback and the independently credentialed
+   attestor readback to match the applied PG generation/fence, followed by
+   rechecking canonical authorization and signed head. SQL's prior receipt
+   alone is never a sufficient current-readiness proof.
+
+Real disposable PG18 + TDB2 acceptance composes these functions through the
+**actual recovery state machine**, validates missing-attestor refusal,
+a crash-retry after a prior receipt with a newer lease, successful automatic
+re-attestation/ACK, rejection of a worker callback that lies about RDF while
+the protected Fuseki dataset is tampered with, and refusal of a non-digest
+response. It retains the independent after-ACK canonical revocation race,
+restart verification and bounded receipt table.
+
+This remains a nonactivated candidate and is not a production deployment:
+proper per-Pod protected RDF isolation, provider-owned service registration,
+active Solid-OIDC/SAI enforcement and Jena 6 compatibility/upgrade are
+separate required release gates. The "no committed distributed transaction"
+property remains: the next operation must re-read/revalidate state, not
+assume earlier HTTP or SQL acceptance proves present Jena contents.

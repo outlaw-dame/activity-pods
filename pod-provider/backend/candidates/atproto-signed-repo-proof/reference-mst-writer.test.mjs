@@ -33,7 +33,12 @@ const post=(i,text)=>({
   createdAt:'2026-11-13T00:00:00.000Z',langs:['en'],
   facets:[],sequence:i
 });
-const assertError=(promise,code)=>assert.rejects(promise,e=>e?.code===code);
+const assertError=(promise,code)=>assert.rejects(promise,e=>{
+  assert.equal(e?.code,code,
+    'unexpected error: expected '+code+', received '+String(e?.code)+
+    ', message: '+String(e?.message));
+  return true;
+});
 async function projectExactHead(head) {
   const applied=await pool.query(
     'UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET '+

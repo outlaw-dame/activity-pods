@@ -32,15 +32,15 @@ function deny(code) {
   e.code = code;
   throw e;
 }
-function https(value) {
+function canonicalUrl(value, originOnly = false) {
   if (typeof value !== 'string' || value.length < 8 || value.length > 2048) {
     deny('SIGNUP_COMPLETION_SCOPE_INVALID');
   }
   try {
     const u = new URL(value);
     if (u.protocol !== 'https:' || !u.hostname ||
-        (u.href !== value && u.origin !== value) ||
-        u.username || u.password || u.search || u.hash) {
+        u.username || u.password || u.search || u.hash ||
+        (originOnly ? u.origin !== value : u.href !== value)) {
       deny('SIGNUP_COMPLETION_SCOPE_INVALID');
     }
   } catch { deny('SIGNUP_COMPLETION_SCOPE_INVALID'); }
@@ -113,7 +113,8 @@ function validateProof(p, before) {
       !['pending','delivered'].includes(p.outboxStatus)) {
     deny('SIGNUP_COMPLETION_PROOF_INVALID');
   }
-  for (const key of ['webId','pdsOrigin','appUri','grantUri']) https(p[key]);
+  for (const key of ['webId','appUri','grantUri']) canonicalUrl(p[key]);
+  canonicalUrl(p.pdsOrigin, true);
   epoch(p.projectionFence);
   epoch(p.consentRevision);
   if (p.webId !== before.webid || p.did !== before.atproto_did ||

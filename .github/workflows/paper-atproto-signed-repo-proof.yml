@@ -73,6 +73,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket-canonical-gate.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-login.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-exact-runtime-privileges.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-live.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-projection-worker-role.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-projection-ops.mjs

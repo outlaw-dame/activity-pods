@@ -188,7 +188,8 @@ test('PG18 cross-store recovery: atomic intent, fenced lease, CAS, replay, revoc
       const expectedScope = {
         accountId, did: signedDid, appUri, grantUri,
         operation: 'project', epoch: '1', projectionFence: '1',
-        rootCid: leased.rows[0].root_cid, rev: leased.rows[0].rev
+        rootCid: leased.rows[0].root_cid, rev: leased.rows[0].rev,
+        generation: 1, previousRootCid: null, previousRev: null
       };
       assert.equal(authority.verify(issuance.ticket, expectedScope).projectionFence, '1');
       await assert.rejects(issuer.issueForLease({

@@ -55,6 +55,7 @@ jobs:
                       pod-provider/backend/services/utils/collective-*.js \
                       pod-provider/backend/tests/collective-*.test.js \
                       pod-provider/backend/tests/oauth-dpop-bound-resource.test.js \
+                      pod-provider/backend/scripts/proof-provider-pds-oauth.js \
                       pod-provider/backend/scripts/proof-collective-fuseki.js \
                       pod-provider/backend/scripts/proof-collective-consent-fence.js \
                       pod-provider/backend/scripts/proof-collective-sai-persistence.js \
@@ -113,6 +114,36 @@ jobs:
             jest --testEnvironment=node \
               --roots=pod-provider/backend/tests \
               --testPathIgnorePatterns='hashtag-conformance-matrix.test.js|create-unified-account.test.js'
+
+      - name: Start isolated pinned Redis 8.2.11 DPoP replay ledger
+        run: |
+          set -euo pipefail
+          docker run --detach --rm --name paper-pds-dpop-redis \
+            --publish 127.0.0.1:6398:6379 \
+            redis:8.2.11-alpine redis-server \
+            --save '' --appendonly no --maxmemory 32mb --maxmemory-policy noeviction
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec paper-pds-dpop-redis redis-cli ping | grep -qx PONG; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+
+      - name: Verify real provider OAuth/DPoP on Redis 8.2
+        env:
+          NODE_ENV: test
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_PDS_WRITE_TEST_DISPOSABLE: confirmed
+          ATPROTO_PDS_OAUTH_TEST_DISPOSABLE: confirmed
+          ATPROTO_PDS_OAUTH_REDIS_URL: redis://127.0.0.1:6398
+        run: node scripts/proof-provider-pds-oauth.js
+
+      - name: Remove disposable Redis DPoP test container
+        if: always()
+        run: docker rm -f paper-pds-dpop-redis || true
 
       - name: Run offline ATProto multibase smoke test
         run: yarn test:atproto:multibase

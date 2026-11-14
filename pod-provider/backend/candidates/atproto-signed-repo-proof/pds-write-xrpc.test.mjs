@@ -329,7 +329,7 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
       assert.equal(response.body.error,'InternalError');
       current=await writer.verify({accountId,did,path:collection+'/'+rkey,
         publicKeyPem:keys.publicKeyPem});
-      assert.equal(current.generation,prior.generation+1,
+      assert.equal(current.generation,Number(prior.generation)+1,
         'one actual signed mutation may commit even when HTTP says 503');
       const projected=await pool.query(
         'SELECT state,head_cid FROM paper_atproto_repo_proof.rdf_projection_jobs '+

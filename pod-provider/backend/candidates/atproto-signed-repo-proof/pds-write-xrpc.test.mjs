@@ -43,11 +43,12 @@ const route=method=>'http://127.0.0.1:'+server.address().port+
   '/xrpc/com.atproto.repo.'+method;
 const record=text=>({$type:collection,text,
   createdAt:'2026-11-14T00:00:00.000Z'});
-const authHeader='Bearer disposable_integration_token_1234567890';
+const authHeader='DPoP disposable_integration_token_1234567890';
+const disposableProof='disposableheader12345.disposablepayload12345.disposablesignature12345';
 let server;
 
 async function post(method,body,authorization=authHeader){
-  const h={'content-type':'application/json'};
+  const h={'content-type':'application/json',dpop:disposableProof};
   if(authorization!==null)h.authorization=authorization;
   const response=await fetch(route(method),{
     method:'POST',headers:h,body:JSON.stringify(body),
@@ -133,18 +134,25 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
       did,handle,pdsUrl:pds,atprotoManaged:true,atprotoSource:'local',
       status:'active'};
     let oauthChecks=0;
-    const authorizeOwner=async({authorization,did:chosen,webId})=>{
-      oauthChecks++;
-      const pg=await currentConsent();
-      if(authorization!==authHeader||chosen!==did||webId!==accountId||
-         pg?.did!==did||pg.identity_state!=='active'||
-         pg.consent_state!=='active'||pg.grant_uri!==grant) return null;
-      // This fixture represents a verdict from ActivityPods' real
-      // OAuth/OIDC+DPoP verifier; token parsing is NOT part of this test.
-      return {verified:true,ownerDid:did,ownerWebId:accountId,
-        permission:'atproto:record-write',dpopVerified:true,
-        issuerVerified:true,audienceVerified:true,
-        appUri:app,grantUri:grant,consentRevision:pg.revision};
+    const authorizeOwner=async({authorization,did:chosen,webId,collection:asked,action,dpopProof})=>{
+      if(authorization!==authHeader||dpopProof!==disposableProof||
+         chosen!==did||webId!==accountId||asked!==collection||
+         !['create','put','delete'].includes(action)) return null;
+      // Synthetic fixture ONLY. A separate test calls actual OAuth
+      // services with signed tokens and DPoP proofs.
+      const reread=async()=>{
+        oauthChecks++;
+        const pg=await currentConsent();
+        if(pg?.did!==did||pg.identity_state!=='active'||
+           pg.consent_state!=='active'||pg.grant_uri!==grant) return null;
+        return {verified:true,ownerDid:did,ownerWebId:accountId,
+          permission:'atproto:record-write',dpopVerified:true,
+          issuerVerified:true,audienceVerified:true,
+          appUri:app,grantUri:grant,consentRevision:pg.revision,
+          collection:asked,action};
+      };
+      const first=await reread();
+      return first&&{...first,recheck:reread};
     };
     let lockCalls=0;
     let onLock=null;

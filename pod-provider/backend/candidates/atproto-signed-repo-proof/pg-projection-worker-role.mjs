@@ -1,4 +1,4 @@
-import {assertExactRuntimePrivileges} from './pg-exact-runtime-privileges.mjs';
+import {assertExactRuntimePrivileges,assertNoDirectAttestationTablePrivileges} from './pg-exact-runtime-privileges.mjs';
 /**
  * PostgreSQL 18 startup privilege admission for NONACTIVATED projection
  * worker. It must not inherit signer, importer, revoker, schema-owner, or

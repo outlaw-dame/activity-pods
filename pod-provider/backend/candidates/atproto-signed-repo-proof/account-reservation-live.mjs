@@ -135,8 +135,8 @@ async function prepare() {
       active.reservationId);
     assert.equal(await serviceA.complete({...active,fenceToken:crypto.randomUUID()},
       proof(username)),false,'Wrong fence cannot commit identity');
-    assert.equal(await serviceA.complete(active,{...proof(username),
-      webId:ROOT+'another'}),false,'Wrong canonical WebID cannot complete');
+    assert.equal(await serviceA.complete(active,
+      proof('claimtest-unrelated')),false,'Wrong canonical WebID cannot complete');
 
     const expiredInput=account('third-app',
       'claimtest-'+crypto.randomBytes(5).toString('hex'));

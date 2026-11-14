@@ -104,6 +104,18 @@ async function post(ticket,{method='POST',oversize=false}={}){
   return {status:res.status,body:response};
  }finally{clearTimeout(timer);}
 }
+// Construct an internally correctly signed but semantically INVALID claim
+// for adversarial authorization tests. Production issuers use only the
+// validated signDisposableDatasetClaim helper.
+function signUnchecked(claim,privateKey){
+ const fields=['version','issuer','audience','dataset','ownerWebid',
+  'reservationId','nonce','issuedAtMs','expiresAtMs'];
+ const bytes=Buffer.concat([
+   Buffer.from('activitypods:dataset-admin:claim:v1\\0','utf8'),
+   Buffer.from(JSON.stringify(fields.map(k=>claim[k])),'utf8')
+ ]);
+ return {claim,signature:crypto.sign(null,bytes,privateKey).toString('base64url')};
+}
 const makeClaim=(dataset,opts={})=>{
  const now=Date.now();
  return {
@@ -165,7 +177,7 @@ async function prepare(){
    makeClaim(config.dataset),privateKey);
   assert.equal((await post(conflict)).status,409,
    'Different valid reservation for same dataset must be refused');
-  const crossOwner=signDisposableDatasetClaim(
+  const crossOwner=signUnchecked(
    makeClaim(config.dataset,{
      ownerWebid:'https://paper.example.org/users/another-user'
    }),privateKey);
@@ -174,9 +186,10 @@ async function prepare(){
   const forged={...config.ticket,signature:'A'.repeat(86)};
   assert.equal((await post(forged)).status,403,
    'A third party cannot forge dataset-creation capabilities');
-  const expired=signDisposableDatasetClaim(
-   makeClaim(config.dataset),privateKey);
-  expired.claim.expiresAtMs=Date.now()-1000;
+  const expired=signUnchecked(
+    makeClaim(config.dataset,{
+      issuedAtMs:Date.now()-60000,expiresAtMs:Date.now()-1000
+    }),privateKey);
   assert.equal((await post(expired)).status,403,
    'Expired or mutated claims are rejected');
   assert.equal((await post(config.ticket,{oversize:true})).status,413,

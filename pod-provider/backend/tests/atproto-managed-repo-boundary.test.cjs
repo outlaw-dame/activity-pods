@@ -110,7 +110,7 @@ test('production never permits disposable repository bridge', async () => {
   await env({...enabled, NODE_ENV:'production'}, async () => {
     let calls=0; const ctx={call:async()=>{calls++;}};
     await assert.rejects(service().initializeRepoState(ctx,
-      {canonicalAccountId:webId,did,handle}), e=>e.type==='ATPROTO_REPO_PROOF_UNAVAILABLE');
+      {canonicalAccountId:webId,did,handle}), e=>e.type==='ATPROTO_PDS_REPOSITORY_NOT_READY');
     assert.equal(calls,0);
     // A caller invoking the Moleculer service directly must not create a
     // key or PLC genesis while the public signup release fuse is closed.
@@ -118,6 +118,10 @@ test('production never permits disposable repository bridge', async () => {
       params: { canonicalAccountId:webId, webId: webId, didMethod:'plc' },
       call: async () => { calls++; throw Error('identity mutation attempted'); }
     }), e => e.type === 'ATPROTO_PDS_REPOSITORY_NOT_READY' && e.code === 503);
+    assert.equal(calls,0);
+    await assert.rejects(service().verifyProvisionedState(ctx,
+      {canonicalAccountId:webId, binding:binding(), didMethod:'plc'}),
+      e=>e.type==='ATPROTO_PDS_REPOSITORY_NOT_READY');
     assert.equal(calls,0);
   });
 });

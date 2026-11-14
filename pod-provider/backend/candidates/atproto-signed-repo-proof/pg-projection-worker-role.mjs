@@ -81,8 +81,10 @@ export async function assertRestrictedProjectionWorkerLogin(pool,{attestedOnly=f
 
     reject();
   }
-  try{await assertExactRuntimePrivileges(pool,{role:'projection-worker'});}
-  catch{reject();}
+  try{
+    await assertExactRuntimePrivileges(pool,{role:'projection-worker'});
+    if(attestedOnly)await assertNoDirectAttestationTablePrivileges(pool);
+  }catch{reject();}
   return Object.freeze({restricted:true,attestedOnly,maySign:false,mayRegrant:false,
     mayBypassLeases:false,postgresVersion:x.version});
 }

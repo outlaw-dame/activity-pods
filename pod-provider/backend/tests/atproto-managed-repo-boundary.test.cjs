@@ -63,7 +63,7 @@ test('raw signup input cannot hide an existing identity behind protocol override
   const source = fs.readFileSync(path.resolve(__dirname,
     '../services/unified-account-api.service.js'), 'utf8');
   const moduleMock = { exports: {} };
-  const factory = vm.runInNewContext('(function(require,module){\\n' + source + '\\n})',
+  const factory = vm.runInNewContext('(function(require,module){\n' + source + '\n})',
     { process, URL, Buffer, console, setTimeout, clearTimeout });
   factory(name => {
     if (name === 'crypto') return crypto;

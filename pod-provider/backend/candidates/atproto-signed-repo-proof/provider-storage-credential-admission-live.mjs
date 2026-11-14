@@ -20,7 +20,7 @@ const baseline={
 };
 const correct=await proveProviderProtectedStorageBoundary(baseline);
 assert.equal(correct.isolated,true);
-assert.equal(correct.checkedRoutes,16);
+assert.equal(correct.checkedRoutes,18);
 assert.equal(correct.productionStorageReleased,false);
 
 const cases=[

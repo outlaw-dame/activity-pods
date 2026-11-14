@@ -73,10 +73,10 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     );
     assert.equal(pre.rows[0].n,0,'new-account test must start with empty disposable state');
     for(const sql of [
-      '../sql/paper-account-postgres-candidate-v1.sql',
-      '../sql/paper-account-postgres-candidate-v2-signup-ledger.sql',
-      '../sql/paper-account-postgres-candidate-v3-evidence-seal.sql',
-      '../sql/paper-account-postgres-candidate-v4-atomic-completion.sql',
+      '../../sql/paper-account-postgres-candidate-v1.sql',
+      '../../sql/paper-account-postgres-candidate-v2-signup-ledger.sql',
+      '../../sql/paper-account-postgres-candidate-v3-evidence-seal.sql',
+      '../../sql/paper-account-postgres-candidate-v4-atomic-completion.sql',
       './schema.sql',
       '../../sql/paper-atproto-canonical-authority-v1.sql'
     ]){

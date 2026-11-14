@@ -236,7 +236,7 @@ async function prepare(){
   assert.equal((await p.worker.query(
    'SELECT state FROM paper_atproto_repo_proof.rdf_projection_jobs '+
    'WHERE account_id=$1',[accountId])).rows[0].state,'applied');
-  assert.equal((await p.worker.query(
+  assert.equal((await admin.query(
    'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.rdf_attestations')).rows[0].n,
    1,'One bounded receipt for one account');
 
@@ -255,7 +255,7 @@ async function prepare(){
    e=>e?.code==='PROTECTED_RDF_READBACK_MISMATCH');
   await project(head.rootCid,head.rev,String(lease2.lease_epoch));
   await attestor.attest(queryClaim(null,head,lease2));
-  assert.equal((await p.worker.query(
+  assert.equal((await admin.query(
    'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.rdf_attestations')).rows[0].n,
    1,'Receipt must replace prior epoch, never grow per lease');
 

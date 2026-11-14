@@ -180,6 +180,24 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
         [scope.providerId,before.accountId]);
       if(a.rowCount!==1)deny('SIGNUP_COMPLETION_ACCOUNT_CHANGED');
       const row=a.rows[0];
+      if (row.state === 'ready') {
+        // Another cell may have committed while this caller was verifying
+        // external evidence. Re-read the exact journal under the account
+        // lock before returning an idempotent, non-authorizing replay.
+        const completed=await c.query(
+          'SELECT operation_id,account_id,state FROM '+SIGNUP+
+          ' WHERE provider_id=$1 AND app_client_id=$2 AND '+
+          'hmac_key_version=$3 AND idempotency_hmac=$4 AND account_id=$5 '+
+          'AND operation_id=$6 FOR UPDATE',
+          [...params,before.accountId,before.operationId]
+        );
+        if(completed.rowCount!==1 || completed.rows[0].state!=='ready') {
+          deny('SIGNUP_COMPLETION_JOURNAL_CHANGED');
+        }
+        await c.query('ROLLBACK');open=false;
+        return Object.freeze({state:'ready',replay:true,accountId:before.accountId,
+          releaseAuthorized:false,canAuthenticate:false});
+      }
       if(row.state!=='provisioning' || number(row.generation)!==p.accountGeneration ||
           row.webid!==p.webId || row.activitypub_actor_uri!==p.webId ||
           row.atproto_did!==p.did || row.atproto_handle!==p.handle ||

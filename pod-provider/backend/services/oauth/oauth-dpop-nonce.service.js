@@ -1,4 +1,5 @@
 const Redis = require('ioredis');
+const crypto = require('node:crypto');
 const { MoleculerError } = require('moleculer').Errors;
 const { importJWK, jwtVerify, calculateJwkThumbprint, decodeProtectedHeader } = require('jose');
 const {
@@ -62,10 +63,12 @@ module.exports = {
         htu: { type: 'string', min: 1 },
         audience: { type: 'string', min: 1 },
         nonce: { type: 'string', optional: true },
-        expectedJkt: { type: 'string', optional: true }
+        expectedJkt: { type: 'string', optional: true },
+        accessToken: { type: 'string', min: 20, max: 8192, optional: true },
+        requireNonce: { type: 'boolean', optional: true }
       },
       async handler(ctx) {
-        const { proofJwt, htm, htu, audience, nonce, expectedJkt } = ctx.params;
+        const { proofJwt, htm, htu, audience, nonce, expectedJkt, accessToken, requireNonce } = ctx.params;
 
         const protectedHeader = decodeProtectedHeader(proofJwt);
         if (!protectedHeader || protectedHeader.typ !== 'dpop+jwt') {
@@ -74,7 +77,12 @@ module.exports = {
         if (protectedHeader.alg !== 'ES256') {
           throw new MoleculerError('DPoP proof alg must be ES256', 401, 'INVALID_DPOP_PROOF');
         }
-        if (!protectedHeader.jwk || typeof protectedHeader.jwk !== 'object') {
+        if (!protectedHeader.jwk || typeof protectedHeader.jwk !== 'object' ||
+            Array.isArray(protectedHeader.jwk) ||
+            protectedHeader.jwk.kty !== 'EC' || protectedHeader.jwk.crv !== 'P-256' ||
+            !protectedHeader.jwk.x || !protectedHeader.jwk.y ||
+            ['d', 'p', 'q', 'dp', 'dq', 'qi', 'k'].some(field =>
+              Object.prototype.hasOwnProperty.call(protectedHeader.jwk, field))) {
           throw new MoleculerError('DPoP proof missing jwk', 401, 'INVALID_DPOP_PROOF');
         }
 
@@ -95,7 +103,7 @@ module.exports = {
         }
 
         const proofJti = String(payload.jti || '').trim();
-        if (!proofJti) {
+        if (!proofJti || proofJti.length > 128) {
           throw new MoleculerError('DPoP jti missing', 401, 'INVALID_DPOP_PROOF');
         }
 
@@ -105,12 +113,25 @@ module.exports = {
           throw new MoleculerError('DPoP iat outside allowed skew', 401, 'INVALID_DPOP_PROOF');
         }
 
-        if (nonce) {
-          const proofNonce = String(payload.nonce || '').trim();
-          if (!proofNonce || proofNonce !== String(nonce).trim()) {
+        // RFC 9449 §7: a protected resource MUST bind its DPoP proof to
+        // the exact access token value. This is absent at token issuance
+        // (the token does not exist yet), and mandatory for a PDS write.
+        if (accessToken !== undefined) {
+          const expectedAth = crypto.createHash('sha256')
+            .update(accessToken, 'ascii').digest('base64url');
+          const providedAth = payload.ath;
+          if (typeof providedAth !== 'string' || providedAth.length !== expectedAth.length ||
+              !crypto.timingSafeEqual(Buffer.from(providedAth), Buffer.from(expectedAth))) {
+            throw new MoleculerError('DPoP access token hash mismatch', 401, 'INVALID_DPOP_ATH');
+          }
+        }
+        if (requireNonce === true || nonce) {
+          const proofNonce = payload.nonce;
+          if (typeof proofNonce !== 'string' ||
+              !/^[A-Za-z0-9_-]{16,128}$/.test(proofNonce) ||
+              (nonce && proofNonce !== nonce)) {
             throw new MoleculerError('DPoP nonce is required or invalid', 401, 'INVALID_DPOP_NONCE');
           }
-
           await this.consumeNonce({ audience, nonce: proofNonce });
         }
 
@@ -137,11 +158,12 @@ module.exports = {
   methods: {
     async consumeNonce({ audience, nonce }) {
       const key = `${this.settings.noncePrefix}:${audience}:${nonce}`;
-      const payload = await this.redis.get(key);
+      // GET + DEL is vulnerable to a second replica observing the same
+      // nonce before the deletion. Redis 8.2 GETDEL is one atomic operation.
+      const payload = await this.redis.getdel(key);
       if (!payload) {
-        throw new MoleculerError('DPoP nonce is invalid or expired', 401, 'INVALID_DPOP_NONCE');
+        throw new MoleculerError('DPoP nonce is invalid, expired, or already used', 401, 'INVALID_DPOP_NONCE');
       }
-      await this.redis.del(key);
     }
   }
 };

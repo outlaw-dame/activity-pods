@@ -263,3 +263,78 @@ password from all general SemApps processes; verify actual Solid
 WebACL/bootstrap behavior with distinct storage roles; then run
 multi-replica crash/retry, private SAI grant/revocation and latency/cost
 proofs before changing the source-controlled release fuse.
+
+## P1c — PostgreSQL 18 canonical pre-account reservation fence (disposable)
+
+The service-local `provider-capabilities.idempotencyRecords` and
+`dailyUsage` Maps are **not** an authoritative multi-replica account
+lifecycle. They are still present only for the legacy test path; production
+`reserveAccountProvisioning`, `auth.signup` and
+`unified-account-api.create` **remain closed**. Nothing in this
+candidate replaces the ActivityPods WebID/ActivityPub identity owner.
+
+`pg-preaccount-reservations.sql` now implements a real PostgreSQL 18
+ledger and per-app UTC-day quota table behind narrowly granted
+`SECURITY DEFINER` operations. Provider + approved app + idempotency
+hash determine the request scope; username and expected WebID have
+independent database uniqueness constraints. PostgreSQL advisory
+transaction locks serialize only **same-key** contenders; unique indexes
+resolve cross-key/cross-app username races. Quota reservation and new
+username insertion are in one subtransaction, so rejected uniqueness
+collisions **do not consume quota**. Key and request fingerprints are
+stored as 32-byte hashes, not plaintext credentials.
+
+The first successful reservation returns a UUID and **one-time fence
+token**. Retrying the same key, even from another provider replica, only
+returns an in-progress/completed state **without the fence**. The
+`start_side_effects` transition consumes the fence under an unexpired
+120-second database-clock lease **before any dataset/WebID/DID operation**.
+If the worker dies after that transition, the username is permanently
+held for reconciliation; no restart, TTL expiry, retry or different app
+can mint a second identity. A second `complete` cannot overwrite the
+already finalized identity. Completed rows hold bounded non-secret
+identity identifiers and an evidence digest, not JWTs or replayable
+signup responses. Expired **unstarted** reservations also remain fenced
+until an explicit, separately audited recovery protocol exists.
+
+The issuer is separately credentialed: the worker role can call only
+`reserve`, `start_side_effects` and `complete`; the issuer role can
+only check a specific live username + expected WebID + reservation UUID
++ fence for a short-lived signed dataset claim. Neither role may select
+or directly mutate the tables. Process-child environments are explicit
+allowlists; PostgreSQL superuser DSN, Fuseki admin password and Ed25519
+signer private key are **not** copied to worker/issuer test children.
+
+`account-reservation-live.mjs` is wired into the real PostgreSQL 18
++ Jena disposable CI. It uses independent PostgreSQL sessions to race
+eight same-key reservations, checks first-writer uniqueness, atomic
+daily quotas, cross-app username conflicts, mismatched fingerprints,
+forged fencing tokens, expiry with no lease takeover, and mutation
+before/after a restarted process. It tests a real Ed25519 dataset claim
+**only after** a separate issuer credential positively checks the
+matching reservation; SQL injection by direct table access and four
+privilege-drift configurations must fail closed.
+
+**Not yet activated:** This proves durable *reservation semantics* and
+issuer eligibility, **not** a complete trusted signer process, the
+actual `provider-capabilities`/signup integration, verified account
+ownership, signed PDS receipt validation, client reauthentication for
+completed-account replays, production deployment credential isolation
+or a recovery operator. The test-only SQL `complete` operation checks
+an evidence hash **shape**, not cryptographic evidence; it must never
+be treated as production evidence verification. The test hardcodes an
+isolated `paper.example.org` provider identity and disables all
+production execution by source-controlled and explicit fixture gates.
+
+**Next release dependencies:** Bind this PG reservation directly to a
+provider-authenticated `unified-account-api` grant and the actual
+`auth.signup` pre-dataset admission (no untrusted grants in forwarded
+Moleculer metadata). Make the trusted issuer check the PG reservation
+*itself* before signing; isolate its private key from ordinary providers.
+Require real Solid WebID/AP bootstrap + signed PDS repo attestation
+before the irreversible `complete` transition. Add auditable,
+human-authorized recovery for stranded pre-effect leases; do **not**
+auto-release unknown outcomes. Remove Jena administrator credentials
+from ordinary provider processes, prove native protected-storage
+isolation and SAI revocation, and measure two-replica load and cost
+before considering the source-controlled production release change.

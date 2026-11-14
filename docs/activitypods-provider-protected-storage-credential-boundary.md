@@ -313,9 +313,11 @@ daily quotas, cross-app username conflicts, mismatched fingerprints,
 forged fencing tokens, expiry with no lease takeover, and mutation
 before/after a restarted process. It tests a real Ed25519 dataset claim
 **only after** a separate issuer credential positively checks the
-matching reservation; SQL injection by direct table access and seven
-privilege-drift configurations (including TRUNCATE, MAINTAIN and
-pg_read_all_data grants) must fail closed. After simulated crash/restart,
+matching reservation; SQL injection by direct table access and eleven
+privilege-drift configurations (including TRUNCATE, MAINTAIN,
+pg_read_all_data and column-specific SELECT/UPDATE/INSERT/REFERENCES grants)
+must fail closed. Admission checks effective *any-column* privileges, not
+just table-level permissions, to prevent fence-token disclosure. After simulated crash/restart,
 a second account must not complete with another account's DID or
 ActivityPub actor.
 

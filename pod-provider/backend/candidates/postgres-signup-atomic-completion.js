@@ -136,7 +136,8 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
       scope.idempotencyHmac];
     const initial=await pool.query(
       'SELECT s.operation_id,s.account_id,s.state,s.generation,'+
-      's.evidence_account_generation,a.webid,a.atproto_did,a.atproto_handle,'+
+      's.evidence_account_generation,a.state AS account_state,'+
+      'a.webid,a.atproto_did,a.atproto_handle,'+
       'a.atproto_pds_url,a.generation AS account_generation '+
       'FROM '+SIGNUP+' s JOIN '+ACCOUNT+' a ON a.account_id=s.account_id '+
       'WHERE s.provider_id=$1 AND s.app_client_id=$2 AND '+
@@ -147,6 +148,11 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
       operationId:initial.rows[0].operation_id,
       accountId:initial.rows[0].account_id};
     if (before.state==='ready') {
+      // Journal success is historical. A suspended or deleted account is NOT
+      // a usable ready account and must never be represented as one.
+      if (before.account_state !== 'ready') {
+        deny('SIGNUP_COMPLETION_ACCOUNT_NOT_ACTIVE');
+      }
       return Object.freeze({state:'ready',replay:true,accountId:before.accountId,
         releaseAuthorized:false,canAuthenticate:false});
     }

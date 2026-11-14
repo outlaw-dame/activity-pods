@@ -171,15 +171,11 @@ async function prepare(){
     },
     {
       grant:"pg_monitor",
-      label:'unrelated inherited database role',
-      role:true
+      label:'unrelated inherited database role'
     }
   ];
   for(const test of injected){
-    const syntax=test.role
-      ?test.grant+' TO paper_dataset_admin_login'
-      :test.grant+' TO paper_dataset_admin_login';
-    await admin.query('GRANT '+syntax);
+    await admin.query('GRANT '+test.grant+' TO paper_dataset_admin_login');
     try{
       await assert.rejects(assertRestrictedDatasetAdminLogin(user),
         e=>e?.code==='DATASET_ADMIN_SQL_PRIVILEGES_UNSAFE',test.label);

@@ -26,7 +26,8 @@ const privilegeModel=Object.freeze({
         'record_cid','generation']
     }
   },
-  'projection-worker':{}
+  'projection-worker':{},
+  'rdf-attestor':{}
 });
 function deny(){
   const e=new Error('Runtime PostgreSQL credential has unexpected grants');
@@ -35,8 +36,9 @@ function deny(){
 export async function assertExactRuntimePrivileges(pool,{role}={}){
   const allowed=privilegeModel[role];
   if(!allowed||typeof pool?.query!=='function')deny();
-  const expectedRole=role==='repo-writer'
-    ?'paper_atproto_repo_writer':'paper_atproto_projection_worker';
+  const expectedRole=role==='repo-writer'?'paper_atproto_repo_writer':
+    role==='rdf-attestor'?'paper_atproto_rdf_attestor':
+      'paper_atproto_projection_worker';
   let rows,membership;
   try{
     // Every legitimate direct membership is the one expected worker

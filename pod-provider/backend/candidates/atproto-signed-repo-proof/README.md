@@ -394,3 +394,31 @@ real provider Pod LDP handler, nor does it authorize account readiness,
 unblock multi-record MST, implement live SAI grants or activate sync XRPC
 for nonempty repositories. The final provider-controlled mutation/consent
 and production storage release gates remain closed.
+
+
+## Hardened expired-lease exhaustion and blocked-history readiness
+
+An expired delivery lease with attempt_count already at maxAttempts is
+**not** eligible for another publication. The same indexed, single-row
+FOR UPDATE SKIP LOCKED claim transaction now conditionally writes a terminal
+blocked row instead: it clears the stale owner/lease, preserves the attempt
+count and monotone epoch, and records NATIVE_RETRY_EXHAUSTED. This also handles
+workers that crash after publishing, lose the PostgreSQL failure ACK, or
+are terminated before failDelivery can schedule a terminal block. The
+worker never issues a third publish in a two-attempt configuration.
+
+Signed repository verification now performs an indexed PostgreSQL EXISTS
+test for **any** blocked pending native event for the DID, rather than
+checking only the current head's outbox entry. An earlier pending event may
+fail after a newer commit has been signed and projected. In that case a
+valid latest CAR must NOT make readiness pass: all later event deliveries
+are stopped by per-DID ordering, and further signed mutation attempts
+refuse the blocked history. The blocked-history index is partial and
+keyed by DID, without unbounded scans or in-memory account collections.
+
+Real PG18 regressions inject two worker deaths with expired leases (eight
+competing recovery replicas; zero extra transport sends) and a poisoned
+genesis native event after a newer signed record head. They verify no
+false readiness, no further mutation or younger-event publication, and
+stable duplicate-delivery keys. Neither test changes the nonactivated
+provider or production signup gates.

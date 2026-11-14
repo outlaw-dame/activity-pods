@@ -178,6 +178,13 @@ async function main(){
       providerId,accountId:ok.accountId,operationId:uuid(),
       expectedGeneration:3,kind:'transition_state',nextState:'ready'
     }),'ACCOUNT_SIGNUP_COMPLETION_SEAL_REQUIRED');
+    await createCandidate({pool,fixtureOnly:true}).change({
+      providerId,accountId:ok.accountId,operationId:uuid(),
+      expectedGeneration:3,kind:'transition_state',nextState:'suspended'
+    });
+    await error(allowed.complete(ok.scope),'SIGNUP_COMPLETION_ACCOUNT_NOT_ACTIVE');
+    assert.equal((await getState(ok)).account.state,'suspended',
+      'an old ready journal may not re-activate a suspended account');
 
     const revoked=await setup('revoked','b');
     const blocked=await revoke(revoked);

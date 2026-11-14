@@ -148,6 +148,7 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
     };
     let lockCalls=0;
     let onLock=null;
+    let afterProjectHook=null;
     const makeWriter=({appUri,grantUri,consentRevision})=>{
       const fence=createCanonicalRecordWriteConsentFence({
         appUri,grantUri,consentRevision
@@ -181,6 +182,7 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
         [owner,subject,commitCid,rootCid,rev,generation]
       );
       if(updated.rowCount!==1)return {ready:false};
+      if(afterProjectHook)await afterProjectHook();
       return {ready:true,accountId:owner,did:subject,commitCid,rev};
     };
     const hostedLookup=async({did:chosen})=>chosen===did?{...hosted}:null;
@@ -290,9 +292,49 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
         'WHERE did=$1',[did])).rows[0].n;
       assert.equal(revs,3);
     });
+    await t.test('in-flight PG consent revoke serializes with signed commit and denies stale HTTP ACK',async()=>{
+      const locked={};locked.promise=new Promise(r=>{locked.release=r;});
+      const continueWrite={};
+      continueWrite.promise=new Promise(r=>{continueWrite.release=r;});
+      onLock=async()=>{
+        locked.release();
+        await continueWrite.promise;
+      };
+      const prior=await readState();
+      const request=post('createRecord',{
+        repo:did,collection,rkey,swapCommit:current.commitCid,
+        record:record('signed during concurrent revoke')
+      });
+      // The repository transaction now holds FOR SHARE on the canonical
+      // consent. The independently issued revocation UPDATE must wait.
+      await locked.promise;
+      let revokeFinished=false;
+      const revoking=revoke().then(r=>{revokeFinished=true;return r;});
+      afterProjectHook=async()=>{await revoking;};
+      await new Promise(r=>setTimeout(r,125));
+      assert.equal(revokeFinished,false,
+        'revocation must wait until signed commit is durable');
+      continueWrite.release();
+      const response=await request;
+      assert.equal((await revoking).rowCount,1);
+      assert.equal(response.status,503,
+        'post-COMMIT authorization must fail after a competing revoke');
+      assert.equal(response.body.error,'InternalError');
+      current=await writer.verify({accountId,did,path:collection+'/'+rkey,
+        publicKeyPem:keys.publicKeyPem});
+      assert.equal(current.generation,prior.generation+1,
+        'one actual signed mutation may commit even when HTTP says 503');
+      const projected=await pool.query(
+        'SELECT state,head_cid FROM paper_atproto_repo_proof.rdf_projection_jobs '+
+        'WHERE account_id=$1',[accountId]
+      );
+      assert.equal(projected.rows[0].state,'applied');
+      assert.equal(projected.rows[0].head_cid,current.commitCid);
+      onLock=null;afterProjectHook=null;
+    });
     await t.test('revoked canonical PG consent stops HTTP writes without new blocks',async()=>{
       const before=await readState();
-      assert.equal((await revoke()).rowCount,1);
+      assert.equal((await revoke()).rowCount,0);
       const out=await post('createRecord',{
         repo:did,collection,rkey,swapCommit:current.commitCid,
         record:record('blocked')

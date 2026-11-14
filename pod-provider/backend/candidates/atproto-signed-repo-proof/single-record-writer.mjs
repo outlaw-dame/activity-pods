@@ -139,15 +139,21 @@ export function createSignedSingleRecordWriter({
     if(signed.rev!==h.rev)fail('SINGLE_RECORD_HEAD_MISMATCH');
     const recordCid=signed.recordCid;
     const outbox = await pool.query(
-      'SELECT rev,kind,status,blocked_at FROM '+ROOT+
-      '.native_event_outbox WHERE did=$1 AND commit_cid=$2',
+      'SELECT rev,kind,status,blocked_at,'+
+      'EXISTS (SELECT 1 FROM '+ROOT+'.native_event_outbox blocked '+
+      "WHERE blocked.did=$1 AND blocked.status='pending' "+
+      'AND blocked.blocked_at IS NOT NULL) AS blocked_history '+
+      'FROM '+ROOT+'.native_event_outbox WHERE did=$1 AND commit_cid=$2',
       [did,h.head_cid]
     );
     if (outbox.rowCount !== 1 || outbox.rows[0].rev !== h.rev ||
         outbox.rows[0].kind !== 'at.commit.v1' ||
-        outbox.rows[0].blocked_at !== null ||
         !['pending','delivered'].includes(outbox.rows[0].status)) {
       fail('SINGLE_RECORD_OUTBOX_MISMATCH');
+    }
+    if(outbox.rows[0].blocked_at !== null ||
+       outbox.rows[0].blocked_history === true) {
+      fail('SINGLE_RECORD_OUTBOX_BLOCKED');
     }
     let previousRootCid=null,previousRev=null,previousCommitCid=null;
     if (generation > 1) {

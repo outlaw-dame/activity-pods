@@ -131,10 +131,30 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
   assertDisposable();
   assertPool(pool);
   if (!['worker', 'issuer'].includes(kind)) deny();
+  const expectedRole = kind === 'worker' ?
+    'paper_account_proof_worker' : 'paper_account_proof_issuer';
   const result = await pool.query(`
     SELECT current_user AS role_name,
+      current_setting('server_version_num')::int AS version,
+      (SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname=current_user) AS can_login,
       (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls
        FROM pg_catalog.pg_roles WHERE rolname = current_user) AS privileged,
+      pg_has_role(current_user, $1, 'USAGE') AS expected_role,
+      pg_has_role(current_user, $1, 'SET') AS role_switch,
+      pg_has_role(current_user, (SELECT nspowner FROM pg_catalog.pg_namespace
+        WHERE nspname='paper_account_reservation_proof'), 'MEMBER') AS owner_member,
+      (SELECT count(*)::int FROM pg_catalog.pg_auth_members am
+       JOIN pg_catalog.pg_roles member_role ON member_role.oid=am.member
+       JOIN pg_catalog.pg_roles target_role ON target_role.oid=am.roleid
+       WHERE member_role.rolname=current_user AND target_role.rolname<>$1) AS extra_roles,
+      (SELECT count(*)::int FROM pg_catalog.pg_auth_members am
+       JOIN pg_catalog.pg_roles member_role ON member_role.oid=am.member
+       JOIN pg_catalog.pg_roles target_role ON target_role.oid=am.roleid
+       WHERE member_role.rolname=current_user AND target_role.rolname=$1
+         AND (am.set_option OR am.admin_option OR NOT am.inherit_option)) AS bad_role_options,
+      (SELECT count(*)::int FROM pg_catalog.pg_auth_members am
+       JOIN pg_catalog.pg_roles member_role ON member_role.oid=am.member
+       WHERE member_role.rolname=$1) AS inherited_extra_roles,
       has_schema_privilege(current_user, 'paper_account_reservation_proof', 'CREATE') AS schema_create,
       has_table_privilege(current_user, 'paper_account_reservation_proof.reservations',
         'SELECT,INSERT,UPDATE,DELETE') AS ledger_dml,
@@ -154,9 +174,13 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
         'EXECUTE') AS can_complete,
       has_function_privilege(current_user,
         'paper_account_reservation_proof.dataset_binding_is_live(text,text,uuid,uuid,text,text)',
-        'EXECUTE') AS can_issue`);
+        'EXECUTE') AS can_issue`,[expectedRole]);
   const row = result.rows[0];
-  const safe = result.rowCount === 1 && row.privileged === false &&
+  const safe = result.rowCount === 1 && row.version >= 180000 &&
+    row.can_login === true && row.privileged === false &&
+    row.expected_role === true && row.role_switch === false &&
+    row.owner_member === false && row.extra_roles === 0 &&
+    row.bad_role_options === 0 && row.inherited_extra_roles === 0 &&
     row.schema_create === false && row.ledger_dml === false &&
     row.quota_dml === false && row.read_all === false &&
     row.write_all === false && row.monitor === false &&

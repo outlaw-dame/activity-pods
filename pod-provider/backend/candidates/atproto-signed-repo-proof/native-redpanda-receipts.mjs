@@ -44,18 +44,30 @@ export function createNativeBrokerReceiptStore({
     gated(fixtureOnly);
     if(receivedTopic!==topic||
        !Number.isSafeInteger(partition)||partition<0||
-       typeof offset!=='string'||!/^(0|[1-9][0-9]*)$/u.test(offset) ||
+       typeof offset!=='string'||offset.length>19 ||
+       !/^(0|[1-9][0-9]*)$/u.test(offset) ||
        BigInt(offset)>9223372036854775807n ||
-       !(key instanceof Uint8Array) ||
+       !(key instanceof Uint8Array)||key.length<1||key.length>128 ||
        !headers||typeof headers!=='object' ||
        !(value instanceof Uint8Array)){
       fail('NATIVE_BROKER_RECEIPT_INPUT_INVALID');
     }
+    function readHeader(name,maxBytes=256) {
+      const raw=headers[name];
+      if(!(raw instanceof Uint8Array)&&typeof raw!=='string'){
+        fail('NATIVE_BROKER_RECEIPT_INPUT_INVALID');
+      }
+      const bytes=Buffer.from(raw);
+      if(bytes.length<1||bytes.length>maxBytes){
+        fail('NATIVE_BROKER_RECEIPT_INPUT_INVALID');
+      }
+      return bytes.toString('utf8');
+    }
     const did=Buffer.from(key).toString('utf8');
-    const eventId=Buffer.from(headers['event-id']||'').toString('utf8');
-    const commitCid=Buffer.from(headers['commit-cid']||'').toString('utf8');
-    const rev=Buffer.from(headers.revision||'').toString('utf8');
-    const declaredSeq=Buffer.from(headers['atproto-seq']||'').toString('utf8');
+    const eventId=readHeader('event-id',220);
+    const commitCid=readHeader('commit-cid',90);
+    const rev=readHeader('revision',20);
+    const declaredSeq=readHeader('atproto-seq',19);
     const parsed=checkNativeFrame({
       did,commitCid,rev,idempotencyKey:eventId,eventBytes:value
     });

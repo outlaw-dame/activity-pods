@@ -181,7 +181,7 @@ async function probeFuseki({ owner, app, grant, did, pgAuthority }) {
         'Owner account-location lookup should still run');
       // RDF forged active grant remains legible; PG blocked consent wins.
       assert.equal((await sparql('alice','query',
-        readConsentQuery({subjectUri:subject})).length,1);
+        readConsentQuery({subjectUri:subject}))).length,1);
       hookDeniedRdfFallback=true;
     } finally {
       for(const [key,value] of Object.entries(old)) {

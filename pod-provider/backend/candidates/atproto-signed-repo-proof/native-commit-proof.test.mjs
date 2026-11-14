@@ -9,6 +9,7 @@ import { Pool } from 'pg';
 import { createSignedRepoProofStore } from './store.mjs';
 import { createReferenceMstWriter } from './reference-mst-writer.mjs';
 import { createNativeCommitProof } from './native-commit-proof.mjs';
+import { createNativeOutboxDispatcher } from './native-outbox-dispatch.mjs';
 
 const DSN=process.env.ATPROTO_REPO_PROOF_DSN||'';
 const REF=process.env.ATPROTO_REFERENCE_REPO_ENTRY||'';
@@ -270,6 +271,51 @@ test('historical signed native #commit is invertible from bounded proof CAR afte
         );
       }
     });
+    await t.test('eight parallel PG outbox workers deliver historical verified frames in order',async()=>{
+      // Integrate the real durable PG lease/ack dispatcher with the actual
+      // signed historic CAR materializer. Only the broker transport is a
+      // deterministic disposable adapter; NO live Redpanda/relay is enabled.
+      const published=[];
+      const verifyEvent=async({did:subject,commitCid,rev,signal})=>{
+        assert.equal(signal.aborted,false);
+        assert.equal(subject,did);
+        return native.materialize({
+          accountId,did:subject,commitCid,rev,
+          publicKeyPem:credentials.publicKeyPem
+        });
+      };
+      const publish=async({idempotencyKey,commitCid,eventBytes,signal})=>{
+        assert.equal(signal.aborted,false);
+        const expected='at.commit.v1:'+did+':'+commitCid;
+        assert.equal(idempotencyKey,expected);
+        assert(eventBytes.byteLength>48);
+        published.push({idempotencyKey,commitCid});
+        return {acked:true,idempotencyKey};
+      };
+      const dispatcher=()=>createNativeOutboxDispatcher({
+        pool,fixtureOnly:true,verifyEvent,publish,maxAttempts:3,leaseSeconds:20
+      });
+      await Promise.all(Array.from({length:8},()=>dispatcher().deliverOnce()));
+      for(let attempt=0;attempt<24;attempt++){
+        if((await pool.query(
+          'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.native_event_outbox '+
+          "WHERE did=$1 AND status='pending'",[did]
+        )).rows[0].n===0)break;
+        await dispatcher().deliverOnce();
+      }
+      const rows=await pool.query(
+        'SELECT commit_cid,status,blocked_at FROM paper_atproto_repo_proof.native_event_outbox '+
+        'WHERE did=$1 ORDER BY id',[did]
+      );
+      assert.equal(rows.rowCount,journal.length);
+      assert(rows.rows.every(x=>x.status==='delivered'&&x.blocked_at===null));
+      assert.equal(published.length,journal.length);
+      assert.deepEqual(published.map(x=>x.commitCid),
+        journal.map(x=>x.head.commitCid),
+        'per-DID native outbox must deliver signed historical frames in exact order');
+      assert.equal(new Set(published.map(x=>x.idempotencyKey)).size,published.length);
+    });
+
     await t.test('production release boundary cannot be bypassed by an existing object',async()=>{
       const closed=createNativeCommitProof({
         pool,reference,authorize:async()=>true

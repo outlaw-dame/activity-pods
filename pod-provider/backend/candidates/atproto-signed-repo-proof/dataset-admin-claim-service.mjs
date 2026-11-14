@@ -102,8 +102,21 @@ export async function assertRestrictedDatasetAdminLogin(pool){
       "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','state','INSERT') AS can_forge_state,"+
       "pg_catalog.has_column_privilege(current_user,'paper_dataset_admin_proof.claims','completed_at','INSERT') AS can_forge_completion,"+
       "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
-        "WHERE nspname='paper_dataset_admin_proof'),'MEMBER') AS owner_member "+
-
+        "WHERE nspname='paper_dataset_admin_proof'),'MEMBER') AS owner_member,"+
+      "(SELECT count(*)::int FROM pg_catalog.pg_auth_members am "+
+      "JOIN pg_catalog.pg_roles member_role ON member_role.oid=am.member "+
+      "JOIN pg_catalog.pg_roles target_role ON target_role.oid=am.roleid "+
+      "WHERE member_role.rolname=current_user "+
+      "AND target_role.rolname<>'paper_dataset_admin_agent') AS extra_roles,"+
+      "(SELECT count(*)::int FROM pg_catalog.pg_auth_members am "+
+      "JOIN pg_catalog.pg_roles member_role ON member_role.oid=am.member "+
+      "JOIN pg_catalog.pg_roles target_role ON target_role.oid=am.roleid "+
+      "WHERE member_role.rolname=current_user "+
+      "AND target_role.rolname='paper_dataset_admin_agent' "+
+      "AND (am.set_option OR am.admin_option OR NOT am.inherit_option)) AS bad_role_options,"+
+      "(SELECT count(*)::int FROM pg_catalog.pg_auth_members am "+
+      "JOIN pg_catalog.pg_roles member_role ON member_role.oid=am.member "+
+      "WHERE member_role.rolname='paper_dataset_admin_agent') AS inherited_extra_roles "+
       "FROM pg_catalog.pg_roles x WHERE x.rolname=current_user"
     );
   }catch{fail('DATASET_ADMIN_SQL_PRIVILEGES_UNSAFE');}
@@ -113,6 +126,8 @@ export async function assertRestrictedDatasetAdminLogin(pool){
      x.rolreplication||x.rolbypassrls||!x.allowed||x.role_switch||
      x.create_schema||x.can_delete||x.can_truncate||
      !x.can_claim||!x.can_complete||x.can_read_all||x.owner_member||
+     x.extra_roles!==0||x.bad_role_options!==0||
+     x.inherited_extra_roles!==0||
      x.can_change_dataset||x.can_change_owner||x.can_change_reservation||
      x.can_change_ticket||x.can_forge_state||x.can_forge_completion){
     fail('DATASET_ADMIN_SQL_PRIVILEGES_UNSAFE');

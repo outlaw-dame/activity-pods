@@ -184,8 +184,20 @@ test('Redpanda broker ACK, historical CBOR, PG18 worker crash and durable replay
     const native=createNativeCommitProof({
       pool,reference,fixtureOnly:true,authorize:async()=>true
     });
+    let signedVerifications=0;
     const receipts=createNativeBrokerReceiptStore({
-      pool,topic,fixtureOnly:true
+      pool,topic,fixtureOnly:true,
+      verifySignedEvent:async ({did:subject,commitCid,rev,seq})=>{
+        signedVerifications++;
+        const owner=accounts.get(subject);
+        if(!owner)return null;
+        const proof=await native.materialize({
+          accountId:owner.accountId,did:subject,commitCid,rev,
+          publicKeyPem:owner.keys.publicKeyPem
+        });
+        assert.equal(proof.seq,seq);
+        return proof;
+      }
     });
     alice.head=await genesis.bootstrap({
       accountId:alice.accountId,did:alice.did,...alice.keys
@@ -307,6 +319,30 @@ test('Redpanda broker ACK, historical CBOR, PG18 worker crash and durable replay
       assert(rows.rows.slice(1).every(x=>x.attempt_count===1));
     });
 
+    await t.test('plausible forged first broker frame cannot poison empty receipt journal',async()=>{
+      const prefix=Buffer.from(cbor.encode({op:1,t:'#commit'}));
+      const body=cbor.decode(Buffer.from(original.eventBytes).subarray(prefix.length));
+      body.time='2026-11-12T00:00:00.000Z';
+      const forged=Buffer.concat([prefix,Buffer.from(cbor.encode(body))]);
+      const before=(await pool.query(
+        'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.native_broker_receipts'
+      )).rows[0].n;
+      assert.equal(before,0);
+      await rejectCode(receipts.observe({
+        receivedTopic:topic,partition:0,offset:'999',
+        key:Buffer.from(alice.did),value:forged,
+        headers:{
+          'event-id':eventId,'commit-cid':genesisHead.commitCid,
+          revision:genesisHead.rev,
+          'atproto-seq':String(original.seq)
+        }
+      }),'NATIVE_BROKER_UNVERIFIED_EVENT');
+      assert.equal((await pool.query(
+        'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.native_broker_receipts'
+      )).rows[0].n,0,
+      'unauthenticated first message cannot permanently claim a real event key');
+    });
+
     let observed=null;
     await t.test('broker consumption preserves DID order; durable receipt CAS suppresses ACK-retry duplicate',async()=>{
       observed=await readBroker(
@@ -336,11 +372,15 @@ test('Redpanda broker ACK, historical CBOR, PG18 worker crash and durable replay
         'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.native_broker_receipts'
       );
       assert.equal(receiptsInPg.rows[0].n,4);
+      assert.equal(signedVerifications,5,
+        'one negative first-seen proof plus exactly one signature proof per new signed event');
     });
 
     await t.test('consumer restart replays every Kafka offset without applying one more effect',async()=>{
       const replay=await readBroker('paper-native-replay-b',5,receipts);
       assert.equal(replay.filter(x=>x.result.firstSeen).length,0);
+      assert.equal(signedVerifications,5,
+        're-consumption of already authenticated frames must use indexed receipt+hash only');
       assert.equal((await pool.query(
         'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.native_broker_receipts'
       )).rows[0].n,4);

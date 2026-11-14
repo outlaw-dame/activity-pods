@@ -30,6 +30,13 @@ function fail(code) {
   e.code=code;
   throw e;
 }
+function treeError(error, fallback) {
+  // Keep cryptographic CID and bounded-I/O failures distinct from an
+  // upstream MST shape rejection. Never mask corruption as a missing path.
+  if(typeof error?.code==='string' &&
+     error.code.startsWith('NATIVE_COMMIT_'))throw error;
+  fail(fallback);
+}
 function gated(fixtureOnly) {
   if(fixtureOnly!==true || process.env.NODE_ENV==='production' ||
      process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed') {
@@ -209,7 +216,7 @@ export function createNativeCommitProof({
     const rootCid=signed.root;
     const currTree=reference.MST.load(storage,parseCid(rootCid));
     try{await currTree.getEntries();}
-    catch{fail('NATIVE_COMMIT_ROOT_INVALID');}
+    catch(error){treeError(error,'NATIVE_COMMIT_ROOT_INVALID');}
 
     // Audit is a unique (DID,commit CID) indexed record and captures the
     // exact predecessor. The CURRENT head need not be this event's head.
@@ -237,7 +244,7 @@ export function createNativeCommitProof({
       try{
         oldValue=await prevTree.get(m.path);
         newValue=await currTree.get(m.path);
-      }catch{fail('NATIVE_COMMIT_TREE_INVALID');}
+      }catch(error){treeError(error,'NATIVE_COMMIT_TREE_INVALID');}
       const oldCid=oldValue?.toString()??null;
       const newCid=newValue?.toString()??null;
       if(oldCid!==m.previous_record_cid ||
@@ -254,7 +261,7 @@ export function createNativeCommitProof({
       }
       let diff;
       try{diff=await reference.DataDiff.of(currTree,prevTree);}
-      catch{fail('NATIVE_COMMIT_DIFF_INVALID');}
+      catch(error){treeError(error,'NATIVE_COMMIT_DIFF_INVALID');}
       const created=Object.values(diff.adds);
       const updated=Object.values(diff.updates);
       const deleted=Object.values(diff.deletes);
@@ -304,7 +311,7 @@ export function createNativeCommitProof({
     }else{
       let proof;
       try{proof=await currTree.getCoveringProof(ops[0].path);}
-      catch{fail('NATIVE_COMMIT_COVERING_PROOF_INVALID');}
+      catch(error){treeError(error,'NATIVE_COMMIT_COVERING_PROOF_INVALID');}
       for(const [c,bytes] of proof)await addBlock(c.toString(),bytes);
       if(ops[0].cid!==null)await addBlock(ops[0].cid.toString());
     }

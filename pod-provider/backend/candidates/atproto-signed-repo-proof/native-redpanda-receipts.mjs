@@ -91,12 +91,6 @@ export function createNativeBrokerReceiptStore({
        !Buffer.from(current.rows[0].payload_sha256).equals(digest)){
       fail('NATIVE_BROKER_REPLAY_CONFLICT');
     }
-    if(inserted.rowCount===0 && BigInt(offset)<BigInt(current.rows[0].first_offset)){
-      // Consumer cursors may rewind, but a purported earlier offset for an
-      // identical event on the SAME partition indicates stale/tampered
-      // receipt state, not an expected after-ACK duplicate.
-      fail('NATIVE_BROKER_REPLAY_CONFLICT');
-    }
     return Object.freeze({
       firstSeen:inserted.rowCount===1,
       idempotencyKey:eventId,seq:parsed.seq,

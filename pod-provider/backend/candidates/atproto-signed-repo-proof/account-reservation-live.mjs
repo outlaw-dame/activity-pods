@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {Pool} from 'pg';
 import {makeAccountReservationAuthority,
   assertRestrictedAccountProofLogin} from './account-reservation-authority.mjs';
@@ -41,6 +43,38 @@ function restrictedPool(user,password) {
   return new Pool({connectionString:localDsn(user,password),
     max:2,connectionTimeoutMillis:3000,query_timeout:8000,
     idleTimeoutMillis:2000,allowExitOnIdle:true});
+}
+async function runRestrictedChild(kind,password,input) {
+  const file=fileURLToPath(new URL('./account-reservation-child.mjs',import.meta.url));
+  // Positive allowlist, never inherit the privileged PG18 harness environment.
+  const env={
+    NODE_ENV:'test',
+    ATPROTO_REPO_PROOF_DISPOSABLE:'confirmed',
+    APODS_ACCOUNT_RESERVATION_DISPOSABLE:'confirmed',
+    ACCOUNT_PROOF_CHILD_ROLE:kind,
+    ACCOUNT_PROOF_CHILD_DSN:localDsn(
+      kind==='worker'?'paper_account_worker_login':'paper_account_issuer_login',
+      password),
+    ACCOUNT_PROOF_CHILD_INPUT:Buffer.from(JSON.stringify(input||{}),'utf8')
+      .toString('base64')
+  };
+  assert.equal(Object.hasOwn(env,'ATPROTO_REPO_PROOF_DSN'),false);
+  assert.equal(Object.hasOwn(env,'DATASET_ADMIN_FUSEKI_PASSWORD'),false);
+  assert.equal(Object.hasOwn(env,'DATASET_ADMIN_SIGNER_PRIVATE_KEY'),false);
+  const child=spawn(process.execPath,[file],{env,stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='';
+  const exit=await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{
+      child.kill('SIGKILL');reject(Error('Isolated SQL child timeout'));
+    },12000);
+    child.stdout.on('data',chunk=>{stdout=(stdout+String(chunk)).slice(-1000);});
+    child.stderr.on('data',chunk=>{stderr=(stderr+String(chunk)).slice(-500);});
+    child.once('error',error=>{clearTimeout(timer);reject(error);});
+    child.once('exit',code=>{clearTimeout(timer);resolve(code);});
+  });
+  assert.equal(exit,0,'Restricted '+kind+' child failed: '+stderr.slice(0,120));
+  assert(stdout.includes('"inheritedSuperuser":false'),
+    'Child must produce explicit credential-isolation proof');
 }
 function fingerprint(label) {
   return crypto.createHash('sha256').update(label).digest('hex');
@@ -96,6 +130,8 @@ async function prepare() {
     assert(attempts.filter(x=>x.outcome!=='reserved')
       .every(x=>x.fenceToken===null),'Never reissue lease fence on a replay');
     const active = fence(input,receipt);
+    await runRestrictedChild('worker',workerPassword,input);
+    await runRestrictedChild('issuer',issuerPassword);
     assert.equal(await serviceA.assertDatasetBinding(active,username,ROOT+username),false,
       'Issuer must not sign claims before side effects have been fenced');
     assert.equal(await serviceA.reserve({...input,
@@ -209,6 +245,8 @@ async function verify() {
     await assertRestrictedAccountProofLogin(worker,'worker');
     await assertRestrictedAccountProofLogin(issuer,'issuer');
     const service=makeAccountReservationAuthority({workerPool:worker,issuerPool:issuer});
+    await runRestrictedChild('worker',config.workerPassword,config.input);
+    await runRestrictedChild('issuer',config.issuerPassword);
     assert.equal((await service.reserve(config.input)).outcome,'already_reserved');
     assert.equal((await service.reserve(config.input)).fenceToken,null);
     assert.equal(await service.startSideEffects(config.active),false,

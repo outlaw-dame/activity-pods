@@ -36,20 +36,29 @@ const queryType = 'application/sparql-query';
 const denialCodes = new Set([401, 403]);
 
 async function request(route, principal, { method = 'POST', body = null, type = null, accept = null } = {}) {
-  const response = await fetch(origin + route, {
-    method,
-    headers: {
-      ...auth(principal),
-      ...(type ? { 'content-type': type } : {}),
-      ...(accept ? { accept } : {})
-    },
-    body,
-    signal: AbortSignal.timeout(10000),
-    redirect: 'manual'
-  });
-  // Do not follow redirects: a 302 to an unprotected endpoint is not denial.
-  const responseBody = await response.text();
-  return { status: response.status, body: responseBody };
+  // A referenced timer is essential during first-container startup:
+  // AbortSignal.timeout alone may let Node exit with an unsettled top-level
+  // await while an Undici connection attempt has no referenced handles.
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(origin + route, {
+      method,
+      headers: {
+        ...auth(principal),
+        ...(type ? { 'content-type': type } : {}),
+        ...(accept ? { accept } : {})
+      },
+      body,
+      signal: controller.signal,
+      redirect: 'manual'
+    });
+    // Do not follow redirects: a 302 to an unprotected endpoint is not denial.
+    const responseBody = await response.text();
+    return { status: response.status, body: responseBody };
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 function accepted(reply, label) {
   assert.ok(reply.status >= 200 && reply.status < 300,

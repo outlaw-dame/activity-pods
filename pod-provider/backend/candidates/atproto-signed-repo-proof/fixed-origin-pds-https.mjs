@@ -206,7 +206,9 @@ export function createFixedOriginPdsHttpsRequester({
              (!/^[0-9]+$/u.test(String(reported))||
               Number(reported)>maxResponseBytes)){
             res.destroy();
-            release();reject(new Error('PDS_EGRESS_BODY_TOO_LARGE'));
+            const err=new Error('The approved PDS response exceeded its byte budget');
+            err.code='PDS_EGRESS_BODY_TOO_LARGE';
+            release();reject(err);
             return;
           }
           if(status!==200){

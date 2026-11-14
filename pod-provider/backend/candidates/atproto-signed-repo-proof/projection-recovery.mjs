@@ -84,22 +84,48 @@ function retryDelaySeconds(attempt) {
  */
 export function createRdfProjectionRecovery({
   pool, verifyNativeEvidence, authorize, readRdf, applyRdfFenced,
-  restrictedOperations = null, fixtureOnly = false, leaseSeconds = 15, maxAttempts = 8
+  restrictedOperations = null, independentAttestor = null,
+  fixtureOnly = false, leaseSeconds = 15, maxAttempts = 8
 } = {}) {
   if (process.env.NODE_ENV === 'production' ||
       process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed' || fixtureOnly !== true) {
     const unavailable = async () => fail('PROJECTION_NOT_RELEASED', 'RDF recovery is not activated');
     return Object.freeze({ reconcile: unavailable, readiness: unavailable, inspect: unavailable });
   }
+  const attestationRequired = restrictedOperations?.requiresIndependentAttestation === true;
   if (!pool || typeof pool.query !== 'function' ||
       [verifyNativeEvidence, authorize, readRdf, applyRdfFenced].some(x => typeof x !== 'function') ||
       !Number.isInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 300 ||
       !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20 ||
       (restrictedOperations !== null &&
        ['claim','ack','finishFailure','blockExhausted']
-         .some(name=>typeof restrictedOperations[name]!=='function'))) {
+         .some(name=>typeof restrictedOperations[name]!=='function')) ||
+      (attestationRequired &&
+       (typeof independentAttestor?.attest !== 'function' ||
+        typeof independentAttestor?.verifyReadback !== 'function'))) {
     fail('PROJECTION_CONFIGURATION_INVALID', 'PG, verification, grants and fenced RDF writer required');
   }
+
+  // A separately credentialed, independently read-only Jena attestor is
+  // mandatory for the attested-only PG18 ACK adapter. Never fall back to
+  // the projection worker's own Jena callback for receipt/readiness.
+  const attestationPayload = (accountId, did, proof, row) =>
+    Object.freeze({
+      accountId, did, commitCid: proof.commitCid, rootCid: proof.rootCid,
+      rev: proof.rev, generation: Number(row.generation),
+      leaseEpoch: String(row.lease_epoch),
+      ...(row.lease_owner ? { leaseOwner: row.lease_owner } : {})
+    });
+  const independentReadback = async (accountId, did, proof, row) => {
+    if (!attestationRequired) return;
+    const hash = await independentAttestor.verifyReadback(
+      attestationPayload(accountId, did, proof, row)
+    );
+    if (!Buffer.isBuffer(hash) || hash.length !== 32) {
+      fail('PROJECTION_INDEPENDENT_READBACK_INVALID',
+        'Independent protected RDF attestation rejected readiness');
+    }
+  };
 
   const permitted = async (accountId, did, fence = null) => {
     if ((await authorize({ accountId, did, scope: 'atproto:rdf-projection', fence })) !== true) {
@@ -130,7 +156,16 @@ export function createRdfProjectionRecovery({
       fail('PROJECTION_NOT_READY', 'RDF projection has no durable completion');
     }
     checkProjected(await readRdf({ accountId, did }), p, String(row.lease_epoch));
+    await independentReadback(accountId, did, p, row);
+    // Cross-store reads are never atomic with canonical SQL revocation.
+    // Recheck authorization and signed head AFTER independent Jena I/O.
     await permitted(accountId, did, String(row.lease_epoch));
+    const current = await evidence(accountId, did);
+    if (current.commitCid !== p.commitCid || current.rootCid !== p.rootCid ||
+        current.rev !== p.rev || current.generation !== p.generation) {
+      fail('PROJECTION_VERIFIED_HEAD_CHANGED',
+        'Signed head advanced while checking protected RDF readiness');
+    }
     return Object.freeze({
       ready: true, accountId, did, headCid: p.commitCid, rootCid: p.rootCid,
       rev: p.rev, generation: Number(row.generation),
@@ -262,6 +297,31 @@ export function createRdfProjectionRecovery({
         fail('PROJECTION_VERIFIED_HEAD_CHANGED', 'Signed repository changed during projection');
       }
       checkProjected(await readRdf({ accountId, did }), p, fence);
+      if (attestationRequired) {
+        // This runs with the attestor's independent SQL and read-only Jena
+        // credentials; the worker cannot mint the durable receipt itself.
+        const receipt = await independentAttestor.attest(
+          attestationPayload(accountId, did, p, leased)
+        );
+        if (receipt?.attested !== true || receipt.accountId !== accountId ||
+            receipt.did !== did || receipt.headCid !== p.commitCid ||
+            receipt.leaseEpoch !== fence ||
+            typeof receipt.rdfSha256 !== 'string' ||
+            !/^[a-f0-9]{64}$/u.test(receipt.rdfSha256)) {
+          fail('PROJECTION_INDEPENDENT_ATTESTATION_INVALID',
+            'Independent protected RDF attestor did not confirm current lease');
+        }
+        // A revocation or signed-head advance can race the remote read.
+        await permitted(accountId, did, fence);
+        const postAttest = await evidence(accountId, did);
+        if (postAttest.commitCid !== p.commitCid ||
+            postAttest.rootCid !== p.rootCid ||
+            postAttest.rev !== p.rev ||
+            postAttest.generation !== p.generation) {
+          fail('PROJECTION_VERIFIED_HEAD_CHANGED',
+            'Signed head advanced after protected RDF attestation');
+        }
+      }
       const ack = restrictedOperations
         ? await restrictedOperations.ack({accountId,did,claimed:leased,proof:p})
         : await pool.query(

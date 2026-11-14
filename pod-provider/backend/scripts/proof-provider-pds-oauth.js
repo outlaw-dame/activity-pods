@@ -35,7 +35,7 @@ const allowedScope='atproto repo:'+collection+'?action=create&action=update&acti
 const path='/xrpc/com.atproto.repo.createRecord';
 const htu=origin+path;
 const grantUri=webId+'/data/grants/writer';
-const error=(promise,code)=>assert.rejects(promise,e=>e?.code===code);
+const error=(promise,code)=>assert.rejects(promise,e=>e?.type===code||e?.code===code);
 const sha=token=>crypto.createHash('sha256').update(token,'ascii').digest('base64url');
 async function main(){
  const redis=new Redis(repo,{

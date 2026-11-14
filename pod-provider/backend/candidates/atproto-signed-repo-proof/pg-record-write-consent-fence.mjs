@@ -26,9 +26,10 @@ function web(value){
   return value;
 }
 export function createCanonicalRecordWriteConsentFence({
-  appUri,grantUri,consentRevision
+  appUri,grantUri,consentRevision,restrictedCredential=false
 }={}){
   web(appUri);web(grantUri);
+  if(typeof restrictedCredential!=='boolean')fail('WRITE_CONSENT_SCOPE_INVALID');
   if(typeof consentRevision!=='string'||!REV.test(consentRevision)||
      BigInt(consentRevision)>MAX)fail('WRITE_CONSENT_SCOPE_INVALID');
   return async function lockCanonicalConsent(client,{accountId,did}={}){
@@ -39,6 +40,21 @@ export function createCanonicalRecordWriteConsentFence({
     // The same connection MUST already be inside BEGIN and hold the signed
     // repo + projection rows FOR UPDATE. A separate pool query would re-open
     // the revocation race, so never create another connection here.
+    if(restrictedCredential){
+      // PostgreSQL FOR SHARE requires an UPDATE permission. Do not grant the
+      // signed repo worker ANY UPDATE permission on canonical consents.
+      // A narrowly scoped SECURITY DEFINER function performs the check and
+      // takes the locks as part of this exact caller transaction instead.
+      const answer=await client.query(
+        'SELECT paper_atproto_authority.lock_writer_consent('+
+        '$1,$2,$3,$4,$5::bigint) AS allowed',
+        [accountId,did,appUri,grantUri,consentRevision]
+      );
+      if(answer.rowCount!==1||answer.rows[0].allowed!==true){
+        fail('WRITE_CONSENT_NOT_CURRENT');
+      }
+      return true;
+    }
     const r=await client.query(
       'SELECT i.did,i.state AS identity_state,i.managed,'+
       'c.state AS consent_state,c.grant_uri,c.revision::text AS revision '+

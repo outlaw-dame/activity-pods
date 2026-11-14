@@ -562,3 +562,52 @@ cannot return success. Existing production no-signup and no-XRPC fuses
 remain closed. This is a prerequisite for production `getRepo` and
 for signed native `#commit` event diff CAR materialization, not their
 activation.
+
+
+## Historical signed native commit event proof
+
+A full repository CAR cannot substitute for an incremental at.commit
+event: commits can stay pending in the durable native-event outbox after
+the PostgreSQL head has already moved to a newer signed revision.
+The nonactivated native-commit-proof.mjs resolves a particular
+outbox (DID, commit CID) against immutable signed PostgreSQL blocks,
+not against the latest-head-only repository exporter.
+
+It verifies the stored v3 signature, current/parent DAG-CBOR commits,
+per-generation immutable mutation audit, exact changed-path old/new
+record values, and the independent upstream DataDiff.of(MST,MST)
+result. It rejects an unaudited orphan as fake genesis, and accepts
+historical genesis only when indexed generation-2 parent evidence proves
+its identity. The upstream MST getCoveringProof(path) produces a bounded
+inductive CAR with the signed commit as its only root, just the relevant
+tree/neighbor proof and the new record (if created or updated).
+Previous record CID is carried in the operation's prev field for
+updates and deletes. The complete binary frame encodes a DRISL-CBOR
+header (op 1, t #commit) followed by the event containing the global
+persistent outbox sequence, DID, signed commit link, revision, since
+revision, prevData root link, timestamp, operation and CAR bytes.
+
+Limits: no more than 256 CID-addressed reads, 2 MB aggregate loaded
+bytes, 96 CAR blocks, 2 MB CAR and ~2.2 MB frame. Each block is
+SHA-256/CID-verified, old/new record schemas match their collection,
+the signed parent is checked, and the current provider's export policy
+is checked both before and after materialization. No entire-account
+record scan, broad outbox scan, unbounded retry or network I/O under
+PostgreSQL row locks. Stable event identity is the existing
+at.commit.v1:DID:commitCID key; exactly-once broker delivery is NOT
+claimed.
+
+Real disposable PG18 acceptance creates 20 later signed mutations,
+then recovers the earliest pending genesis and a historical create,
+update and delete event. It parses the emitted frame and CAR using
+the pinned upstream package and **inverts each operation using the
+covering proof to recover the exact preceding MST root**. Corrupt
+historical CIDs, forged mutation audit, oversize CAR, revoked provider
+authority and terminally blocked outbox events all fail closed.
+
+**Still not activated:** event sequence and bytes have not been
+published through an authenticated Redpanda producer; no broker ACK,
+subscription cursor, consumer de-duplication, PDS relay or public
+firehose is enabled. This proof requires genuine provider Solid/SAI
+authorization, production-key isolation and multi-process restore/load
+acceptance before release. New-account production signup remains closed.

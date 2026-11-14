@@ -61,7 +61,11 @@ function containsExactly(values, requested) {
   return entries.length > 0 && entries.length <= 32 &&
     entries.some(x => scalar(x) === requested);
 }
-function scope({ accountId, did, appUri, grantUri, epoch, operation, projectionFence = null, rootCid = null, rev = null }) {
+function scope({
+  accountId, did, appUri, grantUri, epoch, operation, projectionFence = null,
+  rootCid = null, rev = null, generation = null,
+  previousRootCid = null, previousRev = null
+}) {
   canonicalUrl(accountId);
   canonicalUrl(appUri);
   canonicalUrl(grantUri);
@@ -73,14 +77,23 @@ function scope({ accountId, did, appUri, grantUri, epoch, operation, projectionF
   if (operation === 'project') {
     if (!CID.test(rootCid || '') || !TID.test(rev || '') ||
         typeof projectionFence !== 'string' || !FENCE.test(projectionFence) ||
-        BigInt(projectionFence) > MAX) {
+        BigInt(projectionFence) > MAX ||
+        !Number.isSafeInteger(generation) || generation < 1 ||
+        (generation === 1 &&
+          (previousRootCid !== null || previousRev !== null)) ||
+        (generation > 1 &&
+          (!CID.test(previousRootCid || '') ||
+           !TID.test(previousRev || '') || previousRev >= rev))) {
       deny('POD_PROJECTION_SCOPE_INVALID',
-        'Project authority requires exact signed root, revision and PG recovery lease fence');
+        'Project authority requires exact signed generation, parent and PG lease fence');
     }
-  } else if (projectionFence !== null || rootCid !== null || rev !== null) {
+  } else if (projectionFence !== null || rootCid !== null || rev !== null ||
+             generation !== null || previousRootCid !== null ||
+             previousRev !== null) {
     deny('POD_PROJECTION_SCOPE_INVALID', 'Non-project operations must not carry a repository lease fence');
   }
-  return Object.freeze({ accountId, did, appUri, grantUri, epoch, operation, projectionFence, rootCid, rev });
+  return Object.freeze({ accountId, did, appUri, grantUri, epoch, operation,
+    projectionFence, rootCid, rev, generation, previousRootCid, previousRev });
 }
 function checkBinding(binding, location, did) {
   if (!binding || binding.id !== location.resourceUri ||
@@ -293,10 +306,12 @@ export function createPodActivityPodsProjection({
     return Object.freeze({ accountId, status: 'active', epoch: '1' });
   }
   async function project({
-    accountId, did, appUri, grantUri, epoch, projectionFence, ticket, oidcToken, rootCid, rev
+    accountId, did, appUri, grantUri, epoch, projectionFence, ticket,
+    oidcToken, rootCid, rev, generation, previousRootCid = null,
+    previousRev = null
   }) {
     const s = scope({ accountId, did, appUri, grantUri, epoch, operation: 'project',
-      projectionFence, rootCid, rev });
+      projectionFence, rootCid, rev, generation, previousRootCid, previousRev });
     authorize(ticket, s);
     const location = await locate(accountId);
     await oidc(oidcToken, accountId, appUri);
@@ -311,6 +326,8 @@ export function createPodActivityPodsProjection({
       query: buildFencedRepoProjectionSparql({
         resourceUri: location.resourceUri, graphUri,
         accountId, did, rootCid, rev, fence: projectionFence,
+        expectedPreviousRootCid: previousRootCid,
+        expectedPreviousRev: previousRev,
         consentFence: { subjectUri: prior.subjectUri, grantUri, revision: epoch }
       })
     });
@@ -349,9 +366,12 @@ export function createPodActivityPodsProjection({
     }
     return Object.freeze({ revoked: true, accountId, epoch: after.revision });
   }
-  async function check({ accountId, did, appUri, grantUri, epoch, projectionFence, oidcToken, rootCid, rev }) {
+  async function check({
+    accountId, did, appUri, grantUri, epoch, projectionFence, oidcToken,
+    rootCid, rev, generation, previousRootCid = null, previousRev = null
+  }) {
     scope({ accountId, did, appUri, grantUri, epoch, operation: 'project',
-      projectionFence, rootCid, rev });
+      projectionFence, rootCid, rev, generation, previousRootCid, previousRev });
     const location = await locate(accountId);
     await oidc(oidcToken, accountId, appUri);
     await sai(location, appUri, grantUri);

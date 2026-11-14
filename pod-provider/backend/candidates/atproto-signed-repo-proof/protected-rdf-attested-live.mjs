@@ -163,6 +163,44 @@ async function prepare(){
    pool:p.attestor,readProtectedRdf:reader(),appUri,grantUri,
    consentRevision:'1',fixtureOnly:true
   });
+  // The newly introduced attestation table is an eighth SQL relation:
+  // a stray column grant here would defeat the separate-credential barrier.
+  // Exercise actual PG18 column grants, whole-table reads/deletes and both
+  // startup admissions, then remove every privilege before use.
+  const receiptTable='paper_atproto_repo_proof.rdf_attestations';
+  for(const bad of [
+    {principal:'worker',permission:'INSERT (rdf_sha256)'},
+    {principal:'worker',permission:'UPDATE (lease_epoch)'},
+    {principal:'worker',permission:'SELECT'},
+    {principal:'attestor',permission:'INSERT (rdf_sha256)'},
+    {principal:'attestor',permission:'DELETE'},
+    {principal:'attestor',permission:'SELECT'}
+  ]){
+    const sql=bad.permission+' ON '+receiptTable;
+    await admin.query('GRANT '+sql+' TO '+id(names[bad.principal]));
+    try{
+      if(bad.principal==='worker'){
+        await assert.rejects(createAttestedPgProjectionOperations({
+          pool:p.worker,appUri,grantUri,consentRevision:'1',fixtureOnly:true
+        }),e=>e?.code==='PROJECTION_WORKER_ROLE_REQUIRED');
+      }else{
+        await assert.rejects(assertRestrictedRdfAttestorLogin(p.attestor),
+          e=>e?.code==='PROTECTED_RDF_ATTESTOR_ROLE_REQUIRED');
+      }
+    }finally{
+      await admin.query('REVOKE '+sql+' FROM '+id(names[bad.principal]));
+    }
+    if(bad.principal==='worker'){
+      await createAttestedPgProjectionOperations({
+        pool:p.worker,appUri,grantUri,consentRevision:'1',fixtureOnly:true
+      });
+    }else{
+      assert.equal((await assertRestrictedRdfAttestorLogin(p.attestor)).independent,true);
+    }
+  }
+  await denied(p.worker.query(
+    'SELECT count(*) FROM '+receiptTable));
+
   // Temporarily inject unauthorized column DML and prove real admission
   // fails, then restore exact privileges before touching canonical identity.
   await admin.query('GRANT UPDATE(state) ON '+
@@ -277,6 +315,7 @@ async function prepare(){
   console.log('INDEPENDENT_PG18_JENA_ATTESTATION '+JSON.stringify({
     phase:'prepare',realSignedGenesis:true,oneLeaseWinner:true,
     independentRdfCredential:true,exactRoleGrantAdmission:true,
+    injectedReceiptGrantRefusals:6,
     legacyAckRevoked:true,ackWithoutReceiptDenied:true,
     signedHeadMismatchDenied:true,attestedAckSucceeded:true,
     replayRequiresNewRdfFence:true,receiptRowsBounded:true,

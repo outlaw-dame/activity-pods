@@ -145,7 +145,7 @@ test('real Moleculer dataset service delegates before any existence or privilege
   });
   const service = loadRealService(delegated);
   const ctx = {
-    params:{dataset},meta:{atprotoDatasetTicket:t},
+    params:{dataset,datasetAdminTicket:t},meta:{unrelated:'preserve'} ,
     call:jest.fn(async (action, args, opts) => {
       observed.push({action,args,opts});
       if (action !== 'triplestore.dataset.waitForCreation') throw Error('Unexpected action');
@@ -159,19 +159,23 @@ test('real Moleculer dataset service delegates before any existence or privilege
   });
   expect(delegated).toHaveBeenCalledWith({dataset,ticket:t});
   expect(observed.map(x=>x.action)).toEqual(['triplestore.dataset.waitForCreation']);
+  expect(ctx.meta).toEqual({unrelated:'preserve'});
+  expect(observed[0].args).toEqual({dataset});
+  expect(Object.hasOwn(observed[0].opts,'meta')).toBe(false);
   expect(observed[0].opts.timeout).toBe(5000);
   expect(state.ensureSemappsNamedGraphs).toHaveBeenCalledWith(ctx,dataset);
 });
 test('no ticket means refusal and no fallback to legacy or an existing dataset', async () => {
   const client = jest.fn(async () => {throw Error('unsigned or unissued claim');});
   const service=loadRealService(client);
-  const ctx={params:{dataset},meta:{},call:jest.fn()};
+  const ctx={params:{dataset},meta:{atprotoDatasetTicket:ticket()},call:jest.fn()};
   await setting('confirmed',async()=>{
     await expect(service.actions.ensureSecureDataset.handler.call({
       ensureSemappsNamedGraphs:jest.fn()
     },ctx)).rejects.toThrow(/unsigned or unissued/);
   });
   expect(client).toHaveBeenCalledWith({dataset,ticket:undefined});
+  expect(ctx.meta.atprotoDatasetTicket).toBeDefined();
   expect(ctx.call).not.toHaveBeenCalled();
 });
 test('without the disposable switch, existing storage and SemApps behavior is unchanged', async () => {

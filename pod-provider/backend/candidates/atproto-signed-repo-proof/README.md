@@ -642,3 +642,81 @@ materialization must fail with
 immediate predecessor recovers exact `since`/`prevData`.
 The same regression confirms generation-2 event recovery while
 genesis has already been acknowledged.
+
+
+## Real Redpanda broker publication, ACK and consumer replay — isolated proof
+
+**NONACTIVATED.** The new native-redpanda-publisher.mjs takes an
+already-verified signed #commit frame from the PostgreSQL outbox
+dispatcher and sends **one** keyed Kafka record through an injected,
+connected producer. The partition key is the managed DID, so commits
+for one repository stay on the same partition and in PostgreSQL delivery
+order. Its immutable event-id, commit CID, revision and persistent
+PostgreSQL sequence are carried as bounded Kafka headers. No client can
+select the topic or broker endpoint through the publish call.
+
+The producer explicitly sets **acks=-1 (all in-sync replicas)**, a
+bounded request timeout, no topic auto-creation, and demands a broker
+response containing the expected topic, partition and nonnegative
+offset. The outer PostgreSQL lease is still authoritative: a stale
+lease cannot ACK an event and a successful broker append followed
+by a worker crash can leave PostgreSQL pending. KafkaJS is pinned to
+`2.2.4` only in the disposable independent-interop CI sandbox; the
+production provider remains unwired and does not import it.
+
+Real Redpanda `v26.2.7` is run via Docker **only in GitHub Actions**,
+with Kafka bound on the runner's loopback. It is not a recommended
+production deployment. Its test native-event topic has a fixed three
+partition topology, one replica, a one-hour retention and an explicit
+`max.message.bytes=2400000`. This is necessary because Redpanda's
+default topic message cap is **1 MiB**, less than the candidate's
+`2 MiB` maximum verified frame. The test proves an actual broker
+ACK for an uncompressed **1.45 MB** payload on a separate synthetic
+transport-only topic; random bytes are NEVER emitted as an ATProto
+event. The native topic carries only verified signed commit frames.
+
+In the real-broker acceptance, the dispatcher first gets a durable
+broker ACK for a signed genesis event and then intentionally crashes
+before the PostgreSQL ACK. A new Kafka producer session and eight
+concurrent PostgreSQL recovery workers redeliver that same event and
+its later signed revisions, without bypassing the PG lease and
+monotone per-DID order. Actual Kafka consumers read broker-committed
+bytes from the start and verify DID partition affinity and ordering.
+
+**At least once is not exactly once.** The additive, disposable
+`native_broker_receipts` PostgreSQL table and
+native-redpanda-receipts.mjs demonstrate a unique consumer effect
+per (DID, signed commit CID): one atomic indexed INSERT SELECT from
+the authoritative outbox and a SHA-256, sequence, revision, topic and
+partition readback. The duplicate Kafka offset is accepted only
+with identical signed-event bytes; altered frames are rejected.
+Restarting consumer processing from the beginning must not insert a
+second effect, and a malicious earlier-offset replay is valid when
+identical (consumer replays can rewind).
+
+### Operational and security boundaries
+
+- The CI broker is **single-node replication factor 1**. Redpanda
+  `acks=all` there proves a broker write acknowledgment, not
+  replication across failure domains or availability after losing
+  the only node. Production requires multi-node replication and
+  dedicated security acceptance for TLS/SASL, ACLs, loss of leader,
+  broker restart, partition reassignment and retention.
+- A producer's idempotent session alone **cannot** deduplicate a
+  new publish after an unknown PostgreSQL ACK; the durable receipt
+  is required. The receipt is a nonactivated proof table, **not**
+  production consumer authority or completed public cursor storage.
+  Production must define bounded receipt retention/GC linked to
+  delivery and consumer cursors, with a backup/restore acceptance.
+- Fixed DID partition topology must not be expanded casually:
+  increasing partition count changes hash assignments and can reorder
+  a repository's events across partitions. A planned topic migration
+  and cursor rebase is required before changing partition count.
+- Do not expose the internal topic or broker metadata to unauthenticated
+  HTTP callers. The production PDS must enforce identity, hosting,
+  protected Solid/SAI status and publication revocation at the trusted
+  provider boundary before activating this path.
+- The tests make no claim of measured production p95/p99, sustained
+  memory/CPU, real durability during multi-broker partition failure or
+  cloud cost. Keep the production signup and public firehose fuses
+  **closed** until those acceptance gates pass.

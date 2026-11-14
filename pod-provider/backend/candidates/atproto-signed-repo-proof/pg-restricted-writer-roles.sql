@@ -36,6 +36,12 @@ GRANT SELECT ON
 -- applied, ack outbox delivery, delete immutable blocks or mint grants.
 GRANT UPDATE (head_cid,root_cid,rev,generation)
   ON paper_atproto_repo_proof.repos TO paper_atproto_repo_writer;
+-- PostgreSQL SELECT ... FOR UPDATE requires UPDATE privilege on at least
+-- one column. Grant only the inert housekeeping timestamp, NEVER state,
+-- applied_at, head/root/rev, lease or generation. The signed writer
+-- must lock this row before calling the guarded reset function.
+GRANT UPDATE (updated_at)
+  ON paper_atproto_repo_proof.rdf_projection_jobs TO paper_atproto_repo_writer;
 GRANT INSERT (did,cid,block)
   ON paper_atproto_repo_proof.blocks TO paper_atproto_repo_writer;
 GRANT INSERT (did,commit_cid,rev,kind)

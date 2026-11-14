@@ -70,7 +70,12 @@ module.exports = {
         try {
           const { payload } = await jwtVerify(token, publicKey, {
             issuer: this.settings.issuer,
-            audience: this.settings.audience
+            audience: this.settings.audience,
+            // The same JWK provider can sign other Solid/OIDC JWT classes.
+            // A protected-resource access token MUST have the type emitted
+            // by issueAccessToken, not merely a valid issuer+audience.
+            typ: 'at+jwt',
+            algorithms: [String(publicJwk.alg || 'ES256')]
           });
 
           return {

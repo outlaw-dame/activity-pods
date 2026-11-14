@@ -145,3 +145,69 @@ for managed-ATProto actions.
 The storage proof is an O(1), startup-oriented credential check. It does
 not scan Pods, allocate a pool per user, open a cross-store SQL transaction
 or add a mandatory per-request credential probe.
+
+## P1a — signed pre-account dataset creation (nonactivated integration)
+
+The actual `auth.signup` action calls
+`dataset-provisioning.ensureSecureDataset(username)` **before** it creates
+and attaches the WebID/account. An out-of-process administrator cannot
+safely authenticate a creation request by requiring a *completed* WebID:
+that would introduce a circular dependency. Conversely, accepting an
+unverified `dataset` string directly on a privileged admin API would let
+any compromised ordinary provider create arbitrary Jena datasets.
+
+The additive `dataset-admin-claim-service.mjs` candidate therefore proves
+a **pre-account reservation contract**:
+
+- A trusted ActivityPods reservation issuer, separate from the ordinary
+  SemApps SPARQL process, signs a deterministic, fixed-schema Ed25519
+  claim for a single canonical username, owner WebID, unique reservation
+  and nonce, short expiry, explicit audience and issuer. The sidecar
+  receives only the issuer's public verification key; the ordinary
+  provider gets **neither** the issuer signing private key nor Fuseki
+  administrator secret.
+- A PostgreSQL 18 table stores **one immutable ticket digest per dataset**.
+  The separate SQL LOGIN has strictly column-scoped rights to insert
+  the claim, read bounded claim fields and update only completion state.
+  Direct dataset/owner/ticket updates, forged precompleted claims,
+  DELETE/TRUNCATE and role escalation are refused by both SQL GRANT and
+  startup admission.
+- A separate disposable administrator process performs *only* verified,
+  fixed-form TDB2 dataset creation using its own Fuseki admin credential.
+  It never receives arbitrary SPARQL, graph names, Fuseki routes, HTTP
+  verbs or administrative command bodies from the ordinary caller.
+  Database mutations commit **before** network I/O: there is no cross-
+  store transaction held open during Jena requests.
+- Concurrent identical requests may race safely through Fuseki's create
+  conflict but converge on one PG row. After a crash, the same immutable
+  signed ticket may retry until its bounded expiry. A different signed
+  claim for the existing dataset is rejected, even with a valid issuer
+  signature. A Fuseki HTTP 2xx/409 is not considered enough; the provider
+  checks the newly created dataset's actual SPARQL endpoint and confirms
+  it is empty across the default **and all named graphs** before making
+  the completion durable.
+- All routes, credentials, SQL endpoints and account URI mapping are
+  hardcoded **only for disposable loopback CI**. The test also rejects
+  forged/mutated/expired claims, wrong owner, unsupported verbs, oversized
+  requests, column-grant escalation, and verifies persisted status after
+  independently restarting both the admin child process and Jena TDB2.
+
+**Release limitations:** the trusted reservation issuer is only a
+test fixture, not yet part of live ActivityPods `provider-capabilities`
+or `auth.signup`; the sidecar runs as an independently credentialed
+test child, not a fully isolated production container or service
+account. The test-only PG role/credential is not the deployment policy,
+and the current ordinary backend continues to possess the legacy Jena
+admin secret. This gate does not release production signup, native SAI,
+the protected resource's physical separation or Jena major-version
+migration.
+
+**Next required work:** move the issuer private key into trusted
+ActivityPods account reservation authority, bind reservation to the
+canonical username before any dataset creation, launch the administrator
+under a genuinely separate container/user, secret and network namespace,
+replace the real provider's `createDatasetViaFusekiAdmin` with a
+timeout-bounded authenticated client to this narrow service, remove
+Jena admin credentials from ordinary SemApps processes, and run a
+live multi-replica Solid signup + grant/revocation acceptance. Only
+after that pass should a separate review consider production release.

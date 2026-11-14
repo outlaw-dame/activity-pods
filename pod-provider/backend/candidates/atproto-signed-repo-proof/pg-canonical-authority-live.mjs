@@ -28,11 +28,13 @@ const genericName = 'paper_auth_generic_' + rand;
 const readerName = 'paper_auth_reader_' + rand;
 const revokerName = 'paper_auth_revoker_' + rand;
 const secondRevokerName = 'paper_auth_revoker2_' + rand;
+const escalatableName = 'paper_auth_escalatable_' + rand;
 const temporaryRoles = [
   [genericName, null],
   [readerName, 'paper_atproto_authority_reader'],
   [revokerName, 'paper_atproto_authority_revoker'],
-  [secondRevokerName, 'paper_atproto_authority_revoker']
+  [secondRevokerName, 'paper_atproto_authority_revoker'],
+  [escalatableName, 'paper_atproto_authority_revoker']
 ];
 const allSecrets = new Map(temporaryRoles.map(([name]) =>
   [name, crypto.randomBytes(32).toString('base64url')]));
@@ -219,11 +221,27 @@ async function run() {
         'NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2');
       createdCount++;
       if(member)await admin.query('GRANT '+ident(member)+' TO '+ident(name));
+      if(name===escalatableName) {
+        // PG18 role membership can permit SET ROLE without INHERIT.
+        // This login looks like a restricted revoker until it changes role.
+        await admin.query('GRANT paper_atproto_authority_importer TO '+
+          ident(name)+' WITH INHERIT FALSE, SET TRUE');
+      }
     }
-    const [generic,reader,revoker,revoker2]=await Promise.all(
+    const [generic,reader,revoker,revoker2,escalatable]=await Promise.all(
       temporaryRoles.map(([name])=>connectRole(name)));
     assert.equal(await assertRestrictedPgAuthorityLogin(revoker),true);
     assert.equal(await assertRestrictedPgAuthorityLogin(revoker2),true);
+    const escalationCheck=await escalatable.query(
+      "SELECT pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','INSERT') AS inherited_insert, "+
+      "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_importer','MEMBER') AS importer_member"
+    );
+    assert.equal(escalationCheck.rows[0].inherited_insert,false,
+      'Unsafe import membership must not already be inherited');
+    assert.equal(escalationCheck.rows[0].importer_member,true,
+      'The login must be able to switch roles in this negative proof');
+    await assert.rejects(assertRestrictedPgAuthorityLogin(escalatable),
+      e=>e?.code==='ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
     await assert.rejects(assertRestrictedPgAuthorityLogin(admin),
       e=>e?.code==='ATPROTO_PG_AUTHORITY_PRIVILEGES_UNSAFE');
     await assert.rejects(assertRestrictedPgAuthorityLogin(generic),
@@ -317,6 +335,7 @@ async function run() {
       readOnlyLoginDeniedMutation:true,
       revokerDirectWritesDenied:4,
       independentRevocationContenders:2,
+      unsafeNonInheritedImporterMembershipDenied:true,
       oneWayTransitions:2,
       forgedPrivilegedFusekiRdfAcceptedWithoutPgRegrant:wroteRdf,
       blockedRows:2
@@ -335,6 +354,9 @@ async function run() {
     }
     for(const [name,member] of temporaryRoles.slice(0,createdCount).reverse()){
       try{
+        if(name===escalatableName) {
+          await admin.query('REVOKE paper_atproto_authority_importer FROM '+ident(name));
+        }
         if(member)await admin.query('REVOKE '+ident(member)+' FROM '+ident(name));
         await admin.query('DROP ROLE '+ident(name));
       }catch(e){cleanupErrors.push(e)}

@@ -84,7 +84,7 @@ function retryDelaySeconds(attempt) {
  */
 export function createRdfProjectionRecovery({
   pool, verifyNativeEvidence, authorize, readRdf, applyRdfFenced,
-  fixtureOnly = false, leaseSeconds = 15, maxAttempts = 8
+  restrictedOperations = null, fixtureOnly = false, leaseSeconds = 15, maxAttempts = 8
 } = {}) {
   if (process.env.NODE_ENV === 'production' ||
       process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed' || fixtureOnly !== true) {
@@ -94,7 +94,10 @@ export function createRdfProjectionRecovery({
   if (!pool || typeof pool.query !== 'function' ||
       [verifyNativeEvidence, authorize, readRdf, applyRdfFenced].some(x => typeof x !== 'function') ||
       !Number.isInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 300 ||
-      !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) {
+      !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20 ||
+      (restrictedOperations !== null &&
+       ['claim','ack','finishFailure','blockExhausted']
+         .some(name=>typeof restrictedOperations[name]!=='function'))) {
     fail('PROJECTION_CONFIGURATION_INVALID', 'PG, verification, grants and fenced RDF writer required');
   }
 
@@ -155,7 +158,9 @@ export function createRdfProjectionRecovery({
     // A single PG UPDATE serializes concurrent claims across real replicas.
     // Never hold the PG lease transaction or connection during network I/O.
     const owner = crypto.randomUUID();
-    const r = await pool.query(
+    const r = restrictedOperations
+      ? await restrictedOperations.claim({accountId,did,owner,leaseSeconds,maxAttempts})
+      : await pool.query(
       'UPDATE ' + T + ' SET state=$6,lease_owner=$3::uuid,lease_epoch=lease_epoch+1,' +
       "lease_until=clock_timestamp()+($4::int * INTERVAL '1 second')," +
       'attempt_count=attempt_count+1,last_error_code=NULL,updated_at=clock_timestamp() ' +
@@ -172,6 +177,14 @@ export function createRdfProjectionRecovery({
     const fatal = TERMINAL.has(code) || claimed.attempt_count >= maxAttempts;
     const delay = fatal ? 0 : retryDelaySeconds(claimed.attempt_count);
     // Never clear or override a newer replica's lease.
+    if(restrictedOperations){
+      await restrictedOperations.finishFailure({
+        accountId,did,claimed,state:fatal?'blocked':'pending',
+        delay,code:/^[A-Z][A-Z0-9_]{2,79}$/.test(code||'')
+          ? code:'PROJECTION_RETRYABLE_ERROR'
+      });
+      return;
+    }
     await pool.query(
       'UPDATE ' + T + ' SET state=$5,lease_owner=NULL,lease_until=NULL,' +
       "next_attempt_at=clock_timestamp()+($6::float8 * INTERVAL '1 second')," +
@@ -195,21 +208,26 @@ export function createRdfProjectionRecovery({
     // claim() refuses attempt_count >= maxAttempts, so without this
     // transition they would never become operator-visible blocked work.
     // Conditional update avoids clobbering an in-flight concurrent claim.
-    await pool.query(
-      'UPDATE ' + T + " SET state='blocked',lease_owner=NULL,lease_until=NULL," +
-      "last_error_code='PROJECTION_RETRY_EXHAUSTED',updated_at=clock_timestamp() " +
-      "WHERE account_id=$1 AND did=$2 AND state='pending' " +
-      'AND attempt_count >= $3::int',
-      [accountId, did, maxAttempts]
-    );
-    // Expired last-attempt leases cannot be left permanently in a busy state.
-    await pool.query(
-      'UPDATE ' + T + " SET state='blocked',lease_owner=NULL,lease_until=NULL," +
-      "last_error_code='PROJECTION_RETRY_EXHAUSTED',updated_at=clock_timestamp() " +
-      "WHERE account_id=$1 AND did=$2 AND state='leased' " +
-      'AND lease_until<=clock_timestamp() AND attempt_count >= $3::int',
-      [accountId, did, maxAttempts]
-    );
+    if(restrictedOperations){
+      // One exact scoped SQL function handles pending or expired exhausted
+      // work; the worker LOGIN has no direct UPDATE on the projection table.
+      await restrictedOperations.blockExhausted({accountId,did,maxAttempts});
+    }else{
+      await pool.query(
+        'UPDATE ' + T + " SET state='blocked',lease_owner=NULL,lease_until=NULL," +
+        "last_error_code='PROJECTION_RETRY_EXHAUSTED',updated_at=clock_timestamp() " +
+        "WHERE account_id=$1 AND did=$2 AND state='pending' " +
+        'AND attempt_count >= $3::int',
+        [accountId, did, maxAttempts]
+      );
+      await pool.query(
+        'UPDATE ' + T + " SET state='blocked',lease_owner=NULL,lease_until=NULL," +
+        "last_error_code='PROJECTION_RETRY_EXHAUSTED',updated_at=clock_timestamp() " +
+        "WHERE account_id=$1 AND did=$2 AND state='leased' " +
+        'AND lease_until<=clock_timestamp() AND attempt_count >= $3::int',
+        [accountId, did, maxAttempts]
+      );
+    }
     const leased = await claim(accountId, did);
     if (!leased) {
       const current = await job(accountId, did);
@@ -244,7 +262,9 @@ export function createRdfProjectionRecovery({
         fail('PROJECTION_VERIFIED_HEAD_CHANGED', 'Signed repository changed during projection');
       }
       checkProjected(await readRdf({ accountId, did }), p, fence);
-      const ack = await pool.query(
+      const ack = restrictedOperations
+        ? await restrictedOperations.ack({accountId,did,claimed:leased,proof:p})
+        : await pool.query(
         'UPDATE ' + T + " SET state='applied',lease_owner=NULL,lease_until=NULL," +
         'applied_at=clock_timestamp(),last_error_code=NULL,updated_at=clock_timestamp() ' +
         'WHERE account_id=$1 AND did=$2 AND lease_owner=$3::uuid AND ' +

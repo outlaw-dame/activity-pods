@@ -48,9 +48,13 @@ as the actual provider's eventual separate processes:
    401/403 denials for protected query/update/alternate endpoints and
    Fuseki dataset administration.
 2. The separate **projector** can query and update only the protected
-   dataset, not ordinary Pod data or Jena administration.
+   dataset. Both ordinary Pod **queries and writes**, and administration
+   routes must be denied; merely preventing ordinary writes is inadequate
+   because user Pod data may be private.
 3. The separate **attestor** can query protected RDF, but receives 401/403
-   for protected updates, ordinary writes and administration.
+   for protected updates, ordinary Pod **reads and writes** and
+   administration. This read-only permission is restricted to *protected*
+   RDF; it is not general read access to other users' Pod datasets.
 4. Duplicate principals, shared secrets, an administrator used as an
    ordinary login, a projector/attestor supplied as the ordinary login,
    a wrong password, public/non-loopback origins and production invocation

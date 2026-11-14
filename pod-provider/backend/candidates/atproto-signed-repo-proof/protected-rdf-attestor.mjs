@@ -104,6 +104,11 @@ async function boundedRead(response){
       if(size>16384)deny('PROTECTED_RDF_HTTP_TOO_LARGE');
       chunks.push(Buffer.from(value));
     }
+  }catch(error){
+    // A malformed or oversized SPARQL response must not leave an unread
+    // streaming socket parked in the dedicated attestor connection pool.
+    try{await reader.cancel();}catch{/* preserve original failure */}
+    throw error;
   }finally{reader.releaseLock();}
   try{return JSON.parse(Buffer.concat(chunks,size).toString('utf8'));}
   catch{deny('PROTECTED_RDF_HTTP_INVALID');}

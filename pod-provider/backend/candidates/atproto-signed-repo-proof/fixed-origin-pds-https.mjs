@@ -178,12 +178,20 @@ export function createFixedOriginPdsHttpsRequester({
           path,method:'GET',agent:false,
           servername:url.hostname,rejectUnauthorized:true,
           minVersion:'TLSv1.2',maxHeaderSize:8192,
-          lookup:(host,_opts,callback)=>{
+          lookup:(host,opts,callback)=>{
             if(host!==url.hostname){
               callback(new Error('Unexpected host lookup'));
               return;
             }
-            callback(null,ip,family);
+            // Node 22+ can request lookup({all:true}) for its Happy
+            // Eyeballs connection logic. Supplying the old scalar callback
+            // form in that case produces ERR_INVALID_IP_ADDRESS before TLS.
+            // Either form still pins the exact independently approved IP.
+            if(opts?.all===true){
+              callback(null,[{address:ip,family}]);
+            }else{
+              callback(null,ip,family);
+            }
           },
           headers:{accept:'application/json, application/vnd.ipld.car',
             'user-agent':'ActivityPods-Hosted-PDS-Proof/1.0',

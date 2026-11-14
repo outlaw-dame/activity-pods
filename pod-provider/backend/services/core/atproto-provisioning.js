@@ -732,6 +732,17 @@ module.exports = {
     },
 
     async initializeRepoState(ctx, { canonicalAccountId, did, handle }) {
+      // Fail before any helper, provider RPC, RDF write or optional test flag.
+      // A future production release must replace this barrier only after
+      // the one-writer PG/Jena/SAI completion gate is fully accepted.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Verified ATProto PDS repository bootstrap is unavailable',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY',
+          { retryable: false }
+        );
+      }
       if (this._requiresVerifiedManagedRepo()) {
         const proof = await this._trustedManagedRepositoryProof(
           ctx, 'atproto-managed-repository.bootstrapAndVerify',
@@ -768,6 +779,15 @@ module.exports = {
     },
 
     async verifyProvisionedState(ctx, { canonicalAccountId, binding, didMethod }) {
+      // No production readiness may depend on a synthetic provider fixture.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError(
+          'Verified ATProto PDS repository readiness is unavailable',
+          503,
+          'ATPROTO_PDS_REPOSITORY_NOT_READY',
+          { retryable: false }
+        );
+      }
       // Reject missing and fixture-only repository evidence before treating
       // the binding as ready. Preserve the verification path for pre-existing
       // accounts with actual repository metadata; migrations are separate.

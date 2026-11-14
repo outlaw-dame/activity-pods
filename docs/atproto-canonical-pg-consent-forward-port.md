@@ -21,7 +21,9 @@ feature. No existing account migration, import, backfill, or cutover is enabled.
   conditional function, blocking the exact app grant at one expected epoch.
 - The scoped runtime PG adapter uses one bounded pool per process, checks
   actual PostgreSQL login capabilities at startup, and refuses administrative
-  privileges, arbitrary host DSNs, or non-disposable production execution.
+  privileges, arbitrary host DSNs, non-inherited membership in the importer
+  or schema-owner role (which could allow SET ROLE), or non-disposable
+  production execution.
 - Both SAI mutation enforcement and signed-repository projection ticket
   issuance require current PostgreSQL consent in canonical mode. No Redis or
   SPARQL fallback is permitted on a PG outage. Unrelated Solid permissions

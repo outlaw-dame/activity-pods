@@ -51,13 +51,25 @@ async function load(){
 }
 async function childProcess(config){
  const file=fileURLToPath(new URL('./dataset-admin-claim-child.mjs',import.meta.url));
- const env={...process.env,
+ // An admin subprocess must NOT inherit the test harness's superuser
+ // PostgreSQL DSN, account-signing keys, transport secrets or provider
+ // environment. Build a positive allowlist, never spread process.env.
+ const env={
+  NODE_ENV:'test',
+  ATPROTO_REPO_PROOF_DISPOSABLE:'confirmed',
+  ATPROTO_FUSEKI_ISOLATION_DISPOSABLE:'confirmed',
+  FUSEKI_ISOLATION_URL:'http://127.0.0.1:3041',
   DATASET_ADMIN_FUSEKI_USER:'admin',
   DATASET_ADMIN_FUSEKI_PASSWORD:'fixture-admin-only',
   DATASET_ADMIN_AGENT_DSN:restrictedDsn(config.password),
   DATASET_ADMIN_ISSUER_PUBLIC_PEM:Buffer.from(config.publicKey).toString('base64')
  };
- delete env.DATASET_ADMIN_SIGNER_PRIVATE_KEY;
+ const deniedEnvironment=[
+  'ATPROTO_REPO_PROOF_DSN','PGPASSWORD','PGUSER','PGHOST',
+  'SEMAPPS_JENA_PASSWORD','DATASET_ADMIN_SIGNER_PRIVATE_KEY'
+ ];
+ assert(deniedEnvironment.every(key=>!Object.hasOwn(env,key)),
+   'Privileged fixture credentials must never enter the administrator child');
  const child=spawn(process.execPath,[file],{env,stdio:['ignore','pipe','pipe']});
  let resolved=false,output='',failure='';
  const started=new Promise((resolve,reject)=>{

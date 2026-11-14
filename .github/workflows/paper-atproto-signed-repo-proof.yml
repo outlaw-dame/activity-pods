@@ -84,6 +84,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/hosted-signup-pds-attestation.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-signup-completion-evidence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-hosted-signup.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fixed-origin-pds-https.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-record-write-consent-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/signed-single-record.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/single-record-writer.mjs
@@ -184,6 +185,7 @@ jobs:
           PAPER_ACCOUNTS_DISPOSABLE=confirmed \
           PAPER_ACCOUNT_COMPLETION_DISPOSABLE=confirmed \
           ATPROTO_PDS_ATTESTATION_DISPOSABLE=confirmed \
+          ATPROTO_PDS_EGRESS_TEST_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-hosted-signup.test.mjs

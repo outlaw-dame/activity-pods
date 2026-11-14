@@ -1,12 +1,15 @@
 /**
- * NONACTIVATED real PostgreSQL18 new signup + HTTP-hosted signed PDS genesis
+ * NONACTIVATED real PostgreSQL18 new signup + pinned HTTPS signed PDS genesis
  * + protected Solid account/SAI fixture + atomic v4 completion acceptance.
  * This does not register production signup or create a live ATProto account.
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import http from 'node:http';
+import https from 'node:https';
+import {execFileSync} from 'node:child_process';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {test} from 'node:test';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
@@ -19,6 +22,7 @@ import {createReadOnlySyncXrpc} from './sync-xrpc-candidate.mjs';
 import {createNewSignupCrossAuthority} from './new-signup-cross-authority.mjs';
 import {createHostedSignupPdsAttestation} from './hosted-signup-pds-attestation.mjs';
 import {createPostSealSignupCompletionEvidence} from './postseal-signup-completion-evidence.mjs';
+import {createFixedOriginPdsHttpsRequester} from './fixed-origin-pds-https.mjs';
 
 const require=createRequire(import.meta.url);
 const {createCandidate}=require('../postgres-account-lifecycle.js');
@@ -29,6 +33,7 @@ if(process.env.NODE_ENV!=='test'||
    process.env.PAPER_ACCOUNTS_DISPOSABLE!=='confirmed'||
    process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed'||
    process.env.ATPROTO_PDS_ATTESTATION_DISPOSABLE!=='confirmed'||
+   process.env.ATPROTO_PDS_EGRESS_TEST_DISPOSABLE!=='confirmed'||
    process.env.PAPER_ACCOUNT_COMPLETION_DISPOSABLE!=='confirmed'||
    !/^postgres(?:ql)?:\/\/[^@]+@127\.0\.0\.1:5548\/atproto_signed_repo_proof_test$/u.test(DSN)){
   throw Error('Hosted new-account bridge requires an exact disposable PG18 target');
@@ -43,7 +48,7 @@ const opId=uuid(),accountId=uuid();
 const webId=providerId+'/users/probed-new-user';
 const did='did:plc:'+'u'.repeat(24);
 const handle='probed-new-user.paper.example.org';
-const pds='https://pds.paper.example.org';
+let pds;
 const grant=webId+'/data/grants/pds';
 const secret=crypto.randomBytes(32);
 const hmac=(label,v)=>crypto.createHmac('sha256',secret)
@@ -64,7 +69,7 @@ async function close(server){
 }
 
 test('one sealed new signup gets independently signed hosted PDS proof before PG18 atomic ready',async t=>{
-  let server=null,cleanupError=null;
+  let server=null,cleanupError=null,tlsDir=null;
   const oldEnv=process.env.NODE_ENV;
   try{
     const pre=await pool.query(
@@ -82,6 +87,47 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     ]){
       await pool.query(await fs.readFile(fileURLToPath(new URL(sql,import.meta.url)),'utf8'));
     }
+    // A disposable CA trusted ONLY by this requester's explicit TLS option.
+    // Normal TLS certificate validation and hostname checking remain on.
+    tlsDir=await fs.mkdtemp(join(tmpdir(),'paper-signup-pds-tls-'));
+    const keyPath=join(tlsDir,'key.pem');
+    const certPath=join(tlsDir,'cert.pem');
+    execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes',
+      '-days','1','-keyout',keyPath,'-out',certPath,
+      '-subj','/CN=pds.paper.example.org',
+      '-addext','subjectAltName=DNS:pds.paper.example.org'],
+      {stdio:'ignore',timeout:12000});
+    const keyPem=await fs.readFile(keyPath,'utf8');
+    const certPem=await fs.readFile(certPath,'utf8');
+    let corruptCar=false,wrongLatest=false,redirectOnce=false,oversized=false;
+    let httpXrpc=null;
+    let requests=0;
+    server=https.createServer({key:keyPem,cert:certPem},(req,res)=>{
+      requests++;
+      if(redirectOnce){
+        res.writeHead(302,{location:'http://169.254.169.254/latest'});
+        res.end();return;
+      }
+      if(oversized){
+        res.writeHead(200,{'content-type':'application/vnd.ipld.car',
+          'content-length':'300000'});
+        res.end();return;
+      }
+      if(corruptCar&&req.url.includes('.getRepo?')){
+        res.writeHead(200,{'content-type':'application/vnd.ipld.car'});
+        res.end(Buffer.from('not a signed CAR'));return;
+      }
+      if(wrongLatest&&req.url.includes('.getLatestCommit?')){
+        res.writeHead(200,{'content-type':'application/json'});
+        res.end(JSON.stringify({cid:'bafyre'+'b'.repeat(53),
+          rev:'2222222222222'}));return;
+      }
+      if(!httpXrpc){res.writeHead(503);res.end();return;}
+      void httpXrpc.handle(req,res);
+    });
+    await listen(server);
+    pds='https://pds.paper.example.org:'+server.address().port;
+
     const model=createCandidate({pool,fixtureOnly:true});
     assert.equal((await model.reserveSignup(scope)).state,'reserved');
     assert.equal((await model.markSignupMayHaveSideEffects(scope)).state,
@@ -197,38 +243,22 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       webId,activityPubActorId:webId,did,handle,pdsUrl:pds,
       atprotoManaged:true,atprotoSource:'local',status:'active'
     };
-    const httpXrpc=createReadOnlySyncXrpc({
+    httpXrpc=createReadOnlySyncXrpc({
       resolveHostedAccount:async({did:requested})=>
         requested===did?{...hosted}:null,
       repositoryAuthority:repoAuthority,projectionAuthority:projection,
       signedRepoStore:store,
       resolvePublicKey:async()=>pem,pdsOrigin:pds,fixtureOnly:true
     });
-    server=http.createServer((req,res)=>httpXrpc.handle(req,res));
-    await listen(server);
-    const base='http://127.0.0.1:'+server.address().port;
-    let requests=0;
-    let corruptCar=false;
-    let wrongLatest=false;
-    const requestPds=async({expectedOrigin,method,path,redirect})=>{
-      assert.equal(expectedOrigin,pds);
-      assert.equal(method,'GET');
-      assert.equal(redirect,'manual');
-      assert(path.startsWith('/xrpc/com.atproto.sync.'));
-      assert(!path.includes('..'));
-      requests++;
-      if(corruptCar&&path.includes('.getRepo?')){
-        return new Response(Buffer.from('not a signed CAR'),{
-          status:200,headers:{'content-type':'application/vnd.ipld.car'}
-        });
-      }
-      if(wrongLatest&&path.includes('.getLatestCommit?')){
-        return new Response(JSON.stringify({cid:'bafyre'+'b'.repeat(53),rev:signed.rev}),{
-          status:200,headers:{'content-type':'application/json'}
-        });
-      }
-      return fetch(base+path,{redirect:'manual',signal:AbortSignal.timeout(5000)});
+    const egressConfig={
+      origin:pds,approvedAddresses:['127.0.0.1'],
+      resolveAddresses:async hostname=>{
+        assert.equal(hostname,'pds.paper.example.org');
+        return [{address:'127.0.0.1',family:4}];
+      },
+      tlsCaForTest:certPem,fixtureOnly:true
     };
+    const {requestPds}=createFixedOriginPdsHttpsRequester(egressConfig);
     const hostedProof=createHostedSignupPdsAttestation({
       repositoryAuthority:repoAuthority,projectionAuthority:projection,
       resolvePublicKey:async()=>pem,requestPds,fixtureOnly:true
@@ -251,6 +281,63 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       corruptCar=true;
       await fail(hostedProof.verify(x),'HOSTED_PDS_PROOF_SIGNED_CAR_INVALID');
       corruptCar=false;
+    });
+    await t.test('pinned TLS rejects untrusted certificates, mismatched hostnames and DNS rebinding',async()=>{
+      const url='/xrpc/com.atproto.sync.getLatestCommit?did='+encodeURIComponent(did);
+      const direct={expectedOrigin:pds,method:'GET',path:url,redirect:'manual'};
+      const expectCode=async(adapter,code)=>
+        assert.rejects(adapter.requestPds(direct),e=>e?.code===code);
+      const untrusted=createFixedOriginPdsHttpsRequester({
+        ...egressConfig,tlsCaForTest:undefined
+      });
+      await expectCode(untrusted,'PDS_EGRESS_CONNECTION_UNAVAILABLE');
+      const wrongHostname=createFixedOriginPdsHttpsRequester({
+        ...egressConfig,origin:'https://untrusted.paper.example.org:'+
+          server.address().port,
+        resolveAddresses:async()=>[{address:'127.0.0.1',family:4}]
+      });
+      await assert.rejects(
+        wrongHostname.requestPds({...direct,
+          expectedOrigin:'https://untrusted.paper.example.org:'+
+            server.address().port}),e=>e?.code==='PDS_EGRESS_CONNECTION_UNAVAILABLE');
+      const rebinding=createFixedOriginPdsHttpsRequester({
+        ...egressConfig,
+        resolveAddresses:async()=>[
+          {address:'127.0.0.1',family:4},
+          {address:'169.254.169.254',family:4}
+        ]
+      });
+      await expectCode(rebinding,'PDS_EGRESS_ADDRESS_FORBIDDEN');
+      await assert.rejects(requestPds({...direct,
+        path:url+'&did='+encodeURIComponent(did)}),
+        e=>e?.code==='PDS_EGRESS_PATH_INVALID');
+      await assert.rejects(requestPds({...direct,
+        expectedOrigin:'https://attacker.example.org'}),
+        e=>e?.code==='PDS_EGRESS_REQUEST_INVALID');
+      // Disposable fixture authority never leaks into production, even if
+      // a requester was constructed before the environment changed.
+      const old=process.env.NODE_ENV;
+      try{
+        process.env.NODE_ENV='production';
+        await expectCode({requestPds:()=>requestPds(direct)},
+          'PDS_EGRESS_DISPOSABLE_NOT_RELEASED');
+        assert.throws(()=>createFixedOriginPdsHttpsRequester(egressConfig),
+          e=>e?.code==='PDS_EGRESS_DISPOSABLE_NOT_RELEASED');
+        assert.throws(()=>createFixedOriginPdsHttpsRequester({
+          origin:'https://pds.paper.example.org',
+          approvedAddresses:['127.0.0.1']
+        }),e=>e?.code==='PDS_EGRESS_ADDRESS_FORBIDDEN');
+      }finally{process.env.NODE_ENV=old;}
+    });
+    await t.test('redirect and oversized response fail without contacting another destination',async()=>{
+      const before=requests;
+      redirectOnce=true;
+      await fail(hostedProof.verify(x),'HOSTED_PDS_PROOF_HTTP_UNAVAILABLE');
+      redirectOnce=false;
+      assert.equal(requests,before+1,'only the approved TLS origin was contacted');
+      oversized=true;
+      await fail(hostedProof.verify(x),'PDS_EGRESS_BODY_TOO_LARGE');
+      oversized=false;
     });
     await t.test('moved or inactive PDS cannot pass hosted proof',async()=>{
       hosted={...hosted,status:'suspended'};
@@ -301,7 +388,8 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       }finally{process.env.NODE_ENV=old;}
     });
     console.log('HOSTED_NEW_SIGNUP_PG18_PROOF '+JSON.stringify({
-      realSignedGenesis:true,liveHttpXrpc:true,
+      realSignedGenesis:true,liveHttpsXrpc:true,tlsHostnameVerified:true,
+      dnsPinned:true,noRedirect:true,
       currentSolidAndPgConsent:true,corruptCarRejected:true,
       hostedPdsMoveRejected:true,atomicCompletionReady:true,
       accountGeneration:ready.generation,
@@ -310,6 +398,7 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
   }finally{
     process.env.NODE_ENV=oldEnv;
     await close(server);
+    if(tlsDir)await fs.rm(tlsDir,{recursive:true,force:true});
     for(const schema of ['paper_account_candidate','paper_atproto_repo_proof',
       'paper_atproto_authority']){
       try{await pool.query('DROP SCHEMA IF EXISTS '+schema+' CASCADE');}

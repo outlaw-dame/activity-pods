@@ -1,0 +1,86 @@
+name: ATProto protected Fuseki write-isolation candidate — disposable
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/paper-atproto-fuseki-isolation-proof.yml'
+      - 'pod-provider/docker-compose-fuseki-isolation.yml'
+      - 'pod-provider/scripts/fixtures/fuseki-isolation-shiro.ini'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-credential-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: pod-provider
+    steps:
+      - name: Checkout without retained credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check isolated verifier syntax
+        run: |
+          set -euo pipefail
+          node --check backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs
+
+      - name: Prepare fresh temporary Fuseki security configuration
+        run: |
+          set -euo pipefail
+          sudo rm -rf data/fuseki_isolation
+          mkdir -p data/fuseki_isolation
+          cp scripts/fixtures/fuseki-isolation-shiro.ini data/fuseki_isolation/shiro.ini
+          chmod 0644 data/fuseki_isolation/shiro.ini
+          docker compose -p paper-fuseki-isolation -f docker-compose-fuseki-isolation.yml up -d
+          # A default entrypoint may silently replace the role/URL policy.
+          # Fail before any admission proof if the mounted file was altered.
+          cmp scripts/fixtures/fuseki-isolation-shiro.ini data/fuseki_isolation/shiro.ini
+
+      - name: Prove protected/ordinary SQL-independent TDB2 admission boundaries
+        env:
+          NODE_ENV: test
+          ATPROTO_FUSEKI_ISOLATION_DISPOSABLE: confirmed
+          FUSEKI_ISOLATION_URL: http://127.0.0.1:3041
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs prepare
+
+      - name: Restart persistent Fuseki for independent readback
+        run: |
+          set -euo pipefail
+          docker compose -p paper-fuseki-isolation -f docker-compose-fuseki-isolation.yml restart fuseki_isolation
+
+      - name: Prove no cross-credential mutation after restart
+        env:
+          NODE_ENV: test
+          ATPROTO_FUSEKI_ISOLATION_DISPOSABLE: confirmed
+          FUSEKI_ISOLATION_URL: http://127.0.0.1:3041
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs verify
+
+      - name: Inspect failed disposable Fuseki
+        if: failure()
+        run: |
+          docker compose -p paper-fuseki-isolation -f docker-compose-fuseki-isolation.yml logs --tail=120 fuseki_isolation || true
+
+      - name: Remove isolated container and all disposable storage
+        if: always()
+        run: |
+          docker compose -p paper-fuseki-isolation -f docker-compose-fuseki-isolation.yml down -v --remove-orphans || true
+          sudo rm -rf data/fuseki_isolation

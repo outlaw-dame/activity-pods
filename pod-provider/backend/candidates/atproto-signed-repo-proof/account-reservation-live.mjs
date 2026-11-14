@@ -291,8 +291,23 @@ async function verify() {
     const rows=await rootPool.query(
       'SELECT state,count(*)::int AS count FROM paper_account_reservation_proof.reservations '+
       'GROUP BY state ORDER BY state');
+    // The independent dataset administrator's ticket now originates from
+    // this same canonical pre-account PG ledger, not an unbound test signer.
+    const adminMeta=JSON.parse(await fs.readFile(path.join(
+      process.env.RUNNER_TEMP,'paper-dataset-admin-claim-fixture.json'),'utf8'));
+    assert.equal(adminMeta.ticket.claim.reservationId,
+      adminMeta.accountReservationId);
+    const binding=await rootPool.query(
+      'SELECT state,username,expected_webid FROM '+
+      'paper_account_reservation_proof.reservations WHERE reservation_id=$1',
+      [adminMeta.accountReservationId]);
+    assert.equal(binding.rowCount,1);
+    assert.equal(binding.rows[0].state,'side_effects_started',
+      'Dataset creation is fenced before any WebID, AP actor or DID can exist');
+    assert.equal(binding.rows[0].username,adminMeta.dataset);
+    assert.equal(binding.rows[0].expected_webid,ROOT+adminMeta.dataset);
     assert.deepEqual(rows.rows.map(x=>[x.state,x.count]),
-      [['completed',2],['reserved',1]],
+      [['completed',2],['reserved',1],['side_effects_started',1]],
       'Post-crash state must remain monotonic and exact');
     console.log('ACCOUNT_PG_RESERVATION '+JSON.stringify({phase:'verify',
       restartedProcess:true,immutableCompletedIdentity:true,

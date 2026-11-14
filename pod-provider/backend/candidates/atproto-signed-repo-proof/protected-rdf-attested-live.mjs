@@ -71,7 +71,9 @@ async function fuseki(kind,body,principal='projector'){
     },body,signal:controller.signal,redirect:'manual'
   });
   const responseBody=await r.text();
-  assert.equal(r.status,200,'Authorized protected update must return HTTP 200');
+  assert.ok(kind==='update'?r.status===200||r.status===204:r.status===200,
+    'Authorized protected '+kind+' expected 200/204; HTTP '+r.status+
+    ': '+responseBody.slice(0,180));
   return kind==='query'?JSON.parse(responseBody).results.bindings:null;
  }finally{clearTimeout(timeout);}
 }

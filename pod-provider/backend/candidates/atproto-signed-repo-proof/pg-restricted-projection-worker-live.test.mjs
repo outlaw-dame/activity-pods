@@ -225,8 +225,9 @@ test('PG18 separately credentialed projection worker refuses stale ACK and forbi
     assert.equal(row.lease_owner,null);
     assert.equal(row.lease_until,null);
     assert(row.applied_at);
-    await assert.rejects(ops.claim({...opts,owner:crypto.randomUUID()})
-      .then(r=>{assert.equal(r.rowCount,0);}),()=>false).catch(()=>{});
+    assert.equal((await ops.claim({
+      ...opts,owner:crypto.randomUUID()
+    })).rowCount,0,'an applied projection cannot be claimed again');
     const revoked=await revokerPool.query(
       'SELECT * FROM paper_atproto_authority.block_consent('+
       '$1,$2,$3,1::bigint)',[owner,app,grant]

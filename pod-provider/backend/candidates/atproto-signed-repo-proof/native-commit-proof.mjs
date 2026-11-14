@@ -238,6 +238,46 @@ export function createNativeCommitProof({
       }
       checkRecordPath(m.path);
       parseCid(m.previous_commit_cid);parseCid(m.previous_root_cid);
+      // An authentic signed predecessor is NOT necessarily the direct
+      // predecessor: v3 commits intentionally have prev:null. Without
+      // this indexed generation check a forged journal could skip over
+      // prior commits that happen to leave an identical MST root.
+      if(Number(m.generation)===2){
+        // Genesis has no record_mutations row. The earliest durable
+        // outbox event for this DID is the genesis commit; use an all-status
+        // (did,id) index so this remains a constant-size lookup after
+        // all previous events have been acknowledged.
+        const first=await pool.query(
+          'SELECT id,commit_cid,rev FROM '+TABLE+
+          '.native_event_outbox WHERE did=$1 ORDER BY id ASC LIMIT 1',[did]
+        );
+        if(first.rowCount!==1 ||
+           first.rows[0].commit_cid!==m.previous_commit_cid ||
+           first.rows[0].rev!==m.previous_rev ||
+           Number(first.rows[0].id)>=seq) {
+          fail('NATIVE_COMMIT_AUDIT_PREDECESSOR_MISMATCH');
+        }
+        const parentMutation=await pool.query(
+          'SELECT 1 FROM '+TABLE+'.record_mutations '+
+          'WHERE did=$1 AND commit_cid=$2',[did,m.previous_commit_cid]
+        );
+        if(parentMutation.rowCount!==0) {
+          fail('NATIVE_COMMIT_AUDIT_PREDECESSOR_MISMATCH');
+        }
+      }else{
+        // record_mutations has UNIQUE(did,generation), allowing an exact
+        // predecessor lookup without traversing or caching history.
+        const predecessor=await pool.query(
+          'SELECT commit_cid,rev FROM '+TABLE+
+          '.record_mutations WHERE did=$1 AND generation=$2',
+          [did,Number(m.generation)-1]
+        );
+        if(predecessor.rowCount!==1 ||
+           predecessor.rows[0].commit_cid!==m.previous_commit_cid ||
+           predecessor.rows[0].rev!==m.previous_rev) {
+          fail('NATIVE_COMMIT_AUDIT_PREDECESSOR_MISMATCH');
+        }
+      }
       await signedCommit(m.previous_commit_cid,m.previous_rev,m.previous_root_cid);
       const prevTree=reference.MST.load(storage,parseCid(m.previous_root_cid));
       let oldValue,newValue;

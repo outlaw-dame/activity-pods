@@ -277,7 +277,8 @@ candidate replaces the ActivityPods WebID/ActivityPub identity owner.
 ledger and per-app UTC-day quota table behind narrowly granted
 `SECURITY DEFINER` operations. Provider + approved app + idempotency
 hash determine the request scope; username and expected WebID have
-independent database uniqueness constraints. PostgreSQL advisory
+independent database uniqueness constraints; completed ActivityPub actors
+and ATProto DIDs are also globally unique across reservations. PostgreSQL advisory
 transaction locks serialize only **same-key** contenders; unique indexes
 resolve cross-key/cross-app username races. Quota reservation and new
 username insertion are in one subtransaction, so rejected uniqueness
@@ -312,8 +313,11 @@ daily quotas, cross-app username conflicts, mismatched fingerprints,
 forged fencing tokens, expiry with no lease takeover, and mutation
 before/after a restarted process. It tests a real Ed25519 dataset claim
 **only after** a separate issuer credential positively checks the
-matching reservation; SQL injection by direct table access and four
-privilege-drift configurations must fail closed.
+matching reservation; SQL injection by direct table access and seven
+privilege-drift configurations (including TRUNCATE, MAINTAIN and
+pg_read_all_data grants) must fail closed. After simulated crash/restart,
+a second account must not complete with another account's DID or
+ActivityPub actor.
 
 **Not yet activated:** This proves durable *reservation semantics* and
 issuer eligibility, **not** a complete trusted signer process, the

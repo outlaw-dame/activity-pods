@@ -219,6 +219,7 @@ async function main(){
    const nextHead='bafyre'+'b'.repeat(53);
    const recordCid='bafyre'+'c'.repeat(53);
    let onProjected=null;
+   let nonceIssuerAvailable=true;
    const writer={
      verify:async()=>({
        commitCid:head,rootCid:'bafyre'+'d'.repeat(53),
@@ -244,10 +245,12 @@ async function main(){
        atprotoManaged:true,atprotoSource:'local',status:'active'
      }),
      authorizeOwner:candidate.authorize,
-     mintDpopNonce:async({audience})=>
-       oauthDpop.actions.mintNonce.handler.call(dpopState,{
+     mintDpopNonce:async({audience})=>{
+       if(!nonceIssuerAvailable)throw Error('disposable Redis issuer unavailable');
+       return oauthDpop.actions.mintNonce.handler.call(dpopState,{
          params:{audience}
-       }),
+       });
+     },
      resolveSigner:async()=>({publicKeyPem:'disposable-public-key',
        signer:async()=>Buffer.alloc(64)}),
      createFencedWriter:async()=>writer,
@@ -303,6 +306,13 @@ async function main(){
      assert.equal(replay.challenge,'DPoP error="use_dpop_nonce"');
      assert(/^[A-Za-z0-9_-]{16,128}$/.test(replay.nonce));
      assert.equal(records,1);
+     nonceIssuerAvailable=false;
+     const failedIssuer=await post(await sign({token,proofNonce:undefined}));
+     assert.equal(failedIssuer.status,503,
+       'issuer storage failure is not an un-verifiable nonce challenge');
+     assert.equal(failedIssuer.nonce,null);
+     assert.equal(records,1);
+     nonceIssuerAvailable=true;
      onProjected=async()=>{
        pg={...pg,state:'blocked',revision:'2'};
      };
@@ -358,7 +368,8 @@ async function main(){
      replayAtomicNx:true,granularRepoScopes:true,
      collectionActionChecked:true,clientBound:true,
      canonicalConsentRechecked:true,postCommitDpopNotReplayed:true,
-     productionFuseClosed:true,
+     productionFuseClosed:true,resourceNonceChallenge:true,
+     nonceIssuerUnavailableFailsClosed:true,
      version,proofVerifications,introspections,grantReads
    }));
  }finally{

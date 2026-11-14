@@ -44,7 +44,8 @@ function webId(value){
   }catch{return false;}
 }
 function active(account,did,pdsOrigin){
-  if(!account||account.did!==did||!webId(account.webId)||
+  if(!account)deny('RepoNotFound',404);
+  if(account.did!==did||!webId(account.webId)||
      account.activityPubActorId!==account.webId||
      account.pdsUrl!==pdsOrigin||account.atprotoManaged!==true||
      account.atprotoSource!=='local'||typeof account.handle!=='string') {
@@ -255,6 +256,7 @@ export function createAuthenticatedRecordWriteXrpc({
     }catch(e){
       const code=typeof e?.code==='string'&&
         ['InvalidRequest','InvalidSwap','RecordAlreadyExists','RecordNotFound',
+          'RepoNotFound',
           'AuthRequired','MethodNotImplemented'].includes(e.code)?e.code:
         'InternalError';
       const status=code==='InternalError'?503:

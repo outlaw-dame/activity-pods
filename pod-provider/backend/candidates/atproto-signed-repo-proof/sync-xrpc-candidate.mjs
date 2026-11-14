@@ -1,7 +1,7 @@
 /**
  * Non-activated public sync XRPC read prototype for a verified signed v3
- * EMPTY repository. Only the three explicitly implemented methods are
- * supported; it is not loaded by any ActivityPods HTTP gateway.
+ * empty or bounded multi-record repository. The multi-record path
+ * requires a trusted injected exporter; no ActivityPods HTTP gateway loads it.
  *
  * The account/DID lookup is provider-owned and indexed. A public caller
  * supplies only the DID query parameter, NEVER a WebID, private signer,
@@ -90,7 +90,8 @@ function disabled() { failure('PDS_CANDIDATE_NOT_RELEASED'); }
 
 export function createReadOnlySyncXrpc({
   resolveHostedAccount, repositoryAuthority, projectionAuthority,
-  signedRepoStore, resolvePublicKey, pdsOrigin, fixtureOnly = false
+  signedRepoStore, repositoryExporter = null, resolvePublicKey,
+  pdsOrigin, fixtureOnly = false
 } = {}) {
   if (fixtureOnly !== true || process.env.NODE_ENV === 'production' ||
       process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
@@ -101,6 +102,8 @@ export function createReadOnlySyncXrpc({
       typeof repositoryAuthority?.verifyReady !== 'function' ||
       typeof projectionAuthority?.readiness !== 'function' ||
       typeof signedRepoStore?.verify !== 'function' ||
+      (repositoryExporter !== null &&
+        typeof repositoryExporter?.exportSnapshot !== 'function') ||
       typeof resolvePublicKey !== 'function') {
     failure('PDS_CANDIDATE_CONFIGURATION_INVALID');
   }
@@ -136,9 +139,60 @@ export function createReadOnlySyncXrpc({
     if (method === 'com.atproto.sync.getRepoStatus') {
       return { kind: 'json', value: { did, active: true, rev: repo.rev } };
     }
-    const car = Buffer.from(proof.carBytes || []);
-    // The current proof contains exactly one signed commit and an empty MST.
-    // Real record repositories require a separately reviewed streaming path.
+    let car;
+    if (repositoryExporter !== null) {
+      // Multi-record exports must prove the *same* signed PG head as the
+      // earlier hosting and RDF readiness checks. The exporter walks every
+      // reachable MST block and repeats its PG/Jena head check after encoding.
+      // It is not a streaming production PDS: MAX_CAR remains 128 KiB.
+      if (!Number.isSafeInteger(proof.generation) || proof.generation < 1) {
+        failure('PDS_CANDIDATE_SIGNED_HEAD_NOT_READY');
+      }
+      const exported = await repositoryExporter.exportSnapshot({
+        accountId: before.webId, did, publicKeyPem, maxBytes: MAX_CAR
+      });
+      if (exported?.verified !== true ||
+          exported.accountId !== before.webId || exported.did !== did ||
+          exported.commitCid !== proof.commitCid ||
+          exported.rootCid !== proof.rootCid || exported.rev !== proof.rev ||
+          exported.generation !== proof.generation ||
+          !(exported.carBytes instanceof Uint8Array)) {
+        failure('PDS_CANDIDATE_SIGNED_HEAD_NOT_READY');
+      }
+      car = Buffer.from(exported.carBytes);
+      // A consent or hosting state change while the full MST is walked
+      // must not yield an authorized 200 response with stale account data.
+      const postExport = validateAccount(
+        await resolveHostedAccount({ did }), did, ownerPds
+      );
+      ensureActive(postExport);
+      if (identitySnapshot(postExport) !== identitySnapshot(before)) {
+        failure('PDS_CANDIDATE_HOSTING_CHANGED');
+      }
+      // The exporter checks the same PostgreSQL head after encoding and
+      // re-authorizes SAI, but the intervening XRPC checks are separate.
+      // Reconfirm the independently resolved hosting/PG/RDF authority at
+      // the final HTTP-edge checkpoint, with exact generation equality.
+      const finalRepo = await repositoryAuthority.verifyReady(input);
+      const finalProjection = await projectionAuthority.readiness({
+        accountId: before.webId, did
+      });
+      const finalProof = await signedRepoStore.verify({
+        accountId: before.webId, did, publicKeyPem
+      });
+      checkSignedRepo(finalRepo, finalProof, finalProjection, before, did);
+      if (finalProof.commitCid !== proof.commitCid ||
+          finalProof.rootCid !== proof.rootCid ||
+          finalProof.rev !== proof.rev ||
+          finalProof.generation !== proof.generation ||
+          finalProjection.fence !== projection.fence ||
+          finalRepo.commitCid !== repo.commitCid) {
+        failure('PDS_CANDIDATE_SIGNED_HEAD_NOT_READY');
+      }
+    } else {
+      // Preserve the independently tested genesis-only legacy proof path.
+      car = Buffer.from(proof.carBytes || []);
+    }
     if (!car.length || car.length > MAX_CAR) {
       failure('PDS_CANDIDATE_CAR_TOO_LARGE');
     }

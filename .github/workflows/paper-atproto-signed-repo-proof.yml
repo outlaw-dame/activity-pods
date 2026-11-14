@@ -74,6 +74,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/new-signup-cross-authority.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-xrpc-candidate.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-xrpc-candidate.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/sync-multirecord-xrpc.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/signed-single-record.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/single-record-writer.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/single-record-writer.test.mjs
@@ -135,6 +136,9 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.test.mjs
+          ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
+            node --test pod-provider/backend/candidates/atproto-signed-repo-proof/sync-multirecord-xrpc.test.mjs
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/native-commit-proof.test.mjs

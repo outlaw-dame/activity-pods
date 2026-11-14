@@ -3,6 +3,9 @@
 services:
   fuseki_isolation:
     image: semapps/jena-fuseki-webacl
+    # The inherited image entrypoint rewrites shiro.ini with admin-only credentials.
+    # Bypass that installer only in this isolated, disposable proof.
+    entrypoint: ['/jena-fuseki/fuseki-server']
     ports:
       - '127.0.0.1:3041:3030'
     volumes:

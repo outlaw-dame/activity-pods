@@ -261,6 +261,109 @@ test('native signed-event outbox claims are fenced, ordered and at least once',a
         );
       }
     });
+    await t.test('historical pending poison blocks a newer valid signed head and further writes',async()=>{
+      const frank=await newAccount('frank');
+      // Repository projection can legitimately finish while genesis
+      // distribution remains pending. A later record commit must not mask
+      // a poisoned earlier native-event row for this same DID.
+      const projected=await pool.query(
+        "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
+        "state='applied',lease_epoch=lease_epoch+1,applied_at=clock_timestamp() "+
+        "WHERE account_id=$1 AND did=$2 AND head_cid=$3 AND state='pending' "+
+        "RETURNING generation", [frank.accountId,frank.did,frank.first.commitCid]
+      );
+      assert.equal(projected.rowCount,1);
+      const latest=await records.write({
+        accountId:frank.accountId,did:frank.did,
+        expectedCommitCid:frank.first.commitCid,expectedRev:frank.first.rev,
+        action:'create',path:'app.bsky.feed.post/3jzm3xwpf342a',
+        record:{$type:'app.bsky.feed.post',text:'Later revision',
+          createdAt:'2026-11-13T00:00:00.000Z'},...frank.details
+      });
+      assert.equal(latest.generation,2);
+      const latestProjected=await pool.query(
+        "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
+        "state='applied',lease_epoch=lease_epoch+1,applied_at=clock_timestamp() "+
+        "WHERE account_id=$1 AND did=$2 AND head_cid=$3 AND state='pending' "+
+        "RETURNING generation", [frank.accountId,frank.did,latest.commitCid]
+      );
+      assert.equal(latestProjected.rowCount,1);
+      errorModes.set(frank.did,{failures:2});
+      const attempt=await dispatcher().deliverOnce();
+      assert.equal(attempt.retryScheduled,true);
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.native_event_outbox SET "+
+        "next_attempt_at=clock_timestamp()-interval '1 second' "+
+        "WHERE did=$1 AND commit_cid=$2",
+        [frank.did,frank.first.commitCid]
+      );
+      const poison=await dispatcher().deliverOnce();
+      assert.equal(poison.blocked,true);
+      const newer=await dispatcher().inspect({
+        did:frank.did,commitCid:latest.commitCid
+      });
+      assert.equal(newer.blocked,false);
+      assert.equal(newer.attempts,0);
+      assert.equal(newer.status,'pending');
+      await rejectCode(records.verify({
+        accountId:frank.accountId,did:frank.did,
+        publicKeyPem:frank.details.publicKeyPem
+      }),'SINGLE_RECORD_OUTBOX_BLOCKED');
+      await rejectCode(records.write({
+        accountId:frank.accountId,did:frank.did,
+        expectedCommitCid:latest.commitCid,expectedRev:latest.rev,
+        action:'update',path:'app.bsky.feed.post/3jzm3xwpf342a',
+        record:{$type:'app.bsky.feed.post',text:'Should stay blocked',
+          createdAt:'2026-11-13T00:00:00.000Z'},...frank.details
+      }),'SINGLE_RECORD_OUTBOX_BLOCKED');
+      assert.equal((await dispatcher().deliverOnce()).claimed,false,
+        'younger commit is not deliverable before poisoned predecessor');
+      assert.equal((await pool.query(
+        'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.record_mutations '+
+        'WHERE did=$1',[frank.did]
+      )).rows[0].n,1);
+    });
+
+    await t.test('repeated worker crashes exhaust leases atomically without an extra publish',async()=>{
+      const grace=await newAccount('grace');
+      const crash=dispatcher();
+      await rejectCode(crash.deliverOnce({testCrashAfterPublish:true}),
+        'NATIVE_OUTBOX_TEST_CRASH');
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.native_event_outbox SET "+
+        "lease_until=clock_timestamp()-interval '1 second' "+
+        'WHERE did=$1 AND commit_cid=$2',[grace.did,grace.first.commitCid]
+      );
+      await rejectCode(crash.deliverOnce({testCrashAfterPublish:true}),
+        'NATIVE_OUTBOX_TEST_CRASH');
+      assert.equal((await crash.inspect({
+        did:grace.did,commitCid:grace.first.commitCid
+      })).attempts,2);
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.native_event_outbox SET "+
+        "lease_until=clock_timestamp()-interval '1 second' "+
+        'WHERE did=$1 AND commit_cid=$2',[grace.did,grace.first.commitCid]
+      );
+      const results=await Promise.all(workers.map(w=>w.deliverOnce()));
+      assert.equal(results.filter(x=>x.exhausted===true).length,1,
+        'exactly one worker terminally reclaims the expired max-attempt lease');
+      assert.equal(results.filter(x=>x.delivered===true).length,0);
+      const state=await crash.inspect({
+        did:grace.did,commitCid:grace.first.commitCid
+      });
+      assert.equal(state.status,'pending');
+      assert.equal(state.blocked,true);
+      assert.equal(state.attempts,2,'a third delivery attempt was never claimed');
+      const sent=published.filter(x=>x.subject===grace.did);
+      assert.equal(sent.length,2);
+      assert.equal(sent[0].idempotencyKey,sent[1].idempotencyKey);
+      await rejectCode(genesis.verify({
+        accountId:grace.accountId,did:grace.did,
+        publicKeyPem:grace.details.publicKeyPem
+      }),'ATPROTO_REPO_OUTBOX_BLOCKED');
+      assert.equal((await crash.deliverOnce()).claimed,false);
+    });
+
     await t.test('production cannot activate a constructed dispatcher',async()=>{
       const live=dispatcher();
       process.env.NODE_ENV='production';

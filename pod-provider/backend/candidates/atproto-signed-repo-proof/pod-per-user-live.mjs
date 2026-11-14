@@ -163,9 +163,13 @@ const adapter = createPodActivityPodsProjection({
   call, operationTickets: authority, expectedIssuer: origin + '/',
   expectedRepoShapeTree: shape, fixtureOnly: true
 });
+const projectScope = Object.freeze({
+  generation: 1, previousRootCid: null, previousRev: null
+});
 const ticket = (operation, epoch = '1', head = {}) => authority.issue({
   accountId, did, appUri, grantUri, epoch, operation,
-  ...(operation === 'project' ? { rootCid, rev, projectionFence: '1' } : {}), ...head
+  ...(operation === 'project' ?
+    { rootCid, rev, projectionFence: '1', ...projectScope } : {}), ...head
 });
 const base = { accountId, did, appUri, grantUri, epoch: '1' };
 const oidcToken = 'synthetic-verified-local-jwk-fixture';
@@ -266,7 +270,7 @@ async function prepare() {
   // Replay an identical verified bootstrap: never silently reinitialize.
   assert.equal((await adapter.bootstrapConsent({ ...base, ticket: ticket('bootstrap'), oidcToken })).epoch, '1');
 
-  const projected = await adapter.project({
+  const projected = await adapter.project({ ...projectScope,
     ...base, rootCid, rev, projectionFence: '1', oidcToken, ticket: ticket('project')
   });
   assert.equal(projected.projected, true);
@@ -274,25 +278,25 @@ async function prepare() {
   assert.ok(!actions.includes('auth.account.find'), 'No account population/fan-out lookup');
   assert.ok(!actions.includes('access-grants.getForApp'));
   assert.ok(!actions.includes('data-grants.getByAccessNeed'));
-  assert.equal((await adapter.check({ ...base, rootCid, rev,
+  assert.equal((await adapter.check({ ...projectScope, ...base, rootCid, rev,
     projectionFence: '1', oidcToken })).projectionVerified, true);
 
   // Simulate a PostgreSQL recovery worker crash AFTER RDF mutation and before
   // durable PG ACK. Its lease_epoch advances from 1 to 2, while the same
   // SAI grant remains active at consent revision 1. The older candidate
   // incorrectly conflated these epochs and could never recover.
-  const replay = await adapter.project({
+  const replay = await adapter.project({ ...projectScope,
     ...base, projectionFence: '2', rootCid, rev, oidcToken,
     ticket: ticket('project', '1', { projectionFence: '2' })
   });
   assert.equal(replay.projected, true);
   assert.equal(replay.consentRevision, '1');
   assert.equal(replay.projectionFence, '2');
-  assert.equal((await adapter.check({
+  assert.equal((await adapter.check({ ...projectScope,
     ...base, rootCid, rev, projectionFence: '2', oidcToken
   })).projectionVerified, true);
   await assert.rejects(
-    adapter.project({ ...base, rootCid, rev, projectionFence: '1',
+    adapter.project({ ...projectScope, ...base, rootCid, rev, projectionFence: '1',
       oidcToken, ticket: ticket('project') }),
     e => e.code === 'POD_PROJECTION_READBACK_MISMATCH'
   );
@@ -349,7 +353,7 @@ async function prepare() {
   // revocation and a stale projection. Either could acquire the Jena writer
   // first, but the FINAL state must always be denied, never false-ready.
   const contested = await Promise.allSettled([
-    adapter.project({ ...base, rootCid, rev, projectionFence: '2', oidcToken,
+    adapter.project({ ...projectScope, ...base, rootCid, rev, projectionFence: '2', oidcToken,
       ticket: ticket('project', '1', { projectionFence: '2' }) }),
     adapter.revoke({ ...base, ticket: ticket('revoke') })
   ]);
@@ -365,12 +369,12 @@ async function prepare() {
   assert.equal(deniedAfterRevoke.length, 1);
   assert.ok(['6', '8'].includes(val(deniedAfterRevoke[0], 'fence')));
   await assert.rejects(
-    adapter.project({ ...base, rootCid, rev, projectionFence: '3', oidcToken,
+    adapter.project({ ...projectScope, ...base, rootCid, rev, projectionFence: '3', oidcToken,
       ticket: ticket('project', '1', { projectionFence: '3' }) }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
   await assert.rejects(
-    adapter.check({ ...base, rootCid, rev,
+    adapter.check({ ...projectScope, ...base, rootCid, rev,
       projectionFence: val(deniedAfterRevoke[0], 'fence'), oidcToken }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );
@@ -391,7 +395,7 @@ async function verify() {
   assert.ok(['6', '8'].includes(val(rows[0], 'epoch')));
   // Persistent consent is blocked even after Fuseki restart.
   await assert.rejects(
-    adapter.check({ ...base, rootCid, rev,
+    adapter.check({ ...projectScope, ...base, rootCid, rev,
       projectionFence: val(rows[0], 'epoch'), oidcToken }),
     e => e.code === 'POD_CONSENT_NOT_ACTIVE'
   );

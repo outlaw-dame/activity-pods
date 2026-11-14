@@ -10,7 +10,9 @@
 import crypto from 'node:crypto';
 // v2 binds the PostgreSQL recovery lease fence independently of the SAI
 // consent revision. Never accept v1 tickets on the v2 projection path.
-const PURPOSE = 'paper.atproto.pod-projection.v2';
+// v3 binds signed repository generation and independently verified parent root
+// into the HMAC. Earlier project tickets cannot authorize record mutations.
+const PURPOSE = 'paper.atproto.pod-projection.v3';
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const FENCE = /^[1-9][0-9]{0,18}$/u;
 const CID = /^bafyre[a-z2-7]{53}$/u;
@@ -34,7 +36,7 @@ function hmac(secret, body) {
 export function createPodOperationTicketAuthority({ secret, now = Date.now } = {}) {
   const key = Buffer.isBuffer(secret) ? secret : Buffer.from(secret || '', 'utf8');
   if (key.byteLength < 32) deny();
-  function normalizeScope({ accountId, did, appUri, grantUri, epoch, operation, projectionFence = null, rootCid = null, rev = null }) {
+  function normalizeScope({ accountId, did, appUri, grantUri, epoch, operation, projectionFence = null, rootCid = null, rev = null, generation = null, previousRootCid = null, previousRev = null }) {
     safeUrl(accountId);
     safeUrl(appUri);
     safeUrl(grantUri);
@@ -44,9 +46,18 @@ export function createPodOperationTicketAuthority({ secret, now = Date.now } = {
     if (operation === 'project') {
       if (!CID.test(rootCid || '') || !TID.test(rev || '') ||
           typeof projectionFence !== 'string' || !FENCE.test(projectionFence) ||
-          BigInt(projectionFence) > 9223372036854775807n) deny();
-    } else if (rootCid !== null || rev !== null || projectionFence !== null) deny();
-    return { accountId, did, appUri, grantUri, epoch, operation, projectionFence, rootCid, rev };
+          BigInt(projectionFence) > 9223372036854775807n ||
+          !Number.isSafeInteger(generation) || generation < 1 ||
+          (generation === 1 &&
+            (previousRootCid !== null || previousRev !== null)) ||
+          (generation > 1 &&
+            (!CID.test(previousRootCid || '') ||
+             !TID.test(previousRev || '') || previousRev >= rev))) deny();
+    } else if (rootCid !== null || rev !== null || projectionFence !== null ||
+               generation !== null || previousRootCid !== null ||
+               previousRev !== null) deny();
+    return { accountId, did, appUri, grantUri, epoch, operation,
+      projectionFence, rootCid, rev, generation, previousRootCid, previousRev };
   }
   function issue(scope) {
     const fields = normalizeScope(scope);

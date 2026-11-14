@@ -7,6 +7,7 @@
  * neither an HTTP request nor an inherited broker context can select it.
  */
 const TABLE = 'paper_atproto_repo_proof.rdf_projection_jobs';
+const MUTATIONS = 'paper_atproto_repo_proof.record_mutations';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const CID = /^bafyre[a-z2-7]{53}$/u;
@@ -31,7 +32,8 @@ function leaseState(row, claim) {
       String(row.lease_epoch) !== String(claim.leaseEpoch) ||
       row.lease_live !== true || row.state !== 'leased' ||
       !CID.test(row.head_cid) || !CID.test(row.root_cid) ||
-      !REV.test(row.rev) || Number(row.generation) !== 1) {
+      !REV.test(row.rev) || !Number.isSafeInteger(Number(row.generation)) ||
+      Number(row.generation) < 1) {
     rejected('PG_TICKET_LEASE_STALE');
   }
   return row;
@@ -85,11 +87,38 @@ export function createPgLeaseTicketIssuer({
     const proof = await verifySignedHead({
       accountId: claim.accountId, did: claim.did
     });
+    const generation=Number(lease.generation);
     if (proof?.verified !== true || proof.accountId !== claim.accountId ||
         proof.did !== claim.did || proof.commitCid !== lease.head_cid ||
         proof.rootCid !== lease.root_cid || proof.rev !== lease.rev ||
-        !['pending', 'delivered'].includes(proof.outboxStatus)) {
+        !['pending', 'delivered'].includes(proof.outboxStatus) ||
+        (proof.generation !== undefined &&
+          proof.generation !== generation) ||
+        // No legacy/genesis-only proof can certify a later signed commit.
+        (generation > 1 &&
+          (proof.generation !== generation ||
+           !CID.test(proof.previousRootCid || '') ||
+           !CID.test(proof.previousCommitCid || '') ||
+           !REV.test(proof.previousRev || '') ||
+           proof.previousRev >= proof.rev))) {
       rejected('PG_TICKET_SIGNED_HEAD_CHANGED');
+    }
+    if(generation>1){
+      // The trusted proof has verified the preceding signed CAR. Bind its
+      // parent to the immutable, indexed PostgreSQL audit for this exact
+      // generation so an injected verifier cannot select a different parent.
+      const mutation=await pool.query(
+        'SELECT previous_commit_cid,previous_root_cid,previous_rev '+
+        'FROM '+MUTATIONS+
+        ' WHERE did=$1 AND commit_cid=$2 AND generation=$3',
+        [claim.did,lease.head_cid,lease.generation]
+      );
+      if(mutation.rowCount!==1 ||
+         mutation.rows[0].previous_commit_cid!==proof.previousCommitCid ||
+         mutation.rows[0].previous_root_cid!==proof.previousRootCid ||
+         mutation.rows[0].previous_rev!==proof.previousRev){
+        rejected('PG_TICKET_SIGNED_HEAD_CHANGED');
+      }
     }
     const granted = await verifyCurrentSaiConsent({
       accountId: claim.accountId,
@@ -99,12 +128,24 @@ export function createPgLeaseTicketIssuer({
 
     // Neither a CPU-heavy signature check nor a Moleculer/Jena call runs
     // while holding a database connection or transaction open.
-    await getLease(claim);
+    const fresh=await getLease(claim);
+    // A still-live owner/epoch alone is insufficient: prevent a mutable
+    // head, root, revision or account generation from drifting while the
+    // external signer/SAI checks ran without a held PG connection.
+    if(fresh.head_cid !== lease.head_cid ||
+       fresh.root_cid !== lease.root_cid ||
+       fresh.rev !== lease.rev ||
+       String(fresh.generation) !== String(lease.generation)) {
+      rejected('PG_TICKET_SIGNED_HEAD_CHANGED');
+    }
     const scope = {
       accountId: claim.accountId, did: claim.did,
       appUri, grantUri, epoch: consentRevision,
       projectionFence: String(lease.lease_epoch),
-      operation: 'project', rootCid: lease.root_cid, rev: lease.rev
+      operation: 'project', rootCid: lease.root_cid, rev: lease.rev,
+      generation,
+      previousRootCid: generation > 1 ? proof.previousRootCid : null,
+      previousRev: generation > 1 ? proof.previousRev : null
     };
     return Object.freeze({
       ticket: tickets.issue(scope),

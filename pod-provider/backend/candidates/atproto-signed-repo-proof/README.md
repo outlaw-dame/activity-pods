@@ -422,3 +422,37 @@ genesis native event after a newer signed record head. They verify no
 false readiness, no further mutation or younger-event publication, and
 stable duplicate-delivery keys. Neither test changes the nonactivated
 provider or production signup gates.
+
+
+## Provider SAI operation tickets for signed record generations
+
+The original protected PG recovery-ticket issuer accepted only repository
+generation 1. Following the signed mutation and generation-fenced Jena work,
+that would permanently prevent real generation-2+ protected projections
+even when the provider's signed head and RDF recovery intent were correct.
+
+The nonactivated ticket issuer now requires an exact active PostgreSQL
+lease (owner, epoch and database clock) and independently verified signed
+repository evidence for every generation. For generation 2+, the proof
+must include the signed predecessor's commit CID, MST root CID and revision,
+which are compared against the immutable per-generation PostgreSQL
+record_mutations audit. Missing, forged or legacy genesis-only evidence
+cannot mint a successor ticket. The issuer also re-reads the lease AFTER
+the current SAI consent check and rejects any changed head CID, root CID,
+revision or generation, even if the owner and epoch remain unchanged.
+
+The short-lived HMAC ticket's purpose is versioned to v3. All project
+tickets now bind the repository generation and expected predecessor
+root/revision alongside the account, DID, grant URI, consent revision,
+exact head root/revision and independent PostgreSQL projection fence.
+A v2 ticket lacking these fields cannot be interpreted as a valid v3
+successor operation. The actual SPARQL write must still apply the
+consentGuard for the **current** grant epoch in the same fenced Jena
+update; a ticket alone is not a substitute for revocation enforcement.
+
+Disposable PostgreSQL 18 tests exercise one real signed successor from
+the managed repository writer, successful v3 scope verification,
+tampered/legacy predecessor rejection, revoked grant refusal, and a
+head/revision change during external SAI verification with unchanged
+lease owner and epoch. No provider route or production mint authority is
+activated here. Full real Pod grant and production cutover remain blocked.

@@ -141,12 +141,24 @@ export function createAuthenticatedRecordWriteXrpc({
     // This provider callback MUST do actual OAuth audience/issuer, DPoP,
     // nonce, account and app-grant verification. The XRPC never decodes a
     // self-asserted JWT or trusts caller-provided consentRevision.
-    const auth=await authorizeOwner({
-      authorization:header,dpopProof,method:'POST',
-      endpoint:'com.atproto.repo.'+(method==='put'?'putRecord':method+'Record'),
-      did,webId:before.webId,collection:body.collection,
-      action:method,requiredPermission:'atproto:record-write'
-    });
+    let auth;
+    try{
+      auth=await authorizeOwner({
+        authorization:header,dpopProof,method:'POST',
+        endpoint:'com.atproto.repo.'+(method==='put'?'putRecord':method+'Record'),
+        did,webId:before.webId,collection:body.collection,
+        action:method,requiredPermission:'atproto:record-write'
+      });
+    }catch(e){
+      // Before signing, a rejected token/proof is a 401. Transient
+      // provider/Redis/PG failures stay 503 and never reach the signer.
+      if(['PDS_OAUTH_NOT_AUTHORIZED','INVALID_DPOP_PROOF',
+          'INVALID_DPOP_NONCE','INVALID_DPOP_ATH',
+          'DPOP_REPLAY_DETECTED'].includes(e?.code)){
+        deny('AuthRequired',401);
+      }
+      throw e;
+    }
     if(auth?.verified!==true||auth?.ownerDid!==did||
       auth?.ownerWebId!==before.webId||
       auth?.permission!=='atproto:record-write'||
@@ -221,7 +233,9 @@ export function createAuthenticatedRecordWriteXrpc({
     // incorrectly raise a replay AFTER committing the signed record.
     // The provider returns a request-local closure that rereads token,
     // client consent and canonical PG revision without reusing the proof.
-    const renewed=await auth.recheck();
+    let renewed;
+    try{renewed=await auth.recheck();}
+    catch{deny('PDS_WRITE_CONSENT_CHANGED');}
     if(renewed?.verified!==true||renewed?.ownerDid!==did||
       renewed?.ownerWebId!==before.webId||
       renewed?.permission!=='atproto:record-write'||

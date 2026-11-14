@@ -121,6 +121,10 @@ async function assertRestrictedPgAuthorityLogin(pool) {
     result = await pool.query(
     'SELECT r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,' +
     'r.rolbypassrls,r.rolcanlogin, ' +
+    // A NOINHERIT member can still SET ROLE to an importer or schema
+    // owner. Effective has_table_privilege alone is NOT sufficient.
+    "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_importer','MEMBER') AS importer_member, " +
+    "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace WHERE nspname='paper_atproto_authority'),'MEMBER') AS owner_member, " +
     "pg_catalog.has_schema_privilege(current_user,'paper_atproto_authority','CREATE') AS schema_create, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','SELECT') AS identity_read, " +
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','SELECT') AS consent_read, " +
@@ -143,7 +147,8 @@ async function assertRestrictedPgAuthorityLogin(pool) {
   }
   const row = result.rows?.[0];
   const blocked = ['rolsuper','rolcreatedb','rolcreaterole','rolreplication',
-    'rolbypassrls','schema_create','identity_insert','identity_update',
+    'rolbypassrls','schema_create','importer_member','owner_member',
+    'identity_insert','identity_update',
     'identity_delete','identity_truncate','consent_insert',
     'consent_update','consent_delete','consent_truncate'];
   if(result.rowCount!==1 || !row || row.rolcanlogin!==true ||

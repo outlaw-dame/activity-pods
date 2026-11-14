@@ -175,7 +175,8 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
 
     let currentConsent='1';
     const fence=createCanonicalRecordWriteConsentFence({
-      appUri:app,grantUri:grant,consentRevision:currentConsent
+      appUri:app,grantUri:grant,consentRevision:currentConsent,
+      restrictedCredential:true
     });
     const writer=createReferenceMstWriter({
       pool:writerPool,reference,fixtureOnly:true,

@@ -135,6 +135,25 @@ async function main(){
    });
    const token=await issue();
    assert.equal((await introspect(token)).active,true);
+   // Same trusted issuer key, same DID, audience and granted permissions:
+   // only the JWT type differs. A Solid ID token or arbitrary issuer JWT
+   // must not be confused with this provider's at+jwt access token.
+   const confusedType=await new SignJWT({
+     scope:allowedScope,client_id:clientId,
+     canonical_account_id:webId,cnf:{jkt}
+   }).setProtectedHeader({alg:'ES256',typ:'JWT'})
+     .setIssuer(issuer).setAudience(origin).setSubject(did)
+     .setIssuedAt().setExpirationTime('15m').sign(issuerKey);
+   assert.equal((await introspect(confusedType)).active,false,
+     'validly signed non-access JWT must not authorize PDS writes');
+   const missingType=await new SignJWT({
+     scope:allowedScope,client_id:clientId,
+     canonical_account_id:webId,cnf:{jkt}
+   }).setProtectedHeader({alg:'ES256'})
+     .setIssuer(issuer).setAudience(origin).setSubject(did)
+     .setIssuedAt().setExpirationTime('15m').sign(issuerKey);
+   assert.equal((await introspect(missingType)).active,false,
+     'missing at+jwt type must fail closed');
    const params=(value,proof,action='create')=>({
      authorization:'DPoP '+value,dpopProof:proof,
      method:'POST',

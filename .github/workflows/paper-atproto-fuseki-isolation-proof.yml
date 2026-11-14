@@ -6,7 +6,7 @@ on:
       - '.github/workflows/paper-atproto-fuseki-isolation-proof.yml'
       - 'pod-provider/docker-compose-fuseki-isolation.yml'
       - 'pod-provider/scripts/fixtures/fuseki-isolation-shiro.ini'
-      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
   workflow_dispatch:
 
 concurrency:
@@ -19,7 +19,28 @@ permissions:
 jobs:
   disposable-credential-isolation:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: atproto_signed_repo_proof_test
+          POSTGRES_USER: paper_probe
+          POSTGRES_PASSWORD: probe_local_only
+        ports:
+          - 5548:5432
+        options: >-
+          --health-cmd "pg_isready -U paper_probe -d atproto_signed_repo_proof_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+      ATPROTO_PROJECTION_ROLE_TEST_DISPOSABLE: confirmed
+      ATPROTO_FUSEKI_ISOLATION_DISPOSABLE: confirmed
+      FUSEKI_ISOLATION_URL: http://127.0.0.1:3041
+      ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
     defaults:
       run:
         working-directory: pod-provider
@@ -38,6 +59,10 @@ jobs:
         run: |
           set -euo pipefail
           node --check backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/pg-protected-rdf-attestor-role.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attestor.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/pg-attested-projection-ops.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs
 
       - name: Prepare fresh temporary Fuseki security configuration
         run: |
@@ -60,6 +85,16 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs prepare
 
+      - name: Install locked signed-PG proof dependencies
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
+
+      - name: Verify independent PG18 attestor, protected Jena RDF and revocation race
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs prepare
+
       - name: Restart persistent Fuseki for independent readback
         run: |
           set -euo pipefail
@@ -73,6 +108,17 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/fuseki-writer-isolation-live.mjs verify
+
+      - name: Prove independent protected-RDF receipt after persistent Jena restart
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs verify
+
+      - name: Destroy disposable PostgreSQL schemas and restricted credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs cleanup
 
       - name: Inspect failed disposable Fuseki
         if: failure()

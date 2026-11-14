@@ -3,7 +3,7 @@
  * Only the attestor can submit protected Jena readback receipts. No direct
  * SQL DML, legacy or attested ACK, signing, import/regrant or SET ROLE.
  */
-import {assertExactRuntimePrivileges} from './pg-exact-runtime-privileges.mjs';
+import {assertExactRuntimePrivileges,assertNoDirectAttestationTablePrivileges} from './pg-exact-runtime-privileges.mjs';
 function deny(){
   const e=new Error('Independent protected RDF attestor credential required');
   e.code='PROTECTED_RDF_ATTESTOR_ROLE_REQUIRED'; throw e;

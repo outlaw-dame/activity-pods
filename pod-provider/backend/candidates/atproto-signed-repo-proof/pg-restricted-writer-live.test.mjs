@@ -246,11 +246,36 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
 
     // Exactly one of two independently authenticated SQL writers can win
     // a revocation update. No signed write may proceed after that update.
-    const revoke=await revokerPool.query(
-      'SELECT new_revision::text AS revision,new_state AS state FROM '+
-      'paper_atproto_authority.block_consent($1,$2,$3,$4::bigint)',
-      [accountId,app,grant,1]
-    );
+    // Deterministic real-connection revocation race. Holding the consent
+    // lock inside the same PG transaction MUST serialize a separately
+    // authenticated revoker, even though the writer has no direct UPDATE
+    // privilege on the consent table.
+    const lockedWriter=await writerPool.connect();
+    let commitDone=false,revocationFinished=false,revoking;
+    try{
+      await lockedWriter.query('BEGIN');
+      const claimed=await lockedWriter.query(
+        'SELECT paper_atproto_authority.lock_writer_consent('+
+        '$1,$2,$3,$4,$5::bigint) AS allowed',
+        [accountId,did,app,grant,'1']
+      );
+      assert.equal(claimed.rows[0].allowed,true);
+      revoking=revokerPool.query(
+        'SELECT new_revision::text AS revision,new_state AS state FROM '+
+        'paper_atproto_authority.block_consent($1,$2,$3,$4::bigint)',
+        [accountId,app,grant,1]
+      ).then(r=>{revocationFinished=true;return r;});
+      await new Promise(ok=>setTimeout(ok,125));
+      assert.equal(revocationFinished,false,
+        'canonical revocation must wait for in-flight trusted writer lock');
+      await lockedWriter.query('COMMIT');
+      commitDone=true;
+    }finally{
+      if(!commitDone)await lockedWriter.query('ROLLBACK').catch(()=>{});
+      lockedWriter.release(!commitDone);
+    }
+    const revoke=await revoking;
+    assert.equal(revoke.rowCount,1);
     assert.equal(revoke.rows[0].state,'blocked');
     currentConsent='2';
     await assert.rejects(writer.write({
@@ -274,6 +299,7 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
       noProjectionAppliedWrite:true,noOutboxAckWrite:true,
       realSignedReferenceMst:true,outboxPending:true,
       projectionCasDefiner:true,revocationDenied:true,
+      consentRevocationSerialized:true,
       noReplayAfterPending:true,idleTransactions:idle
     }));
   }finally{

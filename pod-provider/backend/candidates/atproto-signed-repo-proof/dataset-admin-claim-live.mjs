@@ -14,6 +14,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {Pool} from 'pg';
 import {signDisposableDatasetClaim,assertRestrictedDatasetAdminLogin} from './dataset-admin-claim-service.mjs';
+import {makeAccountReservationAuthority,assertRestrictedAccountProofLogin} from './account-reservation-authority.mjs';
 
 const PHASE=process.argv[2];
 const ROOT='http://127.0.0.1:3042/v1/provision';
@@ -183,6 +184,96 @@ const makeClaim=(dataset,opts={})=>{
   issuedAtMs:now,expiresAtMs:now+120000,...opts
  };
 };
+async function issueFromDurablePreAccountReservation(dataset,privateKey){
+ // The SQL worker is a *separate* restricted login; the issuer child never
+ // receives it, and the ordinary dataset client never receives either one.
+ const meta=JSON.parse(await fs.readFile(path.join(process.env.RUNNER_TEMP,
+  'paper-account-reservation-fixture.json'),'utf8'));
+ assert.equal(meta.fixture,true,'Reservation proof must prepare first');
+ const workerUrl=new URL(DSN);
+ workerUrl.username='paper_account_worker_login';
+ workerUrl.password=meta.workerPassword;
+ const worker=new Pool({connectionString:workerUrl.toString(),max:1,
+  connectionTimeoutMillis:3000,query_timeout:5000,allowExitOnIdle:true});
+ let request,receipt,fence;
+ try{
+  await assertRestrictedAccountProofLogin(worker,'worker');
+  request={appClientId:'dataset-admin-fixture',username:dataset,
+    idempotencyKey:crypto.randomBytes(16).toString('hex'),
+    requestFingerprint:crypto.createHash('sha256')
+      .update('signed-preaccount-handoff:'+dataset).digest('hex'),
+    dailyLimit:2};
+  const authority=makeAccountReservationAuthority({workerPool:worker});
+  receipt=await authority.reserve(request);
+  assert.equal(receipt.outcome,'reserved');
+  fence={appClientId:request.appClientId,idempotencyKey:request.idempotencyKey,
+    reservationId:receipt.reservationId,fenceToken:receipt.fenceToken};
+  assert.equal(await authority.startSideEffects(fence),true,
+    'The canonical PG18 identity fence must precede dataset creation');
+  assert.equal((await authority.reserve(request)).fenceToken,null,
+    'No second coordinator may obtain the original identity fence');
+ }finally{await worker.end();}
+ const issuerUrl=new URL(DSN);
+ issuerUrl.username='paper_account_issuer_login';
+ issuerUrl.password=meta.issuerPassword;
+ const env={
+  NODE_ENV:'test',ATPROTO_REPO_PROOF_DISPOSABLE:'confirmed',
+  ATPROTO_FUSEKI_ISOLATION_DISPOSABLE:'confirmed',
+  FUSEKI_ISOLATION_URL:'http://127.0.0.1:3041',
+  APODS_ACCOUNT_RESERVATION_DISPOSABLE:'confirmed',
+  APODS_DATASET_CLAIM_ISSUER_DISPOSABLE:'confirmed',
+  ACCOUNT_ISSUER_DSN:issuerUrl.toString(),
+  ACCOUNT_ISSUER_SIGNING_PEM_B64:Buffer.from(privateKey.export({
+    format:'pem',type:'pkcs8'}),'utf8').toString('base64'),
+  ACCOUNT_ISSUER_REQUEST_B64:Buffer.from(JSON.stringify({
+    fence,dataset}),'utf8').toString('base64')
+ };
+ assert.equal(Object.hasOwn(env,'ATPROTO_REPO_PROOF_DSN'),false);
+ assert.equal(Object.hasOwn(env,'DATASET_ADMIN_FUSEKI_PASSWORD'),false);
+ assert.equal(Object.hasOwn(env,'DATASET_ADMIN_AGENT_DSN'),false);
+ const file=fileURLToPath(new URL('./account-reservation-issuer-child.mjs',import.meta.url));
+ const run=async (requestEnv,expectedSuccess)=>{
+  const child=spawn(process.execPath,[file],{
+   env:requestEnv,stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='';
+  const exit=await new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>{child.kill('SIGKILL');
+    reject(Error('Restricted claim issuer exceeded 12s'));},12000);
+   child.stdout.on('data',part=>{stdout=(stdout+String(part)).slice(-2000);});
+   child.stderr.on('data',part=>{stderr=(stderr+String(part)).slice(-350);});
+   child.once('error',e=>{clearTimeout(timer);reject(e);});
+   child.once('exit',code=>{clearTimeout(timer);resolve(code);});
+  });
+  assert.equal(exit===0,expectedSuccess,
+   'Issuer role admission outcome: '+stderr.slice(0,100));
+  if(!expectedSuccess){
+   assert.equal(stdout.includes('ACCOUNT_ISSUER_TICKET'),false);
+   return null;
+  }
+  const prefix='ACCOUNT_ISSUER_TICKET ';
+  const value=stdout.split('\n').find(line=>line.startsWith(prefix));
+  assert(value,'Issuer did not return a strictly scoped signed claim');
+  return JSON.parse(Buffer.from(value.slice(prefix.length),'base64').toString('utf8'));
+ };
+ const ticket=await run(env,true);
+ const repeat=await run(env,true);
+ assert.deepEqual(repeat,ticket,
+  'An issuer restart must reproduce the identical signed ticket digest');
+ // A forged lease/fence and an alternate dataset are never signing rights.
+ const badFence={...fence,fenceToken:crypto.randomUUID()};
+ const wrongFenceEnv={...env,ACCOUNT_ISSUER_REQUEST_B64:Buffer.from(
+   JSON.stringify({fence:badFence,dataset}),'utf8').toString('base64')};
+ await run(wrongFenceEnv,false);
+ const wrongDatasetEnv={...env,ACCOUNT_ISSUER_REQUEST_B64:Buffer.from(
+   JSON.stringify({fence,dataset:dataset+'x'}),'utf8').toString('base64')};
+ await run(wrongDatasetEnv,false);
+ // A signed ticket can be delivered to the ordinary provider, but no
+ // private key, PostgreSQL credential or root database DSN accompanies it.
+ assert.equal(ticket.claim.dataset,dataset);
+ assert.equal(ticket.claim.ownerWebid,'https://paper.example.org/users/'+dataset);
+ assert.equal(ticket.claim.reservationId,fence.reservationId);
+ return {ticket,reservationId:fence.reservationId};
+}
 async function setup(){
  const sql=await fs.readFile(new URL('./pg-dataset-admin-claim.sql',import.meta.url),'utf8');
  const exists=(await admin.query("SELECT to_regclass('paper_dataset_admin_proof.claims') AS claims")).rows[0].claims;
@@ -197,9 +288,10 @@ async function setup(){
  const dataset='claimtest-'+crypto.randomBytes(6).toString('hex');
  const keys=crypto.generateKeyPairSync('ed25519');
  const publicKey=keys.publicKey.export({format:'pem',type:'spki'}).toString();
- const claim=makeClaim(dataset);
- const ticket=signDisposableDatasetClaim(claim,keys.privateKey);
- const config={fixture:true,dataset,password,publicKey,ticket};
+ const issuance=await issueFromDurablePreAccountReservation(dataset,keys.privateKey);
+ const ticket=issuance.ticket;
+ const config={fixture:true,dataset,password,publicKey,ticket,
+  accountReservationId:issuance.reservationId};
  await fs.writeFile(META,JSON.stringify(config),{mode:0o600,flag:'wx'});
  return {config,privateKey:keys.privateKey};
 }

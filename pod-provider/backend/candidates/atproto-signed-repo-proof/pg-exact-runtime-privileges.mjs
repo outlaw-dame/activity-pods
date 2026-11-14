@@ -26,7 +26,8 @@ const privilegeModel=Object.freeze({
         'record_cid','generation']
     }
   },
-  'projection-worker':{}
+  'projection-worker':{},
+  'rdf-attestor':{}
 });
 function deny(){
   const e=new Error('Runtime PostgreSQL credential has unexpected grants');
@@ -35,8 +36,9 @@ function deny(){
 export async function assertExactRuntimePrivileges(pool,{role}={}){
   const allowed=privilegeModel[role];
   if(!allowed||typeof pool?.query!=='function')deny();
-  const expectedRole=role==='repo-writer'
-    ?'paper_atproto_repo_writer':'paper_atproto_projection_worker';
+  const expectedRole=role==='repo-writer'?'paper_atproto_repo_writer':
+    role==='rdf-attestor'?'paper_atproto_rdf_attestor':
+      'paper_atproto_projection_worker';
   let rows,membership;
   try{
     // Every legitimate direct membership is the one expected worker
@@ -95,4 +97,35 @@ export async function assertExactRuntimePrivileges(pool,{role}={}){
     for(const name of allowed[table]?.update||[]){if(!cols.has(name))deny();}
   }
   return Object.freeze({exact:true,role,tableCount:tables.length});
+}
+
+/**
+ * The additive attestation migration introduces an eighth table. Legacy
+ * fixture roles run before that table exists, so inspect it only for the
+ * attested-only path. Any effective INSERT/UPDATE (including columns),
+ * DELETE, TRUNCATE, TRIGGER, REFERENCES or delegated SELECT fails startup.
+ * An attestor must not even SELECT receipts directly; the definer functions
+ * own all mutations and audit reads remain operator-only.
+ */
+export async function assertNoDirectAttestationTablePrivileges(pool){
+  if(typeof pool?.query!=='function')deny();
+  let r;
+  try{
+    r=await pool.query(
+      "SELECT pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations') IS NOT NULL AS exists,"+
+      "COALESCE(pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'SELECT'),false) AS read,"+
+      "COALESCE(pg_catalog.has_any_column_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'INSERT'),false) AS insert,"+
+      "COALESCE(pg_catalog.has_any_column_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'UPDATE'),false) AS update,"+
+      "COALESCE(pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'DELETE'),false) AS delete,"+
+      "COALESCE(pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'TRUNCATE'),false) AS truncate,"+
+      "COALESCE(pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'TRIGGER'),false) AS trigger,"+
+      "COALESCE(pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'REFERENCES'),false) AS references,"+
+      "COALESCE(pg_catalog.has_table_privilege(current_user,pg_catalog.to_regclass('paper_atproto_repo_proof.rdf_attestations'),'SELECT WITH GRANT OPTION'),false) AS delegate_read"
+    );
+  }catch{deny();}
+  if(r.rowCount!==1)deny();
+  const x=r.rows[0];
+  if(!x.exists||x.read||x.insert||x.update||x.delete||
+     x.truncate||x.trigger||x.references||x.delegate_read)deny();
+  return Object.freeze({receiptTableIsolated:true});
 }

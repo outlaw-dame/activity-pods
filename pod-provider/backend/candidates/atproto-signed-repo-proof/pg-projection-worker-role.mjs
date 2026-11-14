@@ -1,4 +1,4 @@
-import {assertExactRuntimePrivileges} from './pg-exact-runtime-privileges.mjs';
+import {assertExactRuntimePrivileges,assertNoDirectAttestationTablePrivileges} from './pg-exact-runtime-privileges.mjs';
 /**
  * PostgreSQL 18 startup privilege admission for NONACTIVATED projection
  * worker. It must not inherit signer, importer, revoker, schema-owner, or
@@ -9,7 +9,8 @@ function reject(){
   e.code='PROJECTION_WORKER_ROLE_REQUIRED';
   throw e;
 }
-export async function assertRestrictedProjectionWorkerLogin(pool){
+export async function assertRestrictedProjectionWorkerLogin(pool,{attestedOnly=false}={}){
+  if(typeof attestedOnly!=='boolean')reject();
   if(typeof pool?.query!=='function')reject();
   let result;
   try{
@@ -49,6 +50,10 @@ export async function assertRestrictedProjectionWorkerLogin(pool){
       "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.identities','INSERT') AS identity_insert,"+
       "pg_catalog.has_function_privilege(current_user,'paper_atproto_repo_proof.claim_verified_projection(text,text,uuid,integer,integer,text,text,bigint)','EXECUTE') AS can_claim,"+
       "pg_catalog.has_function_privilege(current_user,'paper_atproto_repo_proof.ack_verified_projection(text,text,uuid,bigint,text,text,text,bigint,text,text,bigint)','EXECUTE') AS can_ack,"+
+      "CASE WHEN pg_catalog.to_regprocedure('paper_atproto_repo_proof.ack_attested_projection(text,text,uuid,bigint,text,text,text,bigint,text,text,bigint)') IS NULL THEN false ELSE "+
+      "pg_catalog.has_function_privilege(current_user,'paper_atproto_repo_proof.ack_attested_projection(text,text,uuid,bigint,text,text,text,bigint,text,text,bigint)','EXECUTE') END AS can_attested_ack,"+
+      "CASE WHEN pg_catalog.to_regprocedure('paper_atproto_repo_proof.attest_protected_rdf(text,text,uuid,bigint,text,text,text,bigint,text,text,bigint,bytea)') IS NULL THEN false ELSE "+
+      "pg_catalog.has_function_privilege(current_user,'paper_atproto_repo_proof.attest_protected_rdf(text,text,uuid,bigint,text,text,text,bigint,text,text,bigint,bytea)','EXECUTE') END AS can_attest,"+
       "pg_catalog.has_function_privilege(current_user,'paper_atproto_repo_proof.release_failed_projection(text,text,uuid,bigint,text,double precision,text)','EXECUTE') AS can_fail,"+
       "pg_catalog.has_function_privilege(current_user,'paper_atproto_repo_proof.block_exhausted_projection(text,text,integer)','EXECUTE') AS can_block,"+
       "pg_catalog.has_function_privilege(current_user,'paper_atproto_authority.block_consent(text,text,text,bigint)','EXECUTE') AS can_revoke "+
@@ -71,11 +76,15 @@ export async function assertRestrictedProjectionWorkerLogin(pool){
      x.mutations_col_update||x.mutations_col_insert||
      x.consent_col_update||x.consent_col_insert||
      x.identity_col_update||x.identity_col_insert||
-     !x.can_claim||!x.can_ack||!x.can_fail||!x.can_block||x.can_revoke){
+     !x.can_claim||!x.can_fail||!x.can_block||x.can_revoke||
+     (attestedOnly ? (x.can_ack||!x.can_attested_ack||x.can_attest) : !x.can_ack)){
+
     reject();
   }
-  try{await assertExactRuntimePrivileges(pool,{role:'projection-worker'});}
-  catch{reject();}
-  return Object.freeze({restricted:true,maySign:false,mayRegrant:false,
+  try{
+    await assertExactRuntimePrivileges(pool,{role:'projection-worker'});
+    if(attestedOnly)await assertNoDirectAttestationTablePrivileges(pool);
+  }catch{reject();}
+  return Object.freeze({restricted:true,attestedOnly,maySign:false,mayRegrant:false,
     mayBypassLeases:false,postgresVersion:x.version});
 }

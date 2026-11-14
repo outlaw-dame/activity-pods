@@ -5,8 +5,9 @@
  * unavoidable ACK-to-PG-update uncertainty window. A retry can append the
  * same verified frame at another Kafka offset. Accept duplicates only when
  * the exact DID, signed commit, seq, revision, topic, partition and SHA-256
- * payload agree with the first committed receipt. Never execute an effect
- * twice merely because Kafka redelivered an offset.
+ * payload agree with the first committed receipt. The first received frame
+ * must independently match signed provider history; this table records a
+ * deduplicated RECEIPT only, not an external application side effect.
  */
 import crypto from 'node:crypto';
 import {Buffer} from 'node:buffer';
@@ -28,14 +29,15 @@ function gated(fixtureOnly){
   }
 }
 export function createNativeBrokerReceiptStore({
-  pool,topic,fixtureOnly=false
+  pool,topic,verifySignedEvent,fixtureOnly=false
 }={}) {
   if(fixtureOnly!==true||process.env.NODE_ENV==='production'||
      process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed'||
      process.env.ATPROTO_REDPANDA_TEST_DISPOSABLE!=='confirmed'){
     return Object.freeze({observe:async()=>fail('NATIVE_BROKER_RECEIPT_NOT_RELEASED')});
   }
-  if(typeof pool?.query!=='function'||!TOPIC.test(topic||'')){
+  if(typeof pool?.query!=='function'||!TOPIC.test(topic||'') ||
+     typeof verifySignedEvent!=='function'){
     fail('NATIVE_BROKER_RECEIPT_CONFIGURATION_INVALID');
   }
   async function observe({
@@ -75,9 +77,56 @@ export function createNativeBrokerReceiptStore({
       fail('NATIVE_BROKER_RECEIPT_HEADER_MISMATCH');
     }
     const digest=crypto.createHash('sha256').update(parsed.frameBytes).digest();
-    // SELECT guards this exact outbox identity and signed revision; the
-    // INSERT and ON CONFLICT are in a single PG statement. No read-modify-
-    // write race, no process-local unbounded event set, no bulk scans.
+    const getReceipt=()=>{
+      return pool.query(
+        'SELECT r.did,r.commit_cid,r.event_seq,r.rev,r.payload_sha256,'+
+        'r.topic,r.partition_id,r.first_offset,e.blocked_at '+
+        'FROM '+TABLE+' r JOIN '+OUTBOX+
+        ' e ON e.did=r.did AND e.commit_cid=r.commit_cid '+
+        'WHERE r.did=$1 AND r.commit_cid=$2',[did,commitCid]
+      );
+    };
+    function validateReceipt(rows) {
+      if(rows.rowCount!==1 ||
+         rows.rows[0].blocked_at!==null ||
+         String(rows.rows[0].event_seq)!==String(parsed.seq) ||
+         rows.rows[0].rev!==rev || rows.rows[0].topic!==topic ||
+         Number(rows.rows[0].partition_id)!==partition ||
+         !crypto.timingSafeEqual(
+           Buffer.from(rows.rows[0].payload_sha256),digest
+         )){
+        fail('NATIVE_BROKER_REPLAY_CONFLICT');
+      }
+    }
+    // Duplicates are cheap: one indexed lookup, no signer/PG history reads.
+    // First-seen events MUST be reconstructed from independently verified
+    // signed PostgreSQL history before any durable receipt is inserted.
+    const known=await getReceipt();
+    if(known.rowCount!==0) {
+      validateReceipt(known);
+      return Object.freeze({
+        firstSeen:false,idempotencyKey:eventId,seq:parsed.seq,
+        firstOffset:String(known.rows[0].first_offset),partition
+      });
+    }
+    // Cryptographic verification and provider identity/status authority are
+    // supplied by a trusted callback, never by user-settable metadata.
+    // Crucially this occurs before inserting a permanent receipt; otherwise
+    // an attacker able to inject a plausible first broker frame could poison
+    // the receipt key and suppress the authentic event thereafter.
+    const evidence=await verifySignedEvent(Object.freeze({
+      did,commitCid,rev,seq:parsed.seq
+    }));
+    if(evidence?.verified!==true||evidence.did!==did ||
+       evidence.commitCid!==commitCid||evidence.rev!==rev ||
+       evidence.seq!==parsed.seq ||
+       !(evidence.eventBytes instanceof Uint8Array) ||
+       !Buffer.from(evidence.eventBytes).equals(parsed.frameBytes)){
+      fail('NATIVE_BROKER_UNVERIFIED_EVENT');
+    }
+    // SELECT guards the exact outbox identity and signed revision; the
+    // INSERT and ON CONFLICT form one DB statement. Racing first-readers
+    // can verify concurrently but only one receipt may commit.
     const inserted=await pool.query(
       'INSERT INTO '+TABLE+
       '(did,commit_cid,event_seq,rev,payload_sha256,topic,partition_id,first_offset) '+
@@ -87,22 +136,8 @@ export function createNativeBrokerReceiptStore({
       'ON CONFLICT(did,commit_cid) DO NOTHING RETURNING event_seq',
       [did,commitCid,String(parsed.seq),rev,digest,topic,partition,offset]
     );
-    const current=await pool.query(
-      'SELECT r.did,r.commit_cid,r.event_seq,r.rev,r.payload_sha256,'+
-      'r.topic,r.partition_id,r.first_offset,e.blocked_at '+
-      'FROM '+TABLE+' r JOIN '+OUTBOX+
-      ' e ON e.did=r.did AND e.commit_cid=r.commit_cid '+
-      'WHERE r.did=$1 AND r.commit_cid=$2',[did,commitCid]
-    );
-    if(current.rowCount!==1 ||
-       current.rows[0].blocked_at!==null ||
-       String(current.rows[0].event_seq)!==String(parsed.seq)||
-       current.rows[0].rev!==rev ||
-       current.rows[0].topic!==topic ||
-       Number(current.rows[0].partition_id)!==partition ||
-       !Buffer.from(current.rows[0].payload_sha256).equals(digest)){
-      fail('NATIVE_BROKER_REPLAY_CONFLICT');
-    }
+    const current=await getReceipt();
+    validateReceipt(current);
     return Object.freeze({
       firstSeen:inserted.rowCount===1,
       idempotencyKey:eventId,seq:parsed.seq,

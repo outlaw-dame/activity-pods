@@ -722,3 +722,43 @@ identical (consumer replays can rewind).
   memory/CPU, real durability during multi-broker partition failure or
   cloud cost. Keep the production signup and public firehose fuses
   **closed** until those acceptance gates pass.
+
+
+## Broker ingress first-seen authenticity and replay fast path
+
+A Kafka envelope with the right DID, commit CID, sequence, revision
+and syntactically valid CBOR is **not** sufficient to trust the FIRST
+event received for an outbox identity. If a broker ACL or producer were
+compromised, inserting its plausible but forged first frame as the
+deduplication receipt could make a later authentic event look like a
+conflicting duplicate.
+
+The disposable consumer receipt adapter now requires an injected
+provider-owned `verifySignedEvent` callback before an unseen key can
+receive any durable receipt. It independently materializes the signed
+historical event from immutable PostgreSQL blocks and provider identity
+evidence, then compares the **entire** canonical event frame byte for
+byte, including CAR, root, parent, event time and exact sequence.
+Missing/altered evidence fails closed with
+`NATIVE_BROKER_UNVERIFIED_EVENT`; the receipt remains absent so a
+future valid event is not suppressed. The signed proof is performed
+OUTSIDE any PostgreSQL transaction or row lock.
+
+A previously authenticated duplicate takes one indexed receipt lookup
+and SHA-256 comparison, without repeat signing/MST reconstruction.
+Racing first readers may independently verify, but only one receipt
+can insert under the existing unique (DID,commitCID) constraint;
+subsequent read-back ensures exactly matching revision, sequence,
+partition and hash. The real Redpanda/PG18 regression injects a
+plausible forged first event, confirms **zero** receipts, consumes
+the authentic event once with one signature proof, and then rewinds
+a second consumer. No signature/MST verification is repeated for
+identical replays.
+
+This proves authenticity of the **receipt**, not a downstream
+application-side effect. Any production consumer that updates an
+application database must commit its actual effect and receipt
+atomically (or use a second durable effect outbox). Never run a
+network callback or Jena/SAI RPC inside a long-held PostgreSQL lock;
+the real hosted-PDS identity/SAI authorization, retention and cursor
+recovery remain release blockers.

@@ -111,6 +111,24 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
       );
       return result.rowCount === 1 && result.rows[0]?.completed === true;
     },
+    async getDatasetClaimLease(fence, dataset, expectedWebId) {
+      assertDisposable();
+      assertFence(fence);
+      if (!issuerPool) throw Error('Restricted issuer PostgreSQL connection required');
+      assertPool(issuerPool);
+      if (!USERNAME.test(dataset) || expectedWebId !== WEBID_ROOT + dataset) deny();
+      const result = await issuerPool.query(
+        'SELECT paper_account_reservation_proof.dataset_claim_lease($1,$2,$3,$4,$5,$6) AS lease_expires_at',
+        [PROVIDER, fence.appClientId, fence.reservationId,
+          fence.fenceToken, dataset, expectedWebId]
+      );
+      const expiry = result.rows?.[0]?.lease_expires_at;
+      if (result.rowCount !== 1 || !(expiry instanceof Date) ||
+          !Number.isSafeInteger(expiry.getTime()) ||
+          expiry.getTime() <= Date.now() ||
+          expiry.getTime() > Date.now() + 120000) return null;
+      return expiry;
+    },
     async assertDatasetBinding(fence, dataset, expectedWebId) {
       assertDisposable();
       assertFence(fence);
@@ -178,7 +196,10 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
         'EXECUTE') AS can_complete,
       has_function_privilege(current_user,
         'paper_account_reservation_proof.dataset_binding_is_live(text,text,uuid,uuid,text,text)',
-        'EXECUTE') AS can_issue`,[expectedRole]);
+        'EXECUTE') AS can_issue,
+      has_function_privilege(current_user,
+        'paper_account_reservation_proof.dataset_claim_lease(text,text,uuid,uuid,text,text)',
+        'EXECUTE') AS can_read_lease`,[expectedRole]);
   const row = result.rows[0];
   const safe = result.rowCount === 1 && row.version >= 180000 &&
     row.can_login === true && row.privileged === false &&
@@ -192,7 +213,8 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
     row.can_reserve === (kind === 'worker') &&
     row.can_start === (kind === 'worker') &&
     row.can_complete === (kind === 'worker') &&
-    row.can_issue === (kind === 'issuer');
+    row.can_issue === (kind === 'issuer') &&
+    row.can_read_lease === (kind === 'issuer');
   if (!safe) {
     const error = Error('Restricted pre-account PostgreSQL privileges are unsafe');
     error.code = 'ACCOUNT_RESERVATION_SQL_PRIVILEGES_UNSAFE';

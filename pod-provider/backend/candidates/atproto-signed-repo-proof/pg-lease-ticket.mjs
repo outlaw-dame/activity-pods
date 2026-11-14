@@ -7,6 +7,7 @@
  * neither an HTTP request nor an inherited broker context can select it.
  */
 const TABLE = 'paper_atproto_repo_proof.rdf_projection_jobs';
+const MUTATIONS = 'paper_atproto_repo_proof.record_mutations';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DID = /^did:plc:[a-z2-7]{24}$/u;
 const CID = /^bafyre[a-z2-7]{53}$/u;
@@ -101,6 +102,23 @@ export function createPgLeaseTicketIssuer({
            !REV.test(proof.previousRev || '') ||
            proof.previousRev >= proof.rev))) {
       rejected('PG_TICKET_SIGNED_HEAD_CHANGED');
+    }
+    if(generation>1){
+      // The trusted proof has verified the preceding signed CAR. Bind its
+      // parent to the immutable, indexed PostgreSQL audit for this exact
+      // generation so an injected verifier cannot select a different parent.
+      const mutation=await pool.query(
+        'SELECT previous_commit_cid,previous_root_cid,previous_rev '+
+        'FROM '+MUTATIONS+
+        ' WHERE did=$1 AND commit_cid=$2 AND generation=$3',
+        [claim.did,lease.head_cid,lease.generation]
+      );
+      if(mutation.rowCount!==1 ||
+         mutation.rows[0].previous_commit_cid!==proof.previousCommitCid ||
+         mutation.rows[0].previous_root_cid!==proof.previousRootCid ||
+         mutation.rows[0].previous_rev!==proof.previousRev){
+        rejected('PG_TICKET_SIGNED_HEAD_CHANGED');
+      }
     }
     const granted = await verifyCurrentSaiConsent({
       accountId: claim.accountId,

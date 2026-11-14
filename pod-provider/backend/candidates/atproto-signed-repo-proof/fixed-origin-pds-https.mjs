@@ -61,7 +61,7 @@ function checkedOrigin(value,disposable){
   try{u=new URL(value);}catch{deny('PDS_EGRESS_ORIGIN_INVALID');}
   if(typeof value!=='string'||value.length>512||
      u.origin!==value||u.protocol!=='https:'||
-     !u.hostname||net.isIP(u.hostname)!==0||
+     !u.hostname||u.hostname.startsWith('[')||net.isIP(u.hostname)!==0||
      u.username||u.password||u.search||u.hash||
      (!disposable&&u.port!=='')) {
     deny('PDS_EGRESS_ORIGIN_INVALID');

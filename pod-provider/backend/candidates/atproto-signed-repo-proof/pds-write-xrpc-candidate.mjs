@@ -131,22 +131,29 @@ export function createAuthenticatedRecordWriteXrpc({
     // from the client-chosen record, account URL or arbitrary URL parameter.
     const before=active(await resolveHostedAccount({did}),did,hostedOrigin);
     const header=req.headers.authorization;
-    if(typeof header!=='string'||!/^Bearer [A-Za-z0-9._~+\/-]{8,4096}$/u.test(header)){
+    const dpopProof=req.headers.dpop;
+    if(typeof header!=='string'||
+       !/^DPoP [A-Za-z0-9._~+\/-]{20,8192}={0,2}$/u.test(header)||
+       typeof dpopProof!=='string'||
+       !/^[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}$/u.test(dpopProof)){
       deny('AuthRequired',401);
     }
     // This provider callback MUST do actual OAuth audience/issuer, DPoP,
     // nonce, account and app-grant verification. The XRPC never decodes a
     // self-asserted JWT or trusts caller-provided consentRevision.
     const auth=await authorizeOwner({
-      authorization:header,method:'POST',
+      authorization:header,dpopProof,method:'POST',
       endpoint:'com.atproto.repo.'+(method==='put'?'putRecord':method+'Record'),
-      did,webId:before.webId,requiredPermission:'atproto:record-write'
+      did,webId:before.webId,collection:body.collection,
+      action:method,requiredPermission:'atproto:record-write'
     });
     if(auth?.verified!==true||auth?.ownerDid!==did||
       auth?.ownerWebId!==before.webId||
       auth?.permission!=='atproto:record-write'||
       auth?.dpopVerified!==true||auth?.issuerVerified!==true||
       auth?.audienceVerified!==true||
+      auth?.collection!==body.collection||auth?.action!==method||
+      typeof auth?.recheck!=='function'||
       typeof auth?.appUri!=='string'||typeof auth?.grantUri!=='string'||
       typeof auth?.consentRevision!=='string') {
       deny('AuthRequired',401);
@@ -209,16 +216,19 @@ export function createAuthenticatedRecordWriteXrpc({
     }
     const after=active(await resolveHostedAccount({did}),did,hostedOrigin);
     if(!same(before,after))deny('PDS_WRITE_HOSTING_CHANGED');
-    const renewed=await authorizeOwner({
-      authorization:header,method:'POST',endpoint:'com.atproto.repo.'+
-        (method==='put'?'putRecord':method+'Record'),
-      did,webId:before.webId,requiredPermission:'atproto:record-write'
-    });
+    // The signed DPoP proof was verified ONCE and its jti/nonce consumed
+    // atomically before the write. Rechecking the same proof here would
+    // incorrectly raise a replay AFTER committing the signed record.
+    // The provider returns a request-local closure that rereads token,
+    // client consent and canonical PG revision without reusing the proof.
+    const renewed=await auth.recheck();
     if(renewed?.verified!==true||renewed?.ownerDid!==did||
       renewed?.ownerWebId!==before.webId||
       renewed?.permission!=='atproto:record-write'||
       renewed?.dpopVerified!==true||renewed?.issuerVerified!==true||
       renewed?.audienceVerified!==true||
+      renewed?.collection!==body.collection||
+      renewed?.action!==method||
       renewed?.appUri!==auth.appUri||
       renewed?.grantUri!==auth.grantUri||
       renewed?.consentRevision!==auth.consentRevision){

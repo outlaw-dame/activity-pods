@@ -29,6 +29,7 @@ export async function createAttestedPgProjectionOperations({
   await assertRestrictedProjectionWorkerLogin(pool,{attestedOnly:true});
   const checked=()=>{if(!ENABLED())deny();};
   return Object.freeze({
+    requiresIndependentAttestation: true,
     async claim({accountId,did,owner,leaseSeconds,maxAttempts}){
       checked();
       return pool.query('SELECT * FROM paper_atproto_repo_proof.claim_verified_projection('+

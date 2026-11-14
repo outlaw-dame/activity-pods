@@ -31,9 +31,9 @@ export async function assertRestrictedRepoWriterLogin(pool){
       "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
       "WHERE nspname='paper_atproto_authority'),'MEMBER') AS authority_owner_member, "+
       "pg_catalog.has_schema_privilege(current_user,'paper_atproto_repo_proof','CREATE') AS schema_create, "+
-      "pg_catalog.has_table_privilege(current_user,'paper_atproto_repo_proof.blocks','INSERT') AS block_insert, "+
-      "pg_catalog.has_table_privilege(current_user,'paper_atproto_repo_proof.record_mutations','INSERT') AS mutation_insert, "+
-      "pg_catalog.has_table_privilege(current_user,'paper_atproto_repo_proof.native_event_outbox','INSERT') AS event_insert, "+
+      "pg_catalog.has_column_privilege(current_user,'paper_atproto_repo_proof.blocks','block','INSERT') AS block_insert, "+
+      "pg_catalog.has_column_privilege(current_user,'paper_atproto_repo_proof.record_mutations','commit_cid','INSERT') AS mutation_insert, "+
+      "pg_catalog.has_column_privilege(current_user,'paper_atproto_repo_proof.native_event_outbox','commit_cid','INSERT') AS event_insert, "+
       "pg_catalog.has_column_privilege(current_user,'paper_atproto_repo_proof.repos','head_cid','UPDATE') AS repo_head_update, "+
       "pg_catalog.has_column_privilege(current_user,'paper_atproto_repo_proof.rdf_projection_jobs','updated_at','UPDATE') AS projection_lock_update, "+
       "pg_catalog.has_column_privilege(current_user,'paper_atproto_repo_proof.rdf_projection_jobs','state','UPDATE') AS projection_state_update, "+

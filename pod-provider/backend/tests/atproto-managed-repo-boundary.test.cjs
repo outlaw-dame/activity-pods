@@ -107,8 +107,13 @@ test('bound signed repository is verified, sanitized and rechecked after write',
     const methods=service();
     const state=await methods.initializeRepoState(ctx,{canonicalAccountId:webId,did,handle});
     assert.equal(state.rootCid,rootCid);
-    assert.deepEqual(persisted,{canonicalAccountId:webId,did,handle,
-      repoInitialized:true,rootCid,rev});
+    assert.equal(persisted.canonicalAccountId, webId);
+    assert.equal(persisted.did, did);
+    assert.equal(persisted.handle, handle);
+    assert.equal(persisted.repoInitialized, true);
+    assert.equal(persisted.rootCid, rootCid);
+    assert.equal(persisted.rev, rev);
+    assert.equal(Object.keys(persisted).length, 6, 'no unverified fields persisted');
     await methods.verifyProvisionedState(ctx,{canonicalAccountId:webId,binding:binding(),didMethod:'plc'});
     assert.equal(checks,1);
     await assert.rejects(methods.verifyProvisionedState(ctx,{

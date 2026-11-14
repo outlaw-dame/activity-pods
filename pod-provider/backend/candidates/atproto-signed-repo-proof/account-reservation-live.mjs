@@ -213,6 +213,10 @@ async function prepare() {
       'SELECT ON paper_account_reservation_proof.daily_usage',
       'TRUNCATE ON paper_account_reservation_proof.reservations',
       'MAINTAIN ON paper_account_reservation_proof.daily_usage',
+      'SELECT (fence_token) ON paper_account_reservation_proof.reservations',
+      'UPDATE (reservation_id) ON paper_account_reservation_proof.reservations',
+      'INSERT (reserved_count) ON paper_account_reservation_proof.daily_usage',
+      'REFERENCES (username) ON paper_account_reservation_proof.reservations',
       'pg_monitor',
       'pg_read_all_data'
     ]) {

@@ -87,6 +87,9 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-commit-proof.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-commit-proof.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-redpanda-publisher.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-redpanda-receipts.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-redpanda-live.test.mjs
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
@@ -119,7 +122,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/atproto-reference"
           npm install --prefix "$RUNNER_TEMP/atproto-reference" \
             --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
-            @atproto/repo@0.11.0
+            @atproto/repo@0.11.0 kafkajs@2.2.4
           export ATPROTO_REFERENCE_REPO_ENTRY="$RUNNER_TEMP/atproto-reference/node_modules/@atproto/repo/dist/index.js"
           test -f "$ATPROTO_REFERENCE_REPO_ENTRY"
           node pod-provider/backend/candidates/atproto-signed-repo-proof/reference-interop.mjs
@@ -135,6 +138,56 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/native-commit-proof.test.mjs
+
+
+      - name: Start disposable pinned Redpanda 26.2.7 broker (local Kafka listener only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --rm --name paper-native-redpanda \
+            --publish 127.0.0.1:19092:19092 \
+            docker.redpanda.com/redpandadata/redpanda:v26.2.7 \
+            redpanda start \
+            --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092 \
+            --advertise-kafka-addr internal://127.0.0.1:9092,external://127.0.0.1:19092 \
+            --rpc-addr 0.0.0.0:33145 \
+            --advertise-rpc-addr 127.0.0.1:33145 \
+            --mode dev-container --smp 1 --default-log-level=warn
+          ready=false
+          for attempt in $(seq 1 45); do
+            if docker exec paper-native-redpanda rpk cluster info \
+              -X brokers=127.0.0.1:9092 >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = true
+
+      - name: Prove real all-ISR broker ACK, historic event bytes, replay dedupe and >1 MiB topic
+        env:
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+          ATPROTO_REDPANDA_TEST_DISPOSABLE: confirmed
+          ATPROTO_REDPANDA_BROKERS: '127.0.0.1:19092'
+          ATPROTO_REPO_PROOF_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ATPROTO_REFERENCE_REPO_ENTRY="$RUNNER_TEMP/atproto-reference/node_modules/@atproto/repo/dist/index.js"
+          export ATPROTO_KAFKAJS_ENTRY="$RUNNER_TEMP/atproto-reference/node_modules/kafkajs/index.js"
+          test -f "$ATPROTO_REFERENCE_REPO_ENTRY"
+          test -f "$ATPROTO_KAFKAJS_ENTRY"
+          node --test pod-provider/backend/candidates/atproto-signed-repo-proof/native-redpanda-live.test.mjs
+
+      - name: Disposable Redpanda failure diagnostics
+        if: failure()
+        shell: bash
+        run: docker logs --tail=200 paper-native-redpanda || true
+
+      - name: Destroy disposable Redpanda broker
+        if: always()
+        shell: bash
+        run: docker rm -f paper-native-redpanda || true
 
 
   real-fuseki-rdf-projection-fence:

@@ -17,7 +17,13 @@ module.exports = {
     noncePrefix: 'oauth:dpop:nonce',
     replayPrefix: 'oauth:replay:dpop-jti',
     nonceTtlSec: parseIntWithBounds(process.env.OAUTH_DPOP_NONCE_TTL_SECONDS, 120, 30, 600, 'OAUTH_DPOP_NONCE_TTL_SECONDS'),
-    replayTtlSec: parseIntWithBounds(process.env.OAUTH_DPOP_REPLAY_TTL_SECONDS, 300, 60, 3600, 'OAUTH_DPOP_REPLAY_TTL_SECONDS'),
+    // Proof iat is accepted in a ±300s window; reserve the jti long
+    // enough that a future-dated proof cannot be replayed after TTL expiry
+    // while still inside the accepted clock-skew window.
+    replayTtlSec: Math.max(660, parseIntWithBounds(
+      process.env.OAUTH_DPOP_REPLAY_TTL_SECONDS, 660, 60, 3600,
+      'OAUTH_DPOP_REPLAY_TTL_SECONDS'
+    )),
     allowLocalhostHttp: parseBoolean(process.env.OAUTH_ENABLE_LOCALHOST_DEV, false)
   },
 

@@ -67,6 +67,13 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
           PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
         run: node pod-provider/backend/scripts/proof-postgres-account-lifecycle.js
+      - name: Create an independent disposable completion database
+        run: |
+          set -euo pipefail
+          docker exec -e PGPASSWORD=bench paper-accounts-pg18 \
+            psql -h 127.0.0.1 -U postgres -X -v ON_ERROR_STOP=1 \
+            -d postgres -c 'CREATE DATABASE paper_account_completion_test'
+
       - name: Prove atomic new signup completion and revocation serialization
         env:
           NODE_PATH: /tmp/paper-accounts-pg/node_modules
@@ -74,7 +81,7 @@ jobs:
           PAPER_ACCOUNTS_DISPOSABLE: confirmed
           ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
           PAPER_ACCOUNT_COMPLETION_DISPOSABLE: confirmed
-          PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_accounts_test
+          PAPER_ACCOUNTS_TEST_DSN: postgresql://postgres:bench@127.0.0.1:5547/paper_account_completion_test
         run: node pod-provider/backend/scripts/proof-postgres-signup-atomic-completion.js
 
       - name: Verify PostgreSQL 18 full backup and exact account restore

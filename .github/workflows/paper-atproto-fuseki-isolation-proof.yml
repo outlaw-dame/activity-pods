@@ -44,6 +44,7 @@ jobs:
     env:
       NODE_ENV: test
       ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
+      APODS_ACCOUNT_RESERVATION_DISPOSABLE: confirmed
       ATPROTO_PROJECTION_ROLE_TEST_DISPOSABLE: confirmed
       ATPROTO_FUSEKI_ISOLATION_DISPOSABLE: confirmed
       FUSEKI_ISOLATION_URL: http://127.0.0.1:3041
@@ -72,6 +73,9 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/account-reservation-authority.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/account-reservation-child.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/account-reservation-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-service.mjs
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-child.mjs
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs
@@ -110,6 +114,11 @@ jobs:
           set -euo pipefail
           npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
 
+      - name: Prove durable PostgreSQL account reservation and cross-replica identity fencing
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/account-reservation-live.mjs prepare
+
       - name: Prove separate Fuseki dataset administrator with signed pre-account PG18 claim
         run: |
           set -euo pipefail
@@ -139,6 +148,11 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs verify
 
+      - name: Reconcile durable account reservation after new process and persistent Jena restart
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/account-reservation-live.mjs verify
+
       - name: Replay signed dataset-admin claim across process and persistent Jena restart
         run: |
           set -euo pipefail
@@ -148,6 +162,12 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs verify
+
+      - name: Destroy disposable account reservation ledger and restricted SQL principals
+        if: always()
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/account-reservation-live.mjs cleanup
 
       - name: Destroy disposable signed dataset-admin claims and SQL principals
         if: always()

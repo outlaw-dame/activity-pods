@@ -611,3 +611,34 @@ subscription cursor, consumer de-duplication, PDS relay or public
 firehose is enabled. This proof requires genuine provider Solid/SAI
 authorization, production-key isolation and multi-process restore/load
 acceptance before release. New-account production signup remains closed.
+
+
+## Historical native-event adjacency hardening (post-merge #188)
+
+Signed v3 commits intentionally use `prev:null`. The signature proves the
+current/parent bytes, **not** that the audit's claimed parent is the
+immediately preceding generation. A create/delete/create cycle can
+produce identical genesis and newer MST roots: an incorrect signed
+genesis parent might pass a single-path MST diff while yielding a
+false `since` and `prevData` in a native commit frame.
+
+Before emitting any generation N+1 event, the historical materializer
+now compares the claimed predecessor CID/revision with the immutable,
+unique, indexed `record_mutations(did,generation=N)` row. For
+generation 2 (where genesis has no mutation journal), it requires
+the **earliest** durable native-outbox event for that DID to match
+the signed genesis CID/revision, be earlier in sequence than the
+current event, and have **no** mutation audit. A regular
+`(did,id)` index preserves this proof after genesis has been
+delivered (and thus disappears from pending-only indexes). These are
+single-row indexed probes, not historical event scans.
+
+Real PostgreSQL 18 regression signs
+genesis -> create -> delete -> create, then replaces the generation-4
+journal parent with the genuine signed genesis CID/root/revision,
+leaving an otherwise valid SQL row and matching create diff. Event
+materialization must fail with
+`NATIVE_COMMIT_AUDIT_PREDECESSOR_MISMATCH`. Restoring the
+immediate predecessor recovers exact `since`/`prevData`.
+The same regression confirms generation-2 event recovery while
+genesis has already been acknowledged.

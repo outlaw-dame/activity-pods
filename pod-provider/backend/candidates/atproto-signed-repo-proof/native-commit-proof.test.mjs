@@ -316,6 +316,90 @@ test('historical signed native #commit is invertible from bounded proof CAR afte
       assert.equal(new Set(published.map(x=>x.idempotencyKey)).size,published.length);
     });
 
+    await t.test('a signed but nonadjacent genesis predecessor cannot forge create-delete-create history',async()=>{
+      const secondAccount='https://paper.example.org/users/native-adjacency';
+      const secondDid='did:plc:'+'p'.repeat(24);
+      const secondNative=createNativeCommitProof({
+        pool,reference,fixtureOnly:true,authorize:async()=>true
+      });
+      const origin=await genesis.bootstrap({
+        accountId:secondAccount,did:secondDid,...credentials
+      });
+      let state=origin;
+      const projectSecond=async()=>{
+        const r=await pool.query(
+          "UPDATE paper_atproto_repo_proof.rdf_projection_jobs "+
+          "SET state='applied',lease_epoch=lease_epoch+1,"+
+          "applied_at=clock_timestamp() WHERE account_id=$1 AND did=$2 "+
+          "AND head_cid=$3 AND state='pending' RETURNING generation",
+          [secondAccount,secondDid,state.commitCid]
+        );
+        assert.equal(r.rowCount,1);
+      };
+      await projectSecond();
+      const path=pathFor(99);
+      const mutation=async(action,text=null)=>{
+        const previous=state;
+        state=await writer.write({
+          accountId:secondAccount,did:secondDid,
+          expectedCommitCid:previous.commitCid,
+          expectedRev:previous.rev,...credentials,action,path,
+          record:text===null?null:post(99,text)
+        });
+        await projectSecond();
+        return state;
+      };
+      const first=await mutation('create','same data');
+      const erased=await mutation('delete');
+      const latest=await mutation('create','same data');
+      assert.equal(latest.generation,4);
+      assert.equal(latest.rootCid,first.rootCid,
+        'the signed latest and nonadjacent generation-2 tree have identical roots');
+      const args={accountId:secondAccount,did:secondDid,
+        commitCid:latest.commitCid,rev:latest.rev,
+        publicKeyPem:credentials.publicKeyPem};
+      const valid=await secondNative.materialize(args);
+      assert.equal(valid.event.since,erased.rev);
+      assert.equal(valid.event.prevData.toString(),erased.rootCid);
+      // A no-audit genesis event may already have been ACKed, so its
+      // identity cannot rely on an index restricted to pending status.
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.native_event_outbox SET "+
+        "status='delivered',delivered_at=clock_timestamp() "+
+        "WHERE did=$1 AND commit_cid=$2",[secondDid,origin.commitCid]
+      );
+      const secondGen=await secondNative.materialize({
+        ...args,commitCid:first.commitCid,rev:first.rev
+      });
+      assert.equal(secondGen.event.since,origin.rev);
+      const original=(await pool.query(
+        'SELECT previous_commit_cid,previous_root_cid,previous_rev '+
+        'FROM paper_atproto_repo_proof.record_mutations '+
+        'WHERE did=$1 AND commit_cid=$2',[secondDid,latest.commitCid]
+      )).rows[0];
+      await pool.query(
+        'UPDATE paper_atproto_repo_proof.record_mutations '+
+        'SET previous_commit_cid=$3,previous_root_cid=$4,previous_rev=$5 '+
+        'WHERE did=$1 AND commit_cid=$2',
+        [secondDid,latest.commitCid,origin.commitCid,origin.rootCid,origin.rev]
+      );
+      try {
+        await refuse(secondNative.materialize(args),
+          'NATIVE_COMMIT_AUDIT_PREDECESSOR_MISMATCH');
+      }finally {
+        await pool.query(
+          'UPDATE paper_atproto_repo_proof.record_mutations '+
+          'SET previous_commit_cid=$3,previous_root_cid=$4,previous_rev=$5 '+
+          'WHERE did=$1 AND commit_cid=$2',
+          [secondDid,latest.commitCid,original.previous_commit_cid,
+            original.previous_root_cid,original.previous_rev]
+        );
+      }
+      const restored=await secondNative.materialize(args);
+      assert.equal(restored.event.since,erased.rev);
+      assert.equal(restored.event.prevData.toString(),erased.rootCid);
+    });
+
     await t.test('production release boundary cannot be bypassed by an existing object',async()=>{
       const closed=createNativeCommitProof({
         pool,reference,authorize:async()=>true

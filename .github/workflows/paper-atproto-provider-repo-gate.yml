@@ -1,0 +1,44 @@
+name: Managed ATProto repository provisioning gate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/paper-atproto-provider-repo-gate.yml'
+      - 'pod-provider/backend/services/core/atproto-provisioning.js'
+      - 'pod-provider/backend/utils/atproto-managed-repo-proof-policy.js'
+      - 'pod-provider/backend/tests/atproto-managed-repo-boundary.test.cjs'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/paper-atproto-provider-repo-gate.yml'
+      - 'pod-provider/backend/services/core/atproto-provisioning.js'
+      - 'pod-provider/backend/utils/atproto-managed-repo-proof-policy.js'
+      - 'pod-provider/backend/tests/atproto-managed-repo-boundary.test.cjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-repo-release-fuse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax-check all touched runtime boundaries
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/services/core/atproto-provisioning.js
+          node --check pod-provider/backend/utils/atproto-managed-repo-proof-policy.js
+          node --check pod-provider/backend/tests/atproto-managed-repo-boundary.test.cjs
+      - name: Prove provider capability and release-fuse invariants
+        run: |
+          set -euo pipefail
+          node --test pod-provider/backend/tests/atproto-managed-repo-boundary.test.cjs

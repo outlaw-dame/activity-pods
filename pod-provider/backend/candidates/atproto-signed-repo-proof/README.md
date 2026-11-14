@@ -520,3 +520,45 @@ publisher, real protected Solid/SAI provider mutation authority,
 managed handle/PLC recovery, a revocation-safe PostgreSQL completion
 seal, backup/restore and measured replica-level throughput remain
 blocked. Existing-account/ATProto migration remains deferred.
+
+
+## Complete signed multi-record CARv1 export — bounded verification proof
+
+The new **nonactivated** `reference-mst-car-export.mjs` produces a
+complete CARv1 for a bounded repository snapshot, not a one-record
+placeholder. It requires the current authoritative PostgreSQL head to
+pass a trusted signed-v3 commit/MST verifier **and** the exact
+PG-to-Jena projection job to have reached `applied` at that same
+commit, root, revision and generation. Any blocked historical outbox
+event denies export. The trusted provider authorization callback is
+checked before and after traversal, and the signed head/projection
+read-back is repeated after output encoding.
+
+It walks the maintained upstream MST using its visited-CID/cycle
+protection, fetches reachable blocks by the exact `(did,cid)` primary
+key, verifies the SHA-256 digest of **every** returned DAG-CBOR block,
+and validates each record's path and collection-to-`$type` association.
+The signed commit is the CAR's only root and first block. Shared record
+CIDs are deduplicated in the archive but validated against each distinct
+record path. Orphaned historical content is never accidentally exported.
+
+**Bounded fixture limits:** 512 records, 1,024 MST nodes, at most 2 MB
+CAR output, 131,072 bytes per input block. A larger export fails closed;
+it is not silently truncated or reported successful. The implementation
+builds a buffer only inside disposable acceptance. A future production
+PDS must use a backpressure-aware streaming CAR exporter, a safe
+snapshot/revision consistency strategy, bounded per-subscriber and
+per-account memory, and the authentic hosting, account-status and
+Solid/SAI permission checks at the HTTP boundary.
+
+Real PostgreSQL 18 tests export empty genesis and a multi-level tree of
+28 signed records with updates/deletions, parse the complete CAR using
+the independent upstream `readCarWithRoot`, reconstruct the tree with
+the upstream `MemoryBlockstore`, validate every reachable record
+CID, and reject oversized exports. A corrupt nonfirst record is detected
+even when the signed head remains valid; an unapplied projection,
+revoked provider authorization or changed projection during export
+cannot return success. Existing production no-signup and no-XRPC fuses
+remain closed. This is a prerequisite for production `getRepo` and
+for signed native `#commit` event diff CAR materialization, not their
+activation.

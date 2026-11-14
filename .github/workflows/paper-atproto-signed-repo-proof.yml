@@ -83,6 +83,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-generation-ticket.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.test.mjs
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
 
       - name: Install integrity-locked proof dependencies (no lifecycle scripts)
@@ -125,6 +127,9 @@ jobs:
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
             node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.test.mjs
+          ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \
+          ATPROTO_REPO_PROOF_DSN=postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test \
+            node --test pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-car-export.test.mjs
 
 
   real-fuseki-rdf-projection-fence:

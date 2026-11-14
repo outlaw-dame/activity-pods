@@ -59,22 +59,39 @@ export function createNativeOutboxDispatcher({
   }
   async function claimOne() {
     const owner=crypto.randomUUID();
+    // The claimant itself must recover abandoned *exhausted* leases.
+    // Merely checking maxAttempts inside failDelivery() cannot handle a
+    // worker that dies or loses its PG connection after publishing.
+    //
+    // ONE due row per invocation: no unbounded global expiration scan.
+    // The row lock makes the terminal transition atomic against a current
+    // lease ACK/failure and competing workers. Never increment a counter or
+    // publish a new attempt after the configured limit is exhausted.
     const r=await pool.query(
-      'WITH candidate AS (SELECT e.id FROM '+TABLE+' e '+
+      'WITH candidate AS (SELECT e.id,'+
+      '(e.attempt_count >= $3::int OR '+
+      ' e.lease_epoch >= 9223372036854775807) AS exhausted '+
+      'FROM '+TABLE+' e '+
       "WHERE e.status='pending' AND e.blocked_at IS NULL "+
-      'AND e.next_attempt_at<=clock_timestamp() '+
+      'AND (e.next_attempt_at<=clock_timestamp() OR '+
+      'e.attempt_count >= $3::int OR e.lease_epoch >= 9223372036854775807) '+
       'AND (e.lease_until IS NULL OR e.lease_until<=clock_timestamp()) '+
-      'AND e.lease_epoch<9223372036854775807 '+
       'AND NOT EXISTS (SELECT 1 FROM '+TABLE+' older '+
       "WHERE older.did=e.did AND older.id<e.id AND older.status='pending') "+
       'ORDER BY e.id LIMIT 1 FOR UPDATE OF e SKIP LOCKED) '+
-      'UPDATE '+TABLE+' o SET lease_owner=$1::uuid,'+
-      "lease_until=clock_timestamp()+($2::int*interval '1 second'),"+
-      'lease_epoch=o.lease_epoch+1,attempt_count=o.attempt_count+1 '+
-      'FROM candidate WHERE o.id=candidate.id AND o.status=$3 '+
+      'UPDATE '+TABLE+' o SET '+
+      'lease_owner=CASE WHEN candidate.exhausted THEN NULL ELSE $1::uuid END,'+
+      "lease_until=CASE WHEN candidate.exhausted THEN NULL ELSE "+
+      "clock_timestamp()+($2::int*interval '1 second') END,"+
+      'lease_epoch=o.lease_epoch+CASE WHEN candidate.exhausted THEN 0 ELSE 1 END,'+
+      'attempt_count=o.attempt_count+CASE WHEN candidate.exhausted THEN 0 ELSE 1 END,'+
+      'blocked_at=CASE WHEN candidate.exhausted THEN clock_timestamp() ELSE NULL END,'+
+      "last_error_code=CASE WHEN candidate.exhausted THEN "+
+      "'NATIVE_RETRY_EXHAUSTED' ELSE NULL END "+
+      'FROM candidate WHERE o.id=candidate.id AND o.status=$4 '+
       'RETURNING o.id,o.did,o.commit_cid,o.rev,o.kind,'+
-      'o.lease_epoch,o.lease_owner,o.attempt_count',
-      [owner,leaseSeconds,'pending']
+      'o.lease_epoch,o.lease_owner,o.attempt_count,o.blocked_at',
+      [owner,leaseSeconds,maxAttempts,'pending']
     );
     return r.rowCount===1 ? r.rows[0] : null;
   }
@@ -144,6 +161,10 @@ export function createNativeOutboxDispatcher({
     enabled(fixtureOnly);
     const claim=await claimOne();
     if(!claim)return Object.freeze({claimed:false});
+    if(claim.blocked_at!==null){
+      // The exhausted claim is now durably blocked; no broker call occurs.
+      return Object.freeze({claimed:false,blocked:true,exhausted:true});
+    }
     validateLease(claim);
     const idempotencyKey='at.commit.v1:'+claim.did+':'+claim.commit_cid;
     // Transport implementations must honor this signal; a callback that

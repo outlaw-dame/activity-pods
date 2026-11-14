@@ -96,6 +96,18 @@ module.exports = {
         force: { type: 'boolean', optional: true, default: false }
       },
       async handler(ctx) {
+        // This direct Moleculer action is also an identity-minting entry
+        // point, even when neither HTTP signup facade is called. Apply the
+        // current production release fuse BEFORE any binding lookup, key
+        // generation, PLC submission or other irreversible side effect.
+        if (process.env.NODE_ENV === 'production') {
+          throw new MoleculerError(
+            'Managed ATProto repository creation is not released for new accounts',
+            503,
+            'ATPROTO_PDS_REPOSITORY_NOT_READY',
+            { retryable: false }
+          );
+        }
         const { canonicalAccountId, webId, requestedHandle, activityPubActorId, activityPubHandle, didMethod, force } =
           ctx.params;
 

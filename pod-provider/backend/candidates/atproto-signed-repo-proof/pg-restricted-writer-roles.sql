@@ -50,6 +50,33 @@ GRANT INSERT (did,commit_cid,previous_commit_cid,previous_root_cid,
   previous_rev,rev,action,path,previous_record_cid,record_cid,generation)
   ON paper_atproto_repo_proof.record_mutations TO paper_atproto_repo_writer;
 
+-- PostgreSQL SELECT ... FOR SHARE requires an UPDATE privilege on at
+-- least one column. Do NOT grant any canonical grant/identity UPDATE to the
+-- signed writer. Instead expose exactly one read-only, row-locking SECURITY
+-- DEFINER function. Its locks survive until the caller's transaction COMMIT;
+-- the writer cannot escalate to regrant or mutate the underlying tables.
+CREATE OR REPLACE FUNCTION paper_atproto_authority.lock_writer_consent(
+  p_owner text, p_did text, p_app text, p_grant text, p_revision bigint)
+RETURNS boolean
+LANGUAGE SQL VOLATILE SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp
+AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM paper_atproto_authority.consents AS c
+    JOIN paper_atproto_authority.identities AS i
+      ON i.owner_webid=c.owner_webid
+    WHERE c.owner_webid=p_owner AND c.app_uri=p_app
+      AND c.grant_uri=p_grant AND c.state='active'
+      AND c.revision=p_revision
+      AND i.did=p_did AND i.state='active' AND i.managed=true
+    FOR SHARE OF c,i
+  )
+$function$;
+REVOKE ALL ON FUNCTION paper_atproto_authority.lock_writer_consent(
+  text,text,text,text,bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paper_atproto_authority.lock_writer_consent(
+  text,text,text,text,bigint) TO paper_atproto_repo_writer;
+
 -- The ONLY writer-accessible transition of a previously applied RDF
 -- projection is a CAS reset to pending, referencing the exact signed-head
 -- advance, new durable native event and immutable mutation history.

@@ -62,44 +62,57 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
   async function verify({ accountId, did, publicKeyPem }) {
     assertAccountId(accountId);
     assertManagedDid(did);
-    const rows = await pool.query(
-      'SELECT account_id, did, rev, head_cid, root_cid FROM paper_atproto_repo_proof.repos WHERE account_id = $1 AND did = $2',
+    // One PostgreSQL statement supplies the repo head, both CID-addressed
+    // blocks and its native-event/poison state from ONE MVCC snapshot.
+    // Separate SELECTs could combine a superseded head with a newer outbox
+    // or vice versa while a concurrent signed-record transaction commits.
+    // Do not hold a pooled connection or database lock during CAR validation.
+    const snapshot = await pool.query(
+      `SELECT r.rev, r.head_cid, r.root_cid,
+              commit_block.block AS commit_bytes,
+              mst_block.block AS root_bytes,
+              event.id AS outbox_id, event.kind AS outbox_kind,
+              event.status AS outbox_status, event.rev AS outbox_rev,
+              event.blocked_at AS outbox_blocked_at,
+              EXISTS (
+                SELECT 1 FROM paper_atproto_repo_proof.native_event_outbox blocked
+                WHERE blocked.did = r.did AND blocked.status = 'pending'
+                  AND blocked.blocked_at IS NOT NULL
+              ) AS blocked_history
+         FROM paper_atproto_repo_proof.repos r
+         LEFT JOIN paper_atproto_repo_proof.blocks commit_block
+           ON commit_block.did = r.did AND commit_block.cid = r.head_cid
+         LEFT JOIN paper_atproto_repo_proof.blocks mst_block
+           ON mst_block.did = r.did AND mst_block.cid = r.root_cid
+         LEFT JOIN paper_atproto_repo_proof.native_event_outbox event
+           ON event.did = r.did AND event.commit_cid = r.head_cid
+        WHERE r.account_id = $1 AND r.did = $2`,
       [accountId, did]
     );
-    if (rows.rowCount !== 1) fail('ATPROTO_REPO_NOT_FOUND', 'No authoritative repository is stored for this account');
-    const row = rows.rows[0];
-    const blocks = await pool.query(
-      'SELECT cid, block FROM paper_atproto_repo_proof.blocks WHERE did = $1 AND cid IN ($2, $3)',
-      [did, row.head_cid, row.root_cid]
-    );
-    if (blocks.rowCount !== 2) fail('ATPROTO_REPO_BLOCKS_MISSING', 'Repository commit or MST block is missing');
-    const byCid = new Map(blocks.rows.map(block => [block.cid, block.block]));
+    if (snapshot.rowCount !== 1) {
+      fail('ATPROTO_REPO_NOT_FOUND', 'No authoritative repository is stored for this account');
+    }
+    const row = snapshot.rows[0];
+    if (!Buffer.isBuffer(row.commit_bytes) || !Buffer.isBuffer(row.root_bytes)) {
+      fail('ATPROTO_REPO_BLOCKS_MISSING', 'Repository commit or MST block is missing');
+    }
     const carBytes = await carFromBlocks({
       commitCid: row.head_cid,
       rootCid: row.root_cid,
-      commitBytes: byCid.get(row.head_cid),
-      rootBytes: byCid.get(row.root_cid)
+      commitBytes: row.commit_bytes,
+      rootBytes: row.root_bytes
     });
     const verified = await verifySignedEmptyRepo({ did, carBytes, publicKeyPem });
     if (verified.commitCid !== row.head_cid || verified.rootCid !== row.root_cid ||
         verified.rev !== row.rev) {
       fail('ATPROTO_REPO_HEAD_MISMATCH', 'Stored head and independently verified CAR disagree');
     }
-    const outbox = await pool.query(
-      'SELECT id,kind,status,rev,blocked_at,'+
-      'EXISTS (SELECT 1 FROM paper_atproto_repo_proof.native_event_outbox blocked '+
-      "WHERE blocked.did=$1 AND blocked.status='pending' "+
-      'AND blocked.blocked_at IS NOT NULL) AS blocked_history '+
-      'FROM paper_atproto_repo_proof.native_event_outbox '+
-      'WHERE did=$1 AND commit_cid=$2',
-      [did, row.head_cid]
-    );
-    if (outbox.rowCount !== 1 || outbox.rows[0].kind !== 'at.commit.v1' ||
-        outbox.rows[0].rev !== row.rev) {
+    if (row.outbox_id == null || row.outbox_kind !== 'at.commit.v1' ||
+        row.outbox_rev !== row.rev) {
       fail('ATPROTO_REPO_OUTBOX_MISSING', 'Native event outbox must be committed with the repository');
     }
-    if (outbox.rows[0].blocked_at !== null ||
-        outbox.rows[0].blocked_history === true) {
+    if (row.outbox_blocked_at !== null ||
+        row.blocked_history === true) {
       fail('ATPROTO_REPO_OUTBOX_BLOCKED', 'Native event needs explicit provider recovery');
     }
     return Object.freeze({
@@ -107,7 +120,7 @@ export function createSignedRepoProofStore({ pool, fixtureOnly = false } = {}) {
       rev: verified.rev, rootCid: verified.rootCid,
       commitCid: verified.commitCid,
       carBytes,
-      outboxStatus: outbox.rows[0].status,
+      outboxStatus: row.outbox_status,
       verified: true
     });
   }

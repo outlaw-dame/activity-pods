@@ -173,6 +173,48 @@ test('PG18 signed v3 empty repository proof — trusted signing, atomic DB, reco
       );
     });
 
+
+    await t.test('readiness observes repo, signed blocks and event fence in one indexed PG snapshot', async () => {
+      const f = fixture();
+      const acc = account('snapshot');
+      const id = did('snapshot');
+      const signed = await store.bootstrap({ accountId: acc, did: id, ...f });
+      const statements = [];
+      // A wrapper around the REAL PostgreSQL pool counts readiness reads,
+      // without replacing its SQL, transaction isolation or cryptographic data.
+      const observed = createSignedRepoProofStore({
+        pool: {
+          connect: () => pool.connect(),
+          async query(...args) {
+            statements.push(typeof args[0] === 'string' ? args[0] : args[0].text);
+            return pool.query(...args);
+          }
+        },
+        fixtureOnly: true
+      });
+      const result = await observed.verify({
+        accountId: acc, did: id, publicKeyPem: f.publicKeyPem
+      });
+      assert.equal(result.commitCid, signed.commitCid);
+      assert.equal(result.rootCid, signed.rootCid);
+      assert.equal(result.outboxStatus, 'pending');
+      assert.equal(statements.length, 1, 'verified readback must use a single database snapshot');
+      assert.match(statements[0], /JOIN paper_atproto_repo_proof\.blocks/i);
+      assert.match(statements[0], /JOIN paper_atproto_repo_proof\.native_event_outbox/i);
+
+      // A blocked predecessor must not be hidden by a seemingly valid head.
+      await pool.query(
+        "UPDATE paper_atproto_repo_proof.native_event_outbox SET blocked_at=clock_timestamp() " +
+        "WHERE did=$1 AND commit_cid=$2 AND status='pending'",
+        [id, signed.commitCid]
+      );
+      await assert.rejects(
+        observed.verify({ accountId: acc, did: id, publicKeyPem: f.publicKeyPem }),
+        error => error.code === 'ATPROTO_REPO_OUTBOX_BLOCKED'
+      );
+      assert.equal(statements.length, 2, 'blocked readback must also stay single-query');
+    });
+
     await t.test('lost COMMIT reply requires read-only recovery, never a second genesis', async () => {
       const f = fixture();
       const acc = account('commit-unknown');

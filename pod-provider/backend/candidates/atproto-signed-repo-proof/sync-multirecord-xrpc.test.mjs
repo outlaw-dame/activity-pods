@@ -10,6 +10,7 @@ import http from 'node:http';
 import {test} from 'node:test';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {Pool} from 'pg';
+import * as cbor from '@ipld/dag-cbor';
 import {createSignedRepoProofStore} from './store.mjs';
 import {createReferenceMstWriter} from './reference-mst-writer.mjs';
 import {createReferenceMstCarExporter} from './reference-mst-car-export.mjs';
@@ -206,11 +207,10 @@ test('real PG18 signed multi-record XRPC exports only same-head hosting/SAI-read
       for(const leaf of leaves){
         const bytes=parsed.blocks.get(leaf.value);
         assert(bytes,'full CAR must contain every referenced record');
-        const rec=reference.cborToLexRecord?
-          reference.cborToLexRecord(bytes):null;
-        assert(rec?.$type===wanted.get(leaf.key)?.$type ||
-          Boolean(bytes),'upstream parser must find expected record bytes');
         assert(wanted.has(leaf.key));
+        const rec=cbor.decode(bytes);
+        assert.deepEqual(rec,wanted.get(leaf.key),
+          'all 20 independently decoded records must exactly match their signed content');
       }
       const latest=await get(endpoint('getLatestCommit'));
       assert.equal(latest.status,200);

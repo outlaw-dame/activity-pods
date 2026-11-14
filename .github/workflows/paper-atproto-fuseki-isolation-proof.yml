@@ -71,6 +71,9 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-service.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-child.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs
 
       - name: Prepare fresh temporary Fuseki security configuration
         run: |
@@ -103,6 +106,11 @@ jobs:
           set -euo pipefail
           npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
 
+      - name: Prove separate Fuseki dataset administrator with signed pre-account PG18 claim
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs prepare
+
       - name: Verify independent PG18 attestor, protected Jena RDF and revocation race
         run: |
           set -euo pipefail
@@ -127,10 +135,21 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs verify
 
+      - name: Replay signed dataset-admin claim across process and persistent Jena restart
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs verify
+
       - name: Prove independent protected-RDF receipt after persistent Jena restart
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs verify
+
+      - name: Destroy disposable signed dataset-admin claims and SQL principals
+        if: always()
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs cleanup
 
       - name: Destroy disposable PostgreSQL schemas and restricted credentials
         if: always()

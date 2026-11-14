@@ -297,7 +297,7 @@ test('provider-authorized bridge: actual PG18 signed repo, identity drift and du
         }
         const requireLocal = createRequire(import.meta.url);
         const loader = vm.runInNewContext(
-          '(function(require,module){\\n' + source + '\\n})',
+          '(function(require,module){\n' + source + '\n})',
           { process, URL, Buffer, console, setTimeout, clearTimeout }
         );
         loader(name => {

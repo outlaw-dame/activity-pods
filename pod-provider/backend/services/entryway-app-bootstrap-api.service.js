@@ -188,6 +188,28 @@ module.exports = {
             403, 'BOOTSTRAP_OWNER_UNVERIFIED');
         }
 
+        if (durableProof.consentRevision) {
+          // The v5 SQL candidate proves WebID/AP/AT account identity, but
+          // the Pod storage URL is owned by Solid, not a second PG table.
+          // Resolve it through the actual provider service. An unverified
+          // client-supplied storage URL must never be marked ready.
+          let actualStorageUrl;
+          try {
+            actualStorageUrl = await ctx.call(
+              'solid-storage.getUrl', { webId }, { timeout: 3000 }
+            );
+          } catch {
+            throw new MoleculerError('Current Pod storage authority is unavailable',
+              503, 'BOOTSTRAP_STORAGE_UNVERIFIED', { retryable: true });
+          }
+          if (typeof actualStorageUrl !== 'string' ||
+              this.assertAbsoluteHttpUrl(actualStorageUrl, 'podStorageUrl') !==
+              this.assertAbsoluteHttpUrl(ctx.params.podStorageUrl, 'podStorageUrl')) {
+            throw new MoleculerError('Bootstrap storage URL differs from Pod owner',
+              409, 'BOOTSTRAP_STORAGE_MISMATCH', { retryable: false });
+          }
+        }
+
         // Provider approval is NOT consent from the Pod owner. Only the
         // existing authenticated SAI authorization-agent flow may create
         // grants. Entryway confirms the owner's already persisted decision.

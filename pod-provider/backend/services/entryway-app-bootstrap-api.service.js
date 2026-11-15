@@ -163,7 +163,7 @@ module.exports = {
         // Verify the exact previously completed signup in the provider-owned
         // ledger, then independently check that the canonical local account
         // still exists and is not disabled before creating any SAI rights.
-        await ctx.call('provider-capabilities.assertCompletedAccountBootstrap', {
+        const readinessScope = {
           appClientId: appConfig.appClientId,
           idempotencyKey: ctx.params.idempotencyKey,
           username: ctx.params.username,
@@ -173,7 +173,14 @@ module.exports = {
           podStorageUrl: this.assertAbsoluteHttpUrl(ctx.params.podStorageUrl, 'podStorageUrl'),
           atprotoDid: ctx.params.atprotoDid,
           atprotoHandle: ctx.params.atprotoHandle
-        });
+        };
+        const durableProof = await ctx.call(
+          'provider-capabilities.assertCompletedAccountBootstrap', readinessScope
+        );
+        if (durableProof?.verified !== true) {
+          throw new MoleculerError('Durable account authority could not be confirmed',
+            503, 'BOOTSTRAP_DURABLE_AUTHORITY_REQUIRED', { retryable: false });
+        }
         const account = await ctx.call('auth.account.findByWebId', { webId });
         if (!account || account.disabled === true ||
             account.username !== ctx.params.username) {
@@ -214,6 +221,11 @@ module.exports = {
           }
           return this.assertAbsoluteHttpUrl(grant.id || grant['@id'], 'accessGrantUri');
         });
+        if (durableProof.grantUri && !grantUris.includes(durableProof.grantUri)) {
+          throw new MoleculerError('The canonical PostgreSQL grant differs from Pod SAI',
+            409, 'BOOTSTRAP_CANONICAL_SAI_MISMATCH', { retryable: false });
+        }
+
         // Linked access-grant IDs must match the live grant set exactly.
         // A revoked grant must never be acknowledged by stale registration.
         const linkedGrants = asArray(appRegistration['interop:hasAccessGrant'])
@@ -246,6 +258,24 @@ module.exports = {
                 normalizeString(authorization['interop:satisfiesAccessNeed']))) {
             throw new MoleculerError('SAI data authorization exceeds approved application policy',
               409, 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH');
+          }
+        }
+
+        // The first PostgreSQL snapshot is not a durable lease on SAI
+        // permission. Recheck the exact same account and consent revision
+        // after the Pod RDF read; the final response creates no new rights.
+        if (durableProof.consentRevision) {
+          const finalProof = await ctx.call(
+            'provider-capabilities.assertCompletedAccountBootstrap', readinessScope
+          );
+          if (!finalProof || finalProof.verified !== true ||
+              finalProof.accountId !== durableProof.accountId ||
+              finalProof.accountGeneration !== durableProof.accountGeneration ||
+              finalProof.consentRevision !== durableProof.consentRevision ||
+              finalProof.grantUri !== durableProof.grantUri ||
+              !grantUris.includes(finalProof.grantUri)) {
+            throw new MoleculerError('Canonical account consent changed during bootstrap',
+              409, 'BOOTSTRAP_CANONICAL_SAI_MISMATCH', { retryable: false });
           }
         }
 

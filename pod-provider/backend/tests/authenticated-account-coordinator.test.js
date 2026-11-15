@@ -231,6 +231,21 @@ test('wrong app credentials, missing origin, redirect mismatch and user verifica
     expect(create).not.toHaveBeenCalled();
   }finally{await broker.stop();global.fetch=orig;}
 });
+test('conflicting header and body idempotency keys are refused before coordinator admission',async()=>{
+  const f=makeFetch(),original=global.fetch;
+  global.fetch=f;
+  const{broker,create}=await setup();
+  try{
+    await expect(broker.call('unified-account-api.create',
+      request({idempotencyKey:'different-durable-key'}),
+      {meta:{$headers:headers()}})).rejects.toMatchObject({
+      code:400,type:'ACCOUNT_COORDINATOR_IDEMPOTENCY_SCOPE_CONFLICT',
+      data:{retryable:false}
+    });
+    expect(f).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  }finally{await broker.stop();global.fetch=original;}
+});
 test('an external ticket, fence or grant is rejected without authorizing or contacting the coordinator',async()=>{
   const f=makeFetch(),orig=global.fetch;global.fetch=f;
   const {broker,create}=await setup();

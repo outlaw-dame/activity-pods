@@ -253,6 +253,7 @@ module.exports = {
         "Vous ne pouvez pas ajouter d'adresses car votre hébergeur n'a pas configuré d'access token pour MapBox"
     },
     message: {
+      authorization_verification_failed: "Impossible de vérifier l’autorisation du fournisseur ou d’ouvrir l’application en toute sécurité. Vérifiez la session du Pod et l’adresse de retour de l’application.",
       copied_to_clipboard: 'Copié !',
       creating_invite_link: 'Créer...',
       loading_invite_link: 'Chargement en cours...',

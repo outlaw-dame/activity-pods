@@ -2,6 +2,8 @@ const { assertUnifiedRequest } = require('../utils/unified-identity-policy');
 const { Errors } = require('moleculer');
 const { MoleculerError } = Errors;
 const crypto = require('crypto');
+const {coordinatedDisposableSignup}
+  = require('./utils/atproto-account-coordinated-signup');
 
 module.exports = {
   name: 'unified-account-api',
@@ -40,6 +42,20 @@ module.exports = {
           'UNIFIED_ACCOUNT_RELEASE_GATE_CLOSED',
           { retryable: false }
         );
+      }
+      // Never let an HTTP caller supply a previously issued claim or an
+      // apparent grant; those belong exclusively to the trusted coordinator.
+      const rawParams=ctx.params||{};
+      if (Object.keys(rawParams).some(key=>[
+        'datasetAdminTicket','accountCoordinatorTicket','accountCoordinatorProof',
+        'accountProvisioning','reservationId','fenceToken','dailyLimit',
+        'requestFingerprint','issuer','signedTicket'
+      ].includes(key))) {
+        throw new MoleculerError('Client-supplied account coordinator authority is forbidden',
+          400,'ACCOUNT_COORDINATOR_INPUT_DENIED',{retryable:false});
+      }
+      if (process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE === 'confirmed') {
+        return coordinatedDisposableSignup({ctx,api:this});
       }
       let provisioningGrant = null;
       let accountCreationStarted = false;

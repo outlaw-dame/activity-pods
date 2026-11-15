@@ -9,6 +9,8 @@ on:
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
       - 'pod-provider/backend/services/core/triplestore.js'
       - 'pod-provider/backend/services/core/dataset-provisioning.js'
+      - 'pod-provider/backend/services/core/auth.js'
+      - 'pod-provider/backend/tests/auth-signup-durable-dataset-ticket.test.js'
       - 'pod-provider/backend/services/utils/atproto-dataset-admin-delegation.js'
       - 'pod-provider/backend/services/solid/storage.js'
       - 'pod-provider/backend/services/identitybindings.service.js'
@@ -74,6 +76,9 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/account-reservation-authority.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/account-reservation-issuer.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/account-reservation-issuer-child.mjs
+          node --check backend/services/core/auth.js
           node --check backend/candidates/atproto-signed-repo-proof/account-reservation-child.mjs
           node --check backend/candidates/atproto-signed-repo-proof/account-reservation-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-service.mjs

@@ -344,3 +344,74 @@ auto-release unknown outcomes. Remove Jena administrator credentials
 from ordinary provider processes, prove native protected-storage
 isolation and SAI revocation, and measure two-replica load and cost
 before considering the source-controlled production release change.
+
+## P1d — reservation-checked independent signer and real signup handoff (disposable)
+
+The previous dataset-admin proof signed a synthetic reservation without
+consulting the actual canonical account ledger. This gate removes that
+artificial trust gap **in the disposable PostgreSQL 18 / Jena acceptance
+workflow**:
+
+- A restricted SQL *worker* obtains the one-time PostgreSQL reservation
+  fence for a single canonical new username and commits
+  `start_side_effects` before any dataset creation. A concurrent replay
+  cannot recover that fence or claim a different WebID.
+- An independent Ed25519 issuer subprocess starts with a **positive
+  environment allowlist**: only the restricted *issuer* PostgreSQL DSN,
+  private signing key, specific reservation reference, and test flags.
+  It never inherits the harness superuser DSN, worker SQL credential,
+  dataset administrator secret, or generic provider environment.
+- The issuer's least-privileged SQL function
+  `dataset_claim_lease` returns a server-clock expiry only for the
+  **same provider/app/reservation/fence/dataset/expected WebID** in
+  `side_effects_started`, before the lease expires. It cannot enumerate
+  reservations or mutate the table. This is checked by SQL grant
+  admission, plus adversarial wrong-token and wrong-dataset calls.
+- The signer derives the identity, claim audience, expiry and nonce from
+  the PostgreSQL-admitted reservation, not from caller-selected input.
+  The reservation UUID is the nonce; the initial 120-second lease
+  determines the issued/expiry timestamps. Repeating an issuance in a
+  freshly started signer returns the **same signed ticket**, preventing
+  a conflicting digest against the administrator's immutable
+  one-dataset claim. No renewal or second signer fence occurs.
+- The same signed ticket is submitted to the actual independent
+  `POST /v1/provision` admin child, which verifies Ed25519 and its
+  immutable claim ledger, makes the real TDB2 dataset, and verifies it.
+  The separately spawned ordinary-provider client then replays the
+  ticket without any SQL/admin/signing credential, including after
+  persistent Fuseki and process restart. A PG restart-read independently
+  checks the original canonical reservation remains fenced rather than
+  marked complete merely because an empty dataset exists.
+
+The actual `auth.signup` Moleculer action now has a **test-only**
+operation-scoped `datasetAdminTicket` parameter; it passes the ticket
+exclusively to `dataset-provisioning.ensureSecureDataset`. The ticket
+is removed from the signup `rest` object before account
+`pickAccountData`, WebID creation, event publication, or profile
+materialization. Unsupported modes reject any injected ticket before
+moderation/dataset/account side effects. Missing tickets in the
+disposable delegation mode fail closed. Unit tests exercise the actual
+signup handler, not a replacement API façade.
+
+**Production NO-GO remains:** The ordinary real provider has not been
+given a trusted, authenticated PostgreSQL worker client or an issuer
+endpoint, and `provider-capabilities.reserveAccountProvisioning` is
+still backed by a nonproduction Map in the normal test mode. This
+candidate does **not** expose a public ticket-issuing API, alter the
+unified-account API to accept caller-provided fences, or enable
+production account creation. In particular, a signed dataset-creation
+ticket is **not** a complete authorization to mint WebID/DID identities:
+future production admission must atomically consume a fresh fence in the
+trusted account coordinator and ensure no duplicate registration across
+multiple provider replicas. Actual signed PDS evidence validation and
+native Solid/SAI storage isolation are still pending.
+
+Next: implement an authenticated, rate-bounded coordinator route that
+bridges verified provider app grants to the PostgreSQL worker, then
+wire the coordinator-issued operation-scoped claim via `accounts.create`
+to `auth.signup` with no inherited Moleculer metadata. Reconcile the
+WebID/ActivityPub/DID/PDS receipts before PostgreSQL completion.
+Deploy issuer, privileged dataset admin and ordinary provider under
+physically distinct secrets, principals and network boundaries. Preserve
+the source-controlled production signup and protected-storage fuses
+until all acceptance and performance gates pass.

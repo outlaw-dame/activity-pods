@@ -54,7 +54,27 @@ module.exports = {
         );
       }
 
-      const { username, email, password, ...rest } = ctx.params;
+      // A signed dataset ticket is an operation-scoped bearer capability.
+      // Never include it in rest: rest becomes account profile data,
+      // WebID attributes and the auth.registered event payload.
+      const { username, email, password, datasetAdminTicket, ...rest } = ctx.params;
+      const delegatedDatasetProof =
+        process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed';
+      if (datasetAdminTicket !== undefined && !delegatedDatasetProof) {
+        throw new MoleculerError(
+          'Signed dataset claim is unavailable outside disposable admission',
+          503, 'ACCOUNT_DATASET_CLAIM_NOT_RELEASED', { retryable: false }
+        );
+      }
+      if (delegatedDatasetProof &&
+          (process.env.NODE_ENV !== 'test' ||
+           process.env.APODS_ACCOUNT_RESERVATION_DISPOSABLE !== 'confirmed' ||
+           !datasetAdminTicket || typeof datasetAdminTicket !== 'object')) {
+        throw new MoleculerError(
+          'Durable pre-account reservation claim is required',
+          503, 'ACCOUNT_RESERVATION_REQUIRED', { retryable: false }
+        );
+      }
 
       ctx.meta.skipObjectsWatcher = true;
       this.logger.info(`[Auth] signup start for ${username}`);
@@ -68,7 +88,8 @@ module.exports = {
         this.logger.info(`[Auth] signup moderation passed for ${username}`);
 
         await ctx.call('dataset-provisioning.ensureSecureDataset', {
-          dataset: String(username).trim().toLowerCase()
+          dataset: String(username).trim().toLowerCase(),
+          ...(delegatedDatasetProof ? { datasetAdminTicket } : {})
         });
 
         const datasetExists = await ctx.call('triplestore.dataset.exist', {

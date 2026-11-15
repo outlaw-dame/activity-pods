@@ -161,6 +161,7 @@ module.exports = {
     this.dailyUsage = new Map();
     this.pgBootstrapReadiness = null;
     this.pgBootstrapPool = null;
+    this.pgBootstrapAppClientId = null;
 
     // Disposable provider integration only. A production environment flag
     // can never activate PG-based signup or mint a grant: the actual signup
@@ -198,6 +199,10 @@ module.exports = {
         pool, providerId, appClientId, appUri,
         hmacKey, hmacKeyVersion: version, fixtureOnly: true
       });
+      // This scope must accompany the injected PG reader. A caller whose
+      // approved app differs must never borrow another app's signup proof,
+      // even when both clients map to the same native SAI resource URI.
+      this.pgBootstrapAppClientId = appClientId;
       this.pgBootstrapPool = pool;
     } catch (error) {
       // Pool is lazy and has not opened a socket, but always close its
@@ -212,6 +217,7 @@ module.exports = {
       const pool = this.pgBootstrapPool;
       this.pgBootstrapPool = null;
       this.pgBootstrapReadiness = null;
+      this.pgBootstrapAppClientId = null;
       await pool.end();
     }
   },
@@ -370,6 +376,11 @@ module.exports = {
           this.assertCompletedAccountBootstrap(ctx.params);
         }
         if (this.pgBootstrapReadiness) {
+          if (!this.pgBootstrapAppClientId ||
+              ctx.params.appClientId !== this.pgBootstrapAppClientId) {
+            throw new MoleculerError('Bootstrap application client differs from provider scope',
+              403, 'BOOTSTRAP_PG_SCOPE_INVALID', { retryable: false });
+          }
           // The reader is scoped to the configured provider/app/HMAC and
           // checks current account + signed PDS + SAI state. Never fall back
           // to the volatile Map after a PostgreSQL outage or proof mismatch.

@@ -244,3 +244,35 @@ PostgreSQL completion decision, rather than trusting an old proof; add a
 provider-only guarded ready transition with generation CAS and a
 multi-replica kill/restart acceptance. No production signup route or
 existing-account migration is enabled by this v3 seal.
+
+## Read-only current readiness after completion — candidate
+
+The v4 PostgreSQL atomic completion writes historical, scoped evidence and
+marks the new account and signup operation ready in one transaction. A
+subsequent idempotent replay must **not** equate that historical status with
+current permission. The disposable completion candidate now exposes
+`readCurrentReady(scope)` and uses it on all three already-ready replay
+branches.
+
+The lookup uses the **existing** indexed
+`signup_operations(provider_id, app_client_id, hmac_key_version,
+idempotency_hmac)` scope, joins the canonical account and current managed
+ATProto identity/consent rows, and rejects missing/ambiguous or non-ready
+accounts, absent completion evidence, disabled managed identity, changed
+account generation, revoked consent, or changed grant URI/revision. Raw
+idempotency keys, passwords, browser-supplied owner IDs and proof booleans do
+not select the account.
+
+A single SQL statement observes one current PostgreSQL MVCC snapshot; it is
+not a cross-store transaction and **does not** guarantee consent will remain
+active after the query. Thus the result explicitly retains
+`releaseAuthorized:false` and `canAuthenticate:false`. Final permission
+checks must use the live canonical authorization authority at the instant an
+operation is authorized, and native Solid SAI consent must still be enforced.
+
+The PostgreSQL 18 acceptance tests query completed accounts, reject a
+different application's scope and idempotency HMAC, and prove that **revoking
+consent after completion makes both current-readiness and completion replay
+fail**. Historical evidence is preserved; it is not rewritten or silently
+regranted. The candidate remains disposable-only, and production signup,
+hosted signed PDS, migration and account/login release fuses are unchanged.

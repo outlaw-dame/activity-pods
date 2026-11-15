@@ -9,6 +9,7 @@
  * by the ordinary provider. Production remains source-controlled NO-GO.
  */
 const crypto = require('node:crypto');
+const {validateTicket} = require('./atproto-dataset-admin-delegation');
 
 const ENDPOINT = 'http://127.0.0.1:3043/v1/reserve';
 const DOMAIN = 'activitypods:account-coordinator:v1\0';
@@ -163,6 +164,11 @@ async function reserveCoordinatedDataset({
         !/^[A-Za-z0-9_-]{86}$/u.test(data.ticket.signature)) {
       reject('ACCOUNT_COORDINATOR_RESPONSE_INVALID');
     }
+    // Same strict schema/scope/expiry admission as the real downstream
+    // dataset-provisioning service. The Ed25519 signature is independently
+    // verified by the separate dataset administrator.
+    try{ validateTicket(username,data.ticket,now); }
+    catch{ reject('ACCOUNT_COORDINATOR_RESPONSE_INVALID'); }
     return Object.freeze({ticket:data.ticket});
   }catch(e){
     if(typeof e?.code==='string' && e.code.startsWith('ACCOUNT_COORDINATOR_')) throw e;

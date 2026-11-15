@@ -10,6 +10,8 @@ const {Pool}=require('pg');
 const {createCandidate}=require('../candidates/postgres-account-lifecycle');
 const {createDisposableSignupCompletion}=
   require('../candidates/postgres-signup-atomic-completion');
+const {createPgBootstrapReadiness}=
+  require('../candidates/postgres-bootstrap-readiness');
 
 const dsn=process.env.PAPER_ACCOUNTS_TEST_DSN||'';
 if(process.env.NODE_ENV!=='test' ||
@@ -52,9 +54,12 @@ async function migrate(){
     '../candidates/atproto-signed-repo-proof/schema.sql'),'utf8'));
   await pool.query(fs.readFileSync(path.resolve(__dirname,
     '../sql/paper-atproto-canonical-authority-v1.sql'),'utf8'));
+  await pool.query(fs.readFileSync(path.resolve(__dirname,
+    '../sql/paper-account-postgres-candidate-v5-bootstrap-proof.sql'),'utf8'));
 }
 async function setup(label,letter){
   const accountId=uuid(),operationId=uuid();
+  const idempotencyKey='entryway:acct_'+uuid()+':'+crypto.randomBytes(12).toString('hex');
   const webId=providerId+'/users/'+label;
   const did='did:plc:'+letter.repeat(24);
   const handle=label+'.paper.example.org';
@@ -62,7 +67,7 @@ async function setup(label,letter){
   const username=label;
   const scope={
     providerId,appClientId,hmacKeyVersion:1,
-    idempotencyHmac:hmac('signup.idem.v1',label),
+    idempotencyHmac:hmac('account-signup-idempotency-v1',idempotencyKey),
     requestHmac:hmac('signup.body.v1',label),
     accountId,operationId,username
   };
@@ -123,7 +128,8 @@ async function setup(label,letter){
     solidVerified:true,hostedPdsVerified:true,ownerConsentVerified:true,
     handle,appUri,grantUri,consentRevision:'1'
   };
-  return {scope,accountId,operationId,webId,did,grantUri,proof};
+  return {scope,accountId,operationId,webId,did,grantUri,proof,
+    username,handle,idempotencyKey};
 }
 function completion(fixture,overrides={}){
   return createDisposableSignupCompletion({
@@ -171,6 +177,84 @@ async function main(){
     assert.equal(ready.canAuthenticate,false);
     assert.equal((await getState(ok)).account.state,'ready');
     assert.equal((await getState(ok)).signup.state,'ready');
+    // Readiness must be proved against the same PostgreSQL journal and
+    // current SAI revocation revision, not a provider process-local Map.
+    // The read-only function never creates grants, sessions or identities.
+    const bootstrapConfig={
+      pool,providerId,appClientId,appUri,hmacKey:secret,
+      hmacKeyVersion:1,fixtureOnly:true
+    };
+    const identityClaim=fixture=>({
+      idempotencyKey:fixture.idempotencyKey,username:fixture.username,
+      webId:fixture.webId,actorId:fixture.webId,
+      atprotoDid:fixture.did,atprotoHandle:fixture.handle
+    });
+    const pgBootstrap=createPgBootstrapReadiness(bootstrapConfig);
+    const readiness=await pgBootstrap.assertCurrent(identityClaim(ok));
+    assert.equal(readiness.verified,true);
+    assert.equal(readiness.accountId,ok.accountId);
+    assert.equal(readiness.grantUri,ok.grantUri);
+    assert.equal(readiness.consentRevision,'1');
+    assert.equal(readiness.canAuthenticate,false);
+    assert.equal(readiness.releaseAuthorized,false);
+    assert.equal(Object.isFrozen(readiness),true);
+    for(const [change,expectedCode] of [
+      [{username:'another-owner'},'BOOTSTRAP_PG_NOT_READY'],
+      [{webId:providerId+'/users/other',actorId:providerId+'/users/other'},'BOOTSTRAP_PG_NOT_READY'],
+      [{atprotoDid:'did:plc:'+'b'.repeat(24)},'BOOTSTRAP_PG_NOT_READY'],
+      [{atprotoHandle:'other.paper.example.org'},'BOOTSTRAP_PG_NOT_READY'],
+      [{idempotencyKey:'entryway:acct_'+uuid()+':'+crypto.randomBytes(12).toString('hex')},
+        'BOOTSTRAP_PG_NOT_READY'],
+      [{actorId:providerId+'/users/other'},'BOOTSTRAP_PG_SCOPE_INVALID']
+    ]) {
+      await error(pgBootstrap.assertCurrent({...identityClaim(ok),...change}),expectedCode);
+    }
+    await error(createPgBootstrapReadiness({
+      ...bootstrapConfig,appClientId:'https://foreign.paper.example.org/app'
+    }).assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_NOT_READY');
+    await error(createPgBootstrapReadiness({
+      ...bootstrapConfig,appUri:'https://another.paper.example.org/app'
+    }).assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_NOT_READY');
+    await error(createPgBootstrapReadiness({
+      ...bootstrapConfig,hmacKey:crypto.randomBytes(32)
+    }).assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_NOT_READY');
+
+    // The deployable reader role is limited to EXECUTE on the exact lookup.
+    // It cannot enumerate accounts or read raw operation HMACs.
+    const roleClient=await pool.connect();
+    try {
+      await roleClient.query('BEGIN');
+      await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_reader');
+      const narrow=createPgBootstrapReadiness({
+        ...bootstrapConfig,pool:{query:(...args)=>roleClient.query(...args)}
+      });
+      assert.equal((await narrow.assertCurrent(identityClaim(ok))).verified,true);
+      for(const table of [
+        'paper_account_candidate.accounts',
+        'paper_account_candidate.signup_operations'
+      ]) {
+        const privilege=await roleClient.query(
+          'SELECT has_table_privilege(current_user,$1,$2) AS allowed',
+          [table,'SELECT']
+        );
+        assert.equal(privilege.rows[0].allowed,false,'read role must not have table SELECT: '+table);
+      }
+      // An inaccessible schema cannot even be resolved as a regclass;
+      // test its denial directly rather than raising SQLSTATE 42501 and
+      // leaving the transaction aborted before fixture teardown.
+      for(const schema of [
+        'paper_atproto_authority','paper_atproto_repo_proof'
+      ]) {
+        const privilege=await roleClient.query(
+          'SELECT has_schema_privilege(current_user,$1,$2) AS allowed',
+          [schema,'USAGE']
+        );
+        assert.equal(privilege.rows[0].allowed,false,
+          'read role must not browse protected schema: '+schema);
+      }
+    } finally {
+      try { await roleClient.query('ROLLBACK'); } finally { roleClient.release(); }
+    }
     const replay=await allowed.complete(ok.scope);
     assert.equal(replay.replay,true);
     assert.equal(calls,1,'already-ready replay never reruns external verification');
@@ -200,6 +284,7 @@ async function main(){
     await error(allowed.complete(ok.scope),'SIGNUP_COMPLETION_ACCOUNT_NOT_ACTIVE');
     assert.equal((await getState(ok)).account.state,'suspended',
       'an old ready journal may not re-activate a suspended account');
+    await error(pgBootstrap.assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_NOT_READY');
 
     const revoked=await setup('revoked','b');
     const blocked=await revoke(revoked);
@@ -313,6 +398,8 @@ async function main(){
     proceed.release();
     assert.equal((await running).state,'ready');
     assert.equal((await revoking).rows[0].new_state,'blocked');
+    await error(pgBootstrap.assertCurrent(identityClaim(serialization)),
+      'BOOTSTRAP_PG_NOT_READY');
     // Historical ready+signed-PDS completion must NOT be replayable as
     // current authorization once the canonical grant is blocked.
     await error(completion(serialization).readCurrentReady(serialization.scope),
@@ -334,6 +421,8 @@ async function main(){
         'SIGNUP_COMPLETION_NOT_RELEASED');
       await error(completion(production).readCurrentReady(production.scope),
         'SIGNUP_COMPLETION_NOT_RELEASED');
+      await error(pgBootstrap.assertCurrent(identityClaim(production)),
+        'BOOTSTRAP_PG_NOT_RELEASED');
     }finally{process.env.NODE_ENV=beforeEnv;}
     assert.equal((await getState(production)).account.state,'provisioning');
 
@@ -357,7 +446,8 @@ async function main(){
       try{await pool.query('DROP SCHEMA IF EXISTS '+s+' CASCADE');}
       catch(e){cleanup=e;}
     }
-    for(const role of ['paper_atproto_authority_importer',
+    for(const role of ['paper_account_bootstrap_reader',
+      'paper_atproto_authority_importer',
       'paper_atproto_authority_revoker','paper_atproto_authority_reader']){
       try{await pool.query('DROP ROLE IF EXISTS '+role);}catch(e){cleanup=e;}
     }

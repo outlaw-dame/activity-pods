@@ -276,3 +276,44 @@ consent after completion makes both current-readiness and completion replay
 fail**. Historical evidence is preserved; it is not rewritten or silently
 regranted. The candidate remains disposable-only, and production signup,
 hosted signed PDS, migration and account/login release fuses are unchanged.
+
+## PostgreSQL v5: scoped Entryway bootstrap readiness (non-activated)
+
+The additive v5 **candidate** migration adds a single indexed, read-only
+`current_bootstrap_proof` function. It joins the existing canonical
+`signup_operations` journal, unified `accounts`, managed identity and
+consent, signed repository, durable outbox and applied RDF projection.
+No new account table, identity writer or authorization token is created.
+
+The call is selected by exact provider/app/HMAC version and the provider's
+domain-separated 32-byte HMAC of the original Entryway idempotency reference.
+Username, canonical WebID = ActivityPub actor ID, did:plc, handle and approved
+SAI app URI are also matched **inside the same query**. Current readiness
+requires that the journal and account are both ready, completion and evidence
+digest fields exist, current account generation matches completion, managed
+identity and consent remain active at the persisted revision, the signed
+genesis repo head and applied projection match the sealed evidence, and its
+durable native event is unblocked.
+
+A new `paper_account_bootstrap_reader` NOLOGIN role receives USAGE on the
+candidate schema and **EXECUTE on only that function**, with no raw SELECT,
+INSERT, UPDATE or DELETE on account, grant or repository tables. A dedicated
+restricted production login must be provisioned in a separate reviewed
+migration; do not reuse the database owner, Jena or general Moleculer user.
+The SQL function is SECURITY DEFINER with `pg_catalog` search path and
+hardcoded fully qualified table names.
+
+The `postgres-bootstrap-readiness.js` adapter is purposely fixture-only and
+requires test mode plus disposable PG18 markers on **each call**. It does not
+connect automatically to `provider-capabilities`, `auth.signup`, Entryway,
+Solid-OIDC, a public route, or the production service loader. Its results
+remain `releaseAuthorized:false` and `canAuthenticate:false`.
+
+This is a **current PostgreSQL snapshot**, not a perpetual grant: a later
+SAI revocation can invalidate it. Before production, integrate a genuine
+restricted role, durable account reservation/signer, enforce native SAI grants
+at protected operation time, verify hosted PDS and genuine PLC/handle
+resolution, and resolve the canonical WebID shape (the candidate currently
+requires no URL fragment while some legacy Solid WebIDs use `#me`).
+Do not open production signup merely because v5 and its disposable tests
+pass.

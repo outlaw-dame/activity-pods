@@ -7,8 +7,10 @@ on:
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v2-signup-ledger.sql'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v3-evidence-seal.sql'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v4-atomic-completion.sql'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v5-bootstrap-proof.sql'
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
       - 'pod-provider/backend/candidates/postgres-signup-atomic-completion.js'
+      - 'pod-provider/backend/candidates/postgres-bootstrap-readiness.js'
       - 'pod-provider/backend/candidates/solid-new-signup-proof.js'
       - 'pod-provider/backend/tests/solid-new-signup-proof.test.js'
       - 'pod-provider/backend/scripts/proof-postgres-account-lifecycle.js'
@@ -34,6 +36,7 @@ jobs:
         run: |
           node --check pod-provider/backend/candidates/postgres-account-lifecycle.js
           node --check pod-provider/backend/candidates/postgres-signup-atomic-completion.js
+          node --check pod-provider/backend/candidates/postgres-bootstrap-readiness.js
           node --check pod-provider/backend/scripts/proof-postgres-signup-atomic-completion.js
           node --check pod-provider/backend/candidates/solid-new-signup-proof.js
           node --check pod-provider/backend/scripts/proof-postgres-account-lifecycle.js

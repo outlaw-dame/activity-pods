@@ -129,6 +129,77 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
   if (!pool?.connect || !pool?.query || typeof verifyCurrent !== 'function') {
     deny('SIGNUP_COMPLETION_CONFIGURATION_INVALID');
   }
+  /**
+   * Non-authorizing, indexed live check of an already committed signup.
+   * The journal records historical proof; never infer current consent from
+   * a stored "ready" flag, consent revision or completion digest alone.
+   * This reads one PostgreSQL MVCC snapshot, and is never a login token or
+   * a grant to cross the production release fuse.
+   */
+  async function readCurrentReady(scope) {
+    if (fixtureOnly !== true || !allowed()) deny('SIGNUP_COMPLETION_NOT_RELEASED');
+    checkScope(scope);
+    const sql =
+      'SELECT s.operation_id,s.account_id,s.state AS signup_state,'+
+      's.completion_at,s.completion_app_uri,s.completion_grant_uri,'+
+      's.completion_consent_revision::text AS completed_revision,'+
+      's.completion_account_generation::text AS completed_generation,'+
+      's.completion_proof_digest,s.evidence_digest,'+
+      'a.state AS account_state,a.generation::text AS account_generation,'+
+      'a.webid,a.activitypub_actor_uri,a.atproto_did,'+
+      'a.atproto_repo_initialized,'+
+      'i.did AS identity_did,i.state AS identity_state,i.managed,'+
+      'c.state AS consent_state,c.grant_uri AS current_grant_uri,'+
+      'c.revision::text AS current_revision '+
+      'FROM '+SIGNUP+' s JOIN '+ACCOUNT+' a '+
+      'ON a.account_id=s.account_id AND a.provider_id=s.provider_id '+
+      'LEFT JOIN '+IDENTITY+' i ON i.owner_webid=a.webid '+
+      'LEFT JOIN '+CONSENT+' c ON c.owner_webid=a.webid '+
+      'AND c.app_uri=s.completion_app_uri '+
+      'WHERE s.provider_id=$1 AND s.app_client_id=$2 '+
+      'AND s.hmac_key_version=$3 AND s.idempotency_hmac=$4 LIMIT 2';
+    let result;
+    try {
+      result=await pool.query(sql,[
+        scope.providerId,scope.appClientId,scope.hmacKeyVersion,
+        scope.idempotencyHmac
+      ]);
+    } catch {
+      // Database driver errors may include data from queries or credentials.
+      deny('SIGNUP_COMPLETION_CURRENT_READ_UNAVAILABLE');
+    }
+    if (result.rowCount!==1 || result.rows[0].signup_state!=='ready') {
+      deny('SIGNUP_COMPLETION_CURRENT_NOT_READY');
+    }
+    const r=result.rows[0];
+    if (r.account_state!=='ready') {
+      deny('SIGNUP_COMPLETION_ACCOUNT_NOT_ACTIVE');
+    }
+    if (!r.completion_at || !Buffer.isBuffer(r.completion_proof_digest) ||
+        r.completion_proof_digest.length!==32 ||
+        !Buffer.isBuffer(r.evidence_digest) || r.evidence_digest.length!==32 ||
+        r.completed_generation!==r.account_generation ||
+        r.atproto_repo_initialized!==true ||
+        !r.webid || r.webid!==r.activitypub_actor_uri ||
+        !r.atproto_did || r.atproto_did!==r.identity_did ||
+        r.identity_state!=='active' || r.managed!==true ||
+        r.consent_state!=='active' ||
+        !r.completion_app_uri || !r.completion_grant_uri ||
+        r.completion_grant_uri!==r.current_grant_uri ||
+        r.completed_revision!==r.current_revision) {
+      deny('SIGNUP_COMPLETION_CURRENT_AUTHORITY_DENIED');
+    }
+
+    return Object.freeze({
+      state:'ready',replay:true,
+      accountId:r.account_id,webId:r.webid,
+      appUri:r.completion_app_uri,
+      grantUri:r.completion_grant_uri,
+      consentRevision:r.current_revision,
+      releaseAuthorized:false,canAuthenticate:false
+    });
+  }
+
   async function complete(scope) {
     if (fixtureOnly !== true || !allowed()) deny('SIGNUP_COMPLETION_NOT_RELEASED');
     checkScope(scope);
@@ -148,13 +219,9 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
       operationId:initial.rows[0].operation_id,
       accountId:initial.rows[0].account_id};
     if (before.state==='ready') {
-      // Journal success is historical. A suspended or deleted account is NOT
-      // a usable ready account and must never be represented as one.
-      if (before.account_state !== 'ready') {
-        deny('SIGNUP_COMPLETION_ACCOUNT_NOT_ACTIVE');
-      }
-      return Object.freeze({state:'ready',replay:true,accountId:before.accountId,
-        releaseAuthorized:false,canAuthenticate:false});
+      // Even a successful historical completion cannot be replayed as
+      // current consent after revocation or identity deactivation.
+      return readCurrentReady(scope);
     }
     if (before.state!=='evidence_sealed' || number(before.generation)<3) {
       deny('SIGNUP_COMPLETION_NOT_SEALED');
@@ -203,8 +270,7 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
           deny('SIGNUP_COMPLETION_JOURNAL_CHANGED');
         }
         await c.query('ROLLBACK');open=false;
-        return Object.freeze({state:'ready',replay:true,accountId:before.accountId,
-          releaseAuthorized:false,canAuthenticate:false});
+        return readCurrentReady(scope);
       }
       if(row.state!=='provisioning' || number(row.generation)!==p.accountGeneration ||
           row.webid!==p.webId || row.activitypub_actor_uri!==p.webId ||
@@ -226,8 +292,7 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
       const sealed=op.rows[0];
       if(sealed.state==='ready') {
         await c.query('ROLLBACK');open=false;
-        return Object.freeze({state:'ready',replay:true,accountId:before.accountId,
-          releaseAuthorized:false,canAuthenticate:false});
+        return readCurrentReady(scope);
       }
       if(sealed.state!=='evidence_sealed' || sealed.may_have_side_effects!==true ||
           number(sealed.generation)!==number(before.generation) ||
@@ -332,6 +397,6 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
       throw error;
     }finally{c.release(broken);}
   }
-  return Object.freeze({complete});
+  return Object.freeze({complete,readCurrentReady});
 }
 module.exports={createDisposableSignupCompletion};

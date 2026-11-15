@@ -480,9 +480,10 @@ module.exports = {
       }
       const challenge = normalizeString(
         input.verification?.challengeToken || input.verification?.token);
-      if (!challenge || input.verification?.verified === true) {
+      if (!challenge || input.verification?.verified === true ||
+          !this.verifyDurableSignupChallenge(input)) {
         return this.deny('user_verification_required',
-          'Account coordinator requires a verifiable user challenge', false, 403);
+          'A signed, account-bound verification challenge is required', false, 403);
       }
       const key = normalizeString(input.idempotencyKey);
       const username = normalizeString(input.username);
@@ -736,6 +737,10 @@ module.exports = {
       }
 
       if (challengeToken) {
+        if (process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE === 'confirmed' &&
+            this.verifyDurableSignupChallenge(input)) {
+          return true;
+        }
         const configuredTokens = [
           ...(Array.isArray(this.settings.verificationTokens) ? this.settings.verificationTokens : []),
           ...(Array.isArray(app?.verificationTokens) ? app.verificationTokens : [])
@@ -751,6 +756,66 @@ module.exports = {
       }
 
       return false;
+    },
+
+    verifyDurableSignupChallenge(input) {
+      // The legacy provider accepts reusable, static verification tokens.
+      // New canonical identities require a short-lived provider-signed
+      // challenge bound to the *entire* approved signup + idempotency scope.
+      // Only an independent trusted verifier may issue these tokens.
+      const token = normalizeString(
+        input?.verification?.challengeToken || input?.verification?.token);
+      const secret = process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY;
+      if (!token || token.length > 1400 ||
+          typeof secret !== 'string' ||
+          !/^[A-Za-z0-9_-]{43}$/.test(secret)) return false;
+      const key = Buffer.from(secret, 'base64url');
+      if (key.length !== 32 || key.toString('base64url') !== secret) return false;
+      const pieces = token.split('.');
+      if (pieces.length !== 2 ||
+          !/^[A-Za-z0-9_-]{32,1300}$/.test(pieces[0]) ||
+          !/^[A-Za-z0-9_-]{43}$/.test(pieces[1])) return false;
+      const signature = Buffer.from(pieces[1], 'base64url');
+      if (signature.length !== 32 ||
+          signature.toString('base64url') !== pieces[1]) return false;
+      const expected = crypto.createHmac('sha256', key)
+        .update('activitypods:durable-user-verification:v1\\0', 'utf8')
+        .update(pieces[0], 'utf8').digest();
+      if (!crypto.timingSafeEqual(signature, expected)) return false;
+      const bytes = Buffer.from(pieces[0], 'base64url');
+      if (bytes.toString('base64url') !== pieces[0] ||
+          bytes.length > 900) return false;
+      let payload;
+      try { payload = JSON.parse(bytes.toString('utf8')); }
+      catch { return false; }
+      const keys = [
+        'version','purpose','appClientId','username','email','origin',
+        'redirectUri','idempotencyKey','requestFingerprint',
+        'issuedAtMs','expiresAtMs','nonce'
+      ];
+      if (!payload || typeof payload !== 'object' ||
+          Array.isArray(payload) ||
+          Object.keys(payload).length !== keys.length ||
+          keys.some((name,index) => Object.keys(payload)[index] !== name) ||
+          JSON.stringify(payload) !== bytes.toString('utf8')) return false;
+      const now = Date.now();
+      return payload.version === 1 &&
+        payload.purpose === 'activitypods:new-account:v1' &&
+        payload.appClientId === normalizeString(input.appClientId) &&
+        payload.username === normalizeString(input.username) &&
+        payload.email === normalizeString(input.email) &&
+        payload.origin === normalizeString(input.origin) &&
+        payload.redirectUri === normalizeString(input.redirectUri) &&
+        payload.idempotencyKey === normalizeString(input.idempotencyKey) &&
+        payload.requestFingerprint === normalizeString(input.requestFingerprint) &&
+        Number.isSafeInteger(payload.issuedAtMs) &&
+        Number.isSafeInteger(payload.expiresAtMs) &&
+        now >= payload.issuedAtMs - 30000 &&
+        now < payload.expiresAtMs &&
+        payload.expiresAtMs - payload.issuedAtMs >= 1000 &&
+        payload.expiresAtMs - payload.issuedAtMs <= 120000 &&
+        typeof payload.nonce === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(payload.nonce);
     },
 
     verifySignedVerificationToken(token, input) {

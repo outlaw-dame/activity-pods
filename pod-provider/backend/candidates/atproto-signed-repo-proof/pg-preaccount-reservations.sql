@@ -154,7 +154,7 @@ CREATE FUNCTION paper_account_reservation_proof.claim_signup_once(
   p_provider text, p_app text, p_key_hash bytea, p_fingerprint bytea,
   p_reservation uuid, p_dataset text, p_webid text
 ) RETURNS boolean
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE changed integer;
 BEGIN
   IF p_provider IS NULL OR p_app IS NULL OR p_key_hash IS NULL OR
@@ -176,7 +176,7 @@ BEGIN
   GET DIAGNOSTICS changed = ROW_COUNT;
   RETURN changed = 1;
 END;
-$;
+$$;
 
 CREATE FUNCTION paper_account_reservation_proof.complete(
   p_provider text, p_app text, p_key_hash bytea, p_reservation uuid, p_fence uuid,

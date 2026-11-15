@@ -195,14 +195,14 @@ CREATE FUNCTION paper_account_reservation_proof.dataset_claim_lease(
   p_provider text, p_app text, p_reservation uuid, p_fence uuid,
   p_dataset text, p_webid text
 ) RETURNS timestamptz
-LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT r.lease_expires_at FROM paper_account_reservation_proof.reservations r
   WHERE r.provider_id = p_provider AND r.app_client_id = p_app
     AND r.reservation_id = p_reservation AND r.fence_token = p_fence
     AND r.username = p_dataset AND r.expected_webid = p_webid
     AND r.state = 'side_effects_started'
     AND r.lease_expires_at > clock_timestamp()
-$;
+$$;
 
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA paper_account_reservation_proof FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.reserve(

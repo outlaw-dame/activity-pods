@@ -5,6 +5,10 @@ describe('entryway-app-bootstrap-api service', () => {
   let createOrUpdateCalls;
   let providerService;
   let findByWebId;
+  let storedRegistration;
+  let storedGrants;
+  let storedAccessAuthorizations;
+  let storedDataAuthorizations;
 
   const approvedApp = {
     appClientId: 'https://memory.example/app',
@@ -15,6 +19,27 @@ describe('entryway-app-bootstrap-api service', () => {
 
   beforeEach(async () => {
     createOrUpdateCalls = [];
+    storedRegistration = {
+      id: 'http://localhost:3000/alice/data/app-registration-memory',
+      'interop:registeredBy': 'http://localhost:3000/alice/profile/card#me',
+      'interop:registeredAgent': approvedApp.appUri,
+      'interop:hasAccessGrant': ['http://localhost:3000/alice/data/grant-memory']
+    };
+    storedGrants = [{
+      id: 'http://localhost:3000/alice/data/grant-memory',
+      'interop:grantedBy': 'http://localhost:3000/alice/profile/card#me',
+      'interop:grantee': approvedApp.appUri
+    }];
+    storedAccessAuthorizations = [{
+      'interop:grantedBy': 'http://localhost:3000/alice/profile/card#me',
+      'interop:grantee': approvedApp.appUri,
+      'apods:hasSpecialRights': approvedApp.acceptedSpecialRights
+    }];
+    storedDataAuthorizations = [{
+      'interop:dataOwner': 'http://localhost:3000/alice/profile/card#me',
+      'interop:grantee': approvedApp.appUri,
+      'interop:satisfiesAccessNeed': approvedApp.acceptedAccessNeeds[0]
+    }];
     broker = new ServiceBroker({ logger: false });
 
     broker.createService({
@@ -46,18 +71,26 @@ describe('entryway-app-bootstrap-api service', () => {
     broker.createService({
       name: 'app-registrations',
       actions: {
+        getForApp: async () => storedRegistration,
+        // Detect accidental reintroduction of privileged backend grants.
         createOrUpdate: async ctx => {
           createOrUpdateCalls.push(ctx.params);
-          return 'http://localhost:3000/alice/data/app-registration-memory';
+          throw new Error('Backend must not mutate SAI grants');
         }
       }
     });
 
     broker.createService({
       name: 'access-grants',
-      actions: {
-        getForApp: async () => [{ id: 'http://localhost:3000/alice/data/grant-memory' }]
-      }
+      actions: { getForApp: async () => storedGrants }
+    });
+    broker.createService({
+      name: 'access-authorizations',
+      actions: { getForApp: async () => storedAccessAuthorizations }
+    });
+    broker.createService({
+      name: 'data-authorizations',
+      actions: { getForApp: async () => storedDataAuthorizations }
     });
 
     const service = require('../services/entryway-app-bootstrap-api.service');
@@ -96,14 +129,68 @@ describe('entryway-app-bootstrap-api service', () => {
     expect(result).toHaveProperty('bootstrappedAt');
     expect(JSON.stringify(result)).not.toContain('provider-internal-token');
 
-    expect(createOrUpdateCalls).toEqual([
-      {
-        appUri: 'https://memory.example/app',
-        podOwner: 'http://localhost:3000/alice/profile/card#me',
-        acceptedAccessNeeds: approvedApp.acceptedAccessNeeds,
-        acceptedSpecialRights: approvedApp.acceptedSpecialRights
-      }
-    ]);
+    expect(createOrUpdateCalls).toEqual([]);
+  });
+
+  test('does not turn app approval into owner consent or create missing grants', async () => {
+    storedRegistration = null;
+    await expect(broker.call('entryway-app-bootstrap-api.bootstrap', bootstrapPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    })).rejects.toMatchObject({
+      code: 428, type: 'BOOTSTRAP_OWNER_CONSENT_REQUIRED'
+    });
+    expect(createOrUpdateCalls).toEqual([]);
+  });
+
+  test('refuses mismatched, revoked and stale owner-authorized SAI records', async () => {
+    const originalRegistration = storedRegistration;
+    const originalGrants = storedGrants;
+    const makeCall = () => broker.call('entryway-app-bootstrap-api.bootstrap', bootstrapPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    });
+    for (const bad of [
+      { ...originalRegistration, 'interop:registeredBy': 'http://localhost:3000/bob/profile/card#me' },
+      { ...originalRegistration, 'interop:registeredAgent': 'https://another.example/app' },
+      { ...originalRegistration, 'interop:hasAccessGrant': ['http://localhost:3000/alice/data/old-revoked-grant'] },
+      { ...originalRegistration, 'interop:hasAccessGrant': [
+        'http://localhost:3000/alice/data/grant-memory', 'http://localhost:3000/alice/data/grant-memory'
+      ] }
+    ]) {
+      storedRegistration = bad;
+      await expect(makeCall()).rejects.toMatchObject({ code: expect.any(Number) });
+      expect(createOrUpdateCalls).toEqual([]);
+    }
+    storedRegistration = originalRegistration;
+    for (const bad of [
+      [],
+      [{ ...originalGrants[0], 'interop:grantedBy': 'http://localhost:3000/bob/profile/card#me' }],
+      [{ ...originalGrants[0], 'interop:grantee': 'https://another.example/app' }]
+    ]) {
+      storedGrants = bad;
+      await expect(makeCall()).rejects.toMatchObject({ code: expect.any(Number) });
+      expect(createOrUpdateCalls).toEqual([]);
+    }
+  });
+
+  test('rejects owner-approved rights outside provider policy without creating or changing grants', async () => {
+    storedAccessAuthorizations = [{
+      ...storedAccessAuthorizations[0],
+      'apods:hasSpecialRights': ['apods:UpdateWebId']
+    }];
+    await expect(broker.call('entryway-app-bootstrap-api.bootstrap', bootstrapPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    })).rejects.toMatchObject({ code: 409, type: 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH' });
+    expect(createOrUpdateCalls).toEqual([]);
+
+    storedAccessAuthorizations = [];
+    storedDataAuthorizations = [{
+      ...storedDataAuthorizations[0],
+      'interop:satisfiesAccessNeed': 'https://memory.example/ns/access-needs#unapproved'
+    }];
+    await expect(broker.call('entryway-app-bootstrap-api.bootstrap', bootstrapPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    })).rejects.toMatchObject({ code: 409, type: 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH' });
+    expect(createOrUpdateCalls).toEqual([]);
   });
 
   test('requires a completed signup record before creating any grants', async () => {

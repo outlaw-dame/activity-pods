@@ -198,6 +198,7 @@ BEGIN
     WHERE r.provider_id = p_provider AND r.app_client_id = p_app
       AND r.idempotency_hash = p_key_hash AND r.reservation_id = p_reservation
       AND r.fence_token = p_fence AND r.state = 'side_effects_started'
+      AND r.signup_claimed_at IS NOT NULL
       AND r.expected_webid = p_webid;
   GET DIAGNOSTICS changed = ROW_COUNT;
   RETURN changed = 1;

@@ -206,6 +206,28 @@ module.exports = {
       }
     },
 
+    // Higher-assurance authorization used only by the nonactivated durable
+    // account coordinator. Never return app bearer or verification tokens.
+    authorizeDurableAccountProvisioning: {
+      params: {
+        appClientId: { type: 'string' },
+        authorization: { type: 'string' },
+        origin: { type: 'string' },
+        redirectUri: { type: 'string' },
+        idempotencyKey: { type: 'string' },
+        requestFingerprint: { type: 'string' },
+        username: { type: 'string' },
+        email: { type: 'string', optional: true },
+        requestedProtocols: { type: 'object', strict: false },
+        verification: { type: 'object', strict: false }
+      },
+      handler(ctx) {
+        const decision = this.authorizeDurableAccountProvisioning(ctx.params);
+        if (!decision.allowed) this.throwDenied(decision);
+        return decision;
+      }
+    },
+
     reserveAccountProvisioning: {
       params: {
         appClientId: { type: 'string', optional: true },
@@ -425,6 +447,67 @@ module.exports = {
         requestFingerprint: normalizeString(input.requestFingerprint) || null,
         issuedAt: now,
         retryable: false
+      };
+    },
+
+    authorizeDurableAccountProvisioning(input) {
+      // Source-controlled nonrelease boundary: a production configuration
+      // change must not activate new WebID / DID identities.
+      if (process.env.NODE_ENV !== 'test' ||
+          process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
+          process.env.APODS_ACCOUNT_RESERVATION_DISPOSABLE !== 'confirmed' ||
+          process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
+        return this.deny('durable_account_coordinator_not_released',
+          'Durable account coordinator is not released', false, 503);
+      }
+      // Do not re-use the permissive legacy origin/redirect matching or
+      // trusted-user-boolean bypass for a durable account reservation.
+      if (!this.settings.requiresApprovedApps || !this.settings.requireBearerToken ||
+          !this.settings.requiresUserVerification || this.settings.allowTrustedVerification) {
+        return this.deny('durable_account_policy_unsafe',
+          'Account coordinator requires mandatory approved app and user verification', false, 503);
+      }
+      const appClientId = normalizeString(input.appClientId);
+      const app = this.findApprovedApp(appClientId);
+      if (!app || app.allowUnsigned ||
+          !Array.isArray(app.bearerTokens) || !app.bearerTokens.length ||
+          !Array.isArray(app.allowedOrigins) || !app.allowedOrigins.length ||
+          !Array.isArray(app.allowedRedirectUris) || !app.allowedRedirectUris.length ||
+          !app.allowedOrigins.includes(normalizeString(input.origin)) ||
+          !app.allowedRedirectUris.includes(normalizeString(input.redirectUri))) {
+        return this.deny('unauthorized_app',
+          'Approved application origin, redirect and bearer authorization required', false, 403);
+      }
+      const challenge = normalizeString(
+        input.verification?.challengeToken || input.verification?.token);
+      if (!challenge || input.verification?.verified === true) {
+        return this.deny('user_verification_required',
+          'Account coordinator requires a verifiable user challenge', false, 403);
+      }
+      const key = normalizeString(input.idempotencyKey);
+      const username = normalizeString(input.username);
+      const fp = normalizeString(input.requestFingerprint);
+      if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key) ||
+          !/^[a-z][a-z0-9_-]{1,31}$/.test(username) ||
+          !/^[a-f0-9]{64}$/.test(fp)) {
+        return this.deny('invalid_reservation_scope',
+          'Canonical account reservation scope is invalid', false, 400);
+      }
+      const protocols = this.normalizeRequestedProtocols(input.requestedProtocols);
+      if (!protocols.solid || !protocols.activitypub || !protocols.atproto) {
+        return this.deny('protocol_disabled',
+          'New unified accounts must provision Solid, ActivityPub and ATProto together', false, 403);
+      }
+      const result = this.evaluateAccountProvisioning(input);
+      if (!result.allowed) return result;
+      return {
+        ...result,
+        idempotencyKey: key,
+        requestFingerprint: fp,
+        username,
+        // The app identifier is hashed by the restricted coordinator client
+        // before it reaches the PostgreSQL per-app quota ledger.
+        dailyLimit: this.resolveDailyLimit(app)
       };
     },
 

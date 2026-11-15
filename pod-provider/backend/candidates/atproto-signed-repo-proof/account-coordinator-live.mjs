@@ -178,14 +178,14 @@ const pool=new Pool({connectionString:ROOT,max:2,
   connectionTimeoutMillis:3000,query_timeout:8000,allowExitOnIdle:true});
 const appScope=crypto.createHash('sha256')
   .update('activitypods:approved-app:v1\0').update(PROVIDER_APP).digest('hex');
-async function signedPost(port,message,key,valid=true){
+async function signedPost(port,message,key,valid=true,route='/v1/reserve',domain='client'){
   const raw=JSON.stringify(message);
-  const mac=valid?client.computeMac(key,'client',raw):
+  const mac=valid?client.computeMac(key,domain,raw):
     crypto.randomBytes(32).toString('base64url');
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),5000);
   try{
-    const resp=await fetch('http://127.0.0.1:'+port+'/v1/reserve',{
+    const resp=await fetch('http://127.0.0.1:'+port+route,{
       method:'POST',redirect:'manual',signal:controller.signal,
       headers:{'content-type':'application/json','x-paper-auth':mac},
       body:raw
@@ -203,7 +203,7 @@ const msg=(state,item,overrides={})=>({
 });
 async function readReservation(id){
   const result=await pool.query(
-    'SELECT reservation_id,state,username,expected_webid,atproto_did '+
+    'SELECT reservation_id,state,username,expected_webid,atproto_did,signup_claimed_at '+
     'FROM paper_account_reservation_proof.reservations '+
     'WHERE reservation_id=$1',[id]);
   assert.equal(result.rowCount,1);
@@ -241,12 +241,28 @@ async function prepare(){
     const verified=verifyDisposableDatasetClaim(result.ticket,
       crypto.createPublicKey(state.publicPem));
     state.primary.ticket=result.ticket;
+    state.primary.admission=result.admission;
     state.primary.reservationId=verified.reservationId;
     const before=await readReservation(verified.reservationId);
     assert.equal(before.state,'side_effects_started');
     assert.equal(before.username,state.primary.username);
     assert.equal(before.expected_webid,
       'https://paper.example.org/users/'+state.primary.username);
+    assert.equal(before.signup_claimed_at,null,
+      'Dataset claim issuance is not itself identity-execution admission');
+    // The actual auth.signup calls the same scoped ordinary-provider client
+    // to consume this one-time PG CAS before its first identity side effect.
+    assert.deepEqual(await client.consumeCoordinatedSignup({
+      ticket:result.ticket,admission:result.admission,
+      dataset:state.primary.username,env:pubEnv(state.providerKey)
+    }),{admitted:true});
+    const consumed=await readReservation(verified.reservationId);
+    assert(consumed.signup_claimed_at instanceof Date,
+      'The actual one-time signup CAS must have become durable');
+    await assert.rejects(client.consumeCoordinatedSignup({
+      ticket:result.ticket,admission:result.admission,
+      dataset:state.primary.username,env:pubEnv(state.providerKey)
+    }),e=>e?.code==='ACCOUNT_COORDINATOR_INVOCATION_ALREADY_CLAIMED');
     // Only the separate dataset admin holds Jena credentials; the ordinary
     // client receives this signed ticket and a fixed network endpoint.
     assert.equal((await verifyJena(result.ticket,pubEnv(state.providerKey))).idempotent,false);
@@ -254,6 +270,16 @@ async function prepare(){
 
     const replay=await signedPost(3044,msg(state,state.primary),state.providerKey);
     assert.equal(replay.status,409,'Other worker cell cannot acquire a new DID fence');
+    const scope=state.primary.admission;
+    const replayConsume=await signedPost(3044,{
+      version:1,appScope:scope.appScope,username:scope.username,
+      idempotencyKey:scope.idempotencyKey,
+      requestFingerprint:scope.requestFingerprint,
+      reservationId:scope.reservationId,ticket:state.primary.ticket,
+      issuedAtMs:Date.now(),nonce:crypto.randomUUID()
+    },state.providerKey,true,'/v1/consume','consume');
+    assert.equal(replayConsume.status,409,
+      'Other worker must not execute the same WebID/DID signup a second time');
     const tampered=await signedPost(3044,msg(state,state.primary),state.providerKey,false);
     assert.equal(tampered.status,403,'Missing/incorrect service MAC rejected');
     const forgedInput=msg(state,state.primary,{appScope:'f'.repeat(64)});
@@ -285,7 +311,8 @@ async function prepare(){
       phase:'prepare',independentWorkers:2,
       appAuthenticatedMac:true,realPg18:true,
       separateIssuerKey:true,realJenaDataset:true,
-      crossReplicaDuplicateDenied:true,forgedMacDenied:true,
+      crossReplicaDuplicateDenied:true,oneTimeSignupExecution:true,
+      forgedMacDenied:true,
       issuerFailureFencePreserved:true,productionReleased:false
     }));
   }finally{for(const kid of kids.reverse())await stopAgent(kid);}
@@ -305,6 +332,8 @@ async function verify(){
     const second=await readReservation(state.uncertain.reservationId);
     assert.equal(first.state,'side_effects_started');
     assert.equal(second.state,'side_effects_started');
+    assert(first.signup_claimed_at instanceof Date);
+    assert.equal(second.signup_claimed_at,null);
     assert.equal(first.atproto_did,null);
     assert.equal(second.atproto_did,null);
     assert.equal((await verifyJena(state.primary.ticket,
@@ -312,7 +341,8 @@ async function verify(){
       'Jena must verify identical immutable claim after process restart');
     console.log('AUTH_COORDINATOR '+JSON.stringify({
       phase:'verify',freshIndependentProcesses:true,
-      crossReplicaReplayDenied:true,unknownStateNoTakeover:true,
+      crossReplicaReplayDenied:true,oneTimeSignupReentryDenied:true,
+      unknownStateNoTakeover:true,
       persistentJenaTicketIdempotent:true,productionReleased:false
     }));
   }finally{for(const kid of kids.reverse())await stopAgent(kid);}

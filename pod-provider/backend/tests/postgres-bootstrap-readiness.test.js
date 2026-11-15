@@ -158,7 +158,8 @@ test('requires provider-owned configuration and a secret unrelated to raw HTTP c
 const restrictedRole = Object.freeze({
   is_superuser: false, bypass_rls: false,
   can_create_db: false, can_create_role: false, can_replicate: false,
-  can_login: true, importer_member: false, revoker_member: false,
+  can_login: true, session_matches: true,
+  importer_member: false, revoker_member: false,
   read_all_member: false, write_all_member: false,
   exec_program_member: false, read_files_member: false, write_files_member: false,
   account_owner_member: false, authority_owner_member: false,
@@ -198,6 +199,7 @@ test.each([
   { can_create_role: true },
   { can_replicate: true },
   { can_login: false },
+  { session_matches: false },
   { importer_member: true },
   { revoker_member: true },
   { read_all_member: true },

@@ -154,7 +154,10 @@ async function reserveCoordinatedDataset({
       'worker-response',body.raw,response.headers?.get('x-paper-auth'))) {
       reject('ACCOUNT_COORDINATOR_RESPONSE_INVALID');
     }
-    if(!isExact(data,['ticket','admission']) ||
+    if(!isExact(data,['ticket','admission','requestSha256','nonce']) ||
+        data.requestSha256!==crypto.createHash('sha256')
+          .update(raw,'utf8').digest('hex') ||
+        data.nonce!==message.nonce ||
         !isExact(data.admission,[
           'appScope','username','idempotencyKey','requestFingerprint','reservationId'
         ]) ||

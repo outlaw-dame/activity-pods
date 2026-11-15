@@ -231,9 +231,7 @@ async function main(){
       assert.equal((await narrow.assertCurrent(identityClaim(ok))).verified,true);
       for(const table of [
         'paper_account_candidate.accounts',
-        'paper_account_candidate.signup_operations',
-        'paper_atproto_authority.consents',
-        'paper_atproto_repo_proof.repos'
+        'paper_account_candidate.signup_operations'
       ]) {
         const privilege=await roleClient.query(
           'SELECT has_table_privilege(current_user,$1,$2) AS allowed',
@@ -241,9 +239,21 @@ async function main(){
         );
         assert.equal(privilege.rows[0].allowed,false,'read role must not have table SELECT: '+table);
       }
-      await roleClient.query('ROLLBACK');
+      // An inaccessible schema cannot even be resolved as a regclass;
+      // test its denial directly rather than raising SQLSTATE 42501 and
+      // leaving the transaction aborted before fixture teardown.
+      for(const schema of [
+        'paper_atproto_authority','paper_atproto_repo_proof'
+      ]) {
+        const privilege=await roleClient.query(
+          'SELECT has_schema_privilege(current_user,$1,$2) AS allowed',
+          [schema,'USAGE']
+        );
+        assert.equal(privilege.rows[0].allowed,false,
+          'read role must not browse protected schema: '+schema);
+      }
     } finally {
-      roleClient.release();
+      try { await roleClient.query('ROLLBACK'); } finally { roleClient.release(); }
     }
     const replay=await allowed.complete(ok.scope);
     assert.equal(replay.replay,true);

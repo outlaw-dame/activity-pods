@@ -247,6 +247,7 @@ module.exports = {
       cannot_add_addresses: 'You cannot add addresses because your provider did not configure a MapBox access token'
     },
     message: {
+      authorization_verification_failed: "Unable to verify provider authorization or safely open the application. Check the Pod session and application callback.",
       copied_to_clipboard: 'Copied !',
       loading_invite_link: 'Loading...',
       loading_invite_link_failed: 'Loading failed',

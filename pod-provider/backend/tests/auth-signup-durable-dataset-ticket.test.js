@@ -4,6 +4,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const crypto=require('node:crypto');
+const consumeOnce=jest.fn(async()=>({admitted:true}));
+beforeEach(()=>consumeOnce.mockReset().mockResolvedValue({admitted:true}));
 
 class MoleculerError extends Error{
   constructor(message,code,type,data){
@@ -26,6 +28,9 @@ function loadSignup(){
       FROM_EMAIL:'noreply@example.org'
     };
     if(name==='../../config/transport')return{};
+    if(name==='../utils/atproto-account-coordinator-client')return{
+      consumeCoordinatedSignup:consumeOnce
+    };
     if(name==='../../utils/account-signup-rollback-policy')return{
       mustPreserveFailedSignup:()=>false
     };
@@ -35,6 +40,7 @@ function loadSignup(){
 }
 async function withFlags(values,fn){
   const keys=['NODE_ENV','APODS_ACCOUNT_RESERVATION_DISPOSABLE',
+    'APODS_ACCOUNT_COORDINATOR_DISPOSABLE',
     'APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE'];
   const prior=Object.fromEntries(keys.map(x=>[x,process.env[x]]));
   try{
@@ -57,10 +63,18 @@ const ticket=()=>({
   signature:'A'.repeat(86)
 });
 function ctxWithTicket(datasetAdminTicket){
+  const accountCoordinatorAdmission=datasetAdminTicket?{
+    appScope:'a'.repeat(64),
+    username:'claimtest-abc123def456',
+    idempotencyKey:'durable-key-example',
+    requestFingerprint:'b'.repeat(64),
+    reservationId:datasetAdminTicket.claim.reservationId
+  }:undefined;
   const events=[],calls=[];
   const ctx={
     params:{username:'claimtest-abc123def456',password:'safe-password',
-      email:'person@example.org',datasetAdminTicket,name:'A Person'},
+      email:'person@example.org',datasetAdminTicket,
+      accountCoordinatorAdmission,name:'A Person'},
     meta:{unrelated:'preserved'},calls,events,
     call:jest.fn(async(name,params,opts)=>{
       calls.push({name,params,opts});
@@ -134,10 +148,16 @@ test('real auth.signup passes ticket only as dataset action param, not account/W
   const service=loadSignup();
   await withFlags({
     NODE_ENV:'test',APODS_ACCOUNT_RESERVATION_DISPOSABLE:'confirmed',
+    APODS_ACCOUNT_COORDINATOR_DISPOSABLE:'confirmed',
     APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE:'confirmed'
   },async()=>{
     const claim=ticket(),{ctx,state}=ctxWithTicket(claim);
     const result=await service.actions.signup.call(state,ctx);
+    expect(consumeOnce).toHaveBeenCalledTimes(1);
+    expect(consumeOnce.mock.calls[0][0]).toEqual({
+      ticket:claim,admission:ctx.params.accountCoordinatorAdmission,
+      dataset:'claimtest-abc123def456'
+    });
     expect(result.webId).toBe('https://paper.example.org/users/claimtest-abc123def456');
     const delegation=ctx.calls.filter(x=>
       x.name==='dataset-provisioning.ensureSecureDataset');
@@ -149,13 +169,51 @@ test('real auth.signup passes ticket only as dataset action param, not account/W
     expect(state.pickAccountData).toHaveBeenCalled();
     expect(state.pickAccountData.mock.calls[0][0].datasetAdminTicket)
       .toBeUndefined();
+    expect(state.pickAccountData.mock.calls[0][0].accountCoordinatorAdmission)
+      .toBeUndefined();
     expect(state.pickWebIdData).toHaveBeenCalled();
     expect(state.pickWebIdData.mock.calls[0][0].datasetAdminTicket)
       .toBeUndefined();
+    expect(state.pickWebIdData.mock.calls[0][0].accountCoordinatorAdmission)
+      .toBeUndefined();
     expect(ctx.meta).toEqual({unrelated:'preserved',skipObjectsWatcher:true});
     expect(JSON.stringify(ctx.events)).not.toContain(claim.signature);
+    expect(JSON.stringify(ctx.events)).not.toContain('durable-key-example');
     expect(JSON.stringify(ctx.calls.filter(x=>
       x.name!=='dataset-provisioning.ensureSecureDataset')))
       .not.toContain(claim.signature);
+  });
+});
+
+test('one-time PG invocation failure stops real signup before dataset/account/WebID/DID creation',async()=>{
+  const service=loadSignup();
+  await withFlags({
+    NODE_ENV:'test',APODS_ACCOUNT_RESERVATION_DISPOSABLE:'confirmed',
+    APODS_ACCOUNT_COORDINATOR_DISPOSABLE:'confirmed',
+    APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE:'confirmed'
+  },async()=>{
+    consumeOnce.mockRejectedValueOnce(
+      Object.assign(Error('PG fence already consumed'),{
+        code:'ACCOUNT_COORDINATOR_INVOCATION_ALREADY_CLAIMED'
+      }));
+    const{ctx,state}=ctxWithTicket(ticket());
+    await expect(service.actions.signup.call(state,ctx))
+      .rejects.toMatchObject({
+        code:409,type:'ACCOUNT_SIGNUP_ALREADY_CLAIMED',
+        data:{retryable:false}
+      });
+    expect(ctx.call.mock.calls.map(c=>c[0])).toEqual([
+      'username-moderation.assertSafe'
+    ]);
+    expect(ctx.emit).not.toHaveBeenCalled();
+    consumeOnce.mockRejectedValueOnce(Error('unknown PG result'));
+    const second=ctxWithTicket(ticket());
+    await expect(service.actions.signup.call(second.state,second.ctx))
+      .rejects.toMatchObject({
+        code:503,type:'ACCOUNT_SIGNUP_ADMISSION_UNCERTAIN'
+      });
+    expect(second.ctx.call.mock.calls.map(c=>c[0])).toEqual([
+      'username-moderation.assertSafe'
+    ]);
   });
 });

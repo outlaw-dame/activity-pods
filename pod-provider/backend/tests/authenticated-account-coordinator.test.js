@@ -211,6 +211,11 @@ test('wrong app credentials, missing origin, redirect mismatch and user verifica
       [request({redirectUri:'https://malicious.example/return'}),headers()],
       [request({verification:{verified:true}}),headers()],
       [request({verification:{method:'app'}}),headers()],
+      [request({verification:{method:'app',challengeToken:VERIFY}}),headers()],
+      [request({
+        idempotencyKey:'durable-key-other',
+        verification:request().verification
+      }),headers()],
       [request({username:'Claimtest-noncanonical'}),headers()]
     ]){
       await expect(broker.call('unified-account-api.create',payload,
@@ -339,4 +344,67 @@ test('the production guard cannot be bypassed by disposable coordinator flags',a
     await broker.stop();global.fetch=orig;
     process.env.NODE_ENV=previous;
   }
+});
+
+test('one-time invocation verifies bound ticket and MAC response, and refuses consumed or forged claims',async()=>{
+  const signed=ticket();
+  const admission={
+    appScope:'a'.repeat(64),
+    username:USER,
+    idempotencyKey:KEY,
+    requestFingerprint:'b'.repeat(64),
+    reservationId:signed.claim.reservationId
+  };
+  const env={...FIXTURE_FLAGS,
+    APODS_ACCOUNT_COORDINATOR_SHARED_KEY:
+      process.env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY};
+  const calls=[];
+  const fetchImpl=async(url,options)=>{
+    calls.push({url,options});
+    expect(url).toBe('http://127.0.0.1:3043/v1/consume');
+    expect(options.method).toBe('POST');
+    expect(options.redirect).toBe('manual');
+    expect(wire.verifyMac(env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
+      'consume',options.body,options.headers['x-paper-auth'])).toBe(true);
+    const msg=JSON.parse(options.body);
+    expect(msg.ticket).toEqual(signed);
+    expect(msg.reservationId).toBe(admission.reservationId);
+    expect(msg).not.toHaveProperty('password');
+    expect(msg).not.toHaveProperty('appBearer');
+    const raw=JSON.stringify({admitted:true});
+    return new Response(raw,{status:200,headers:{
+      'x-paper-auth':wire.computeMac(
+        env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
+        'consume-response',raw)
+    }});
+  };
+  const admitted=await wire.consumeCoordinatedSignup({
+    ticket:signed,admission,dataset:USER,env,fetchImpl
+  });
+  expect(admitted).toEqual({admitted:true});
+  expect(calls).toHaveLength(1);
+  for(const bad of [
+    {...admission,reservationId:crypto.randomUUID()},
+    {...admission,username:'claimtest-other000000'},
+    {...admission,requestFingerprint:'not-a-fingerprint'}
+  ]){
+    await expect(wire.consumeCoordinatedSignup({
+      ticket:signed,admission:bad,dataset:USER,env,fetchImpl
+    })).rejects.toMatchObject({code:'ACCOUNT_COORDINATOR_INVOCATION_INVALID'});
+  }
+  expect(calls).toHaveLength(1);
+  await expect(wire.consumeCoordinatedSignup({
+    ticket:signed,admission,dataset:USER,env,
+    fetchImpl:async()=>new Response('{"error":"denied"}',{status:409})
+  })).rejects.toMatchObject({
+    code:'ACCOUNT_COORDINATOR_INVOCATION_ALREADY_CLAIMED'
+  });
+  await expect(wire.consumeCoordinatedSignup({
+    ticket:signed,admission,dataset:USER,env,
+    fetchImpl:async()=>new Response(JSON.stringify({admitted:true}),{
+      status:200,headers:{'x-paper-auth':'A'.repeat(43)}
+    })
+  })).rejects.toMatchObject({
+    code:'ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED'
+  });
 });

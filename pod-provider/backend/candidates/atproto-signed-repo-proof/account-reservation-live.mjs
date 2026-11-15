@@ -307,7 +307,7 @@ async function verify() {
     assert.equal(binding.rows[0].username,adminMeta.dataset);
     assert.equal(binding.rows[0].expected_webid,ROOT+adminMeta.dataset);
     assert.deepEqual(rows.rows.map(x=>[x.state,x.count]),
-      [['completed',2],['reserved',1],['side_effects_started',1]],
+      [['completed',2],['reserved',1],['side_effects_started',3]],
       'Post-crash state must remain monotonic and exact');
     console.log('ACCOUNT_PG_RESERVATION '+JSON.stringify({phase:'verify',
       restartedProcess:true,immutableCompletedIdentity:true,

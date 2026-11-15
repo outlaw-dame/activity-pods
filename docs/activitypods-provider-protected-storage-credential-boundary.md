@@ -487,6 +487,11 @@ reservation UUID, username, expected WebID, unexpired database lease,
 and `side_effects_started`, and succeeds only while
 `signup_claimed_at IS NULL`. A second provider cell, retry after a
 crash, mismatched request or expired fence cannot reacquire execution.
+The restricted PostgreSQL completion function independently requires
+`signup_claimed_at` to have been consumed, preventing premature
+`complete` even when presented with structurally plausible identity
+fields; signed PDS and Solid/SAI attestation remains a further required
+authority before production can call completion.
 The same HMAC-authenticated worker has a separate fixed
 `POST /v1/consume` operation. It independently verifies the signed
 ticket and the full scope, then consumes the PostgreSQL CAS. This is

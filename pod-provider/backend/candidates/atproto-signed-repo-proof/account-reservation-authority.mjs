@@ -90,6 +90,23 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
       );
       return result.rowCount === 1 && result.rows[0]?.started === true;
     },
+    async claimSignup(input) {
+      assertDisposable();
+      if (!input || typeof input !== 'object' ||
+          !APP.test(input.appClientId) ||
+          !KEY.test(input.idempotencyKey) ||
+          !FP.test(input.requestFingerprint) ||
+          !USERNAME.test(input.username) ||
+          !UUID.test(input.reservationId)) deny();
+      const result=await workerPool.query(
+        'SELECT paper_account_reservation_proof.claim_signup_once($1,$2,$3,$4,$5,$6,$7) AS claimed',
+        [PROVIDER,input.appClientId,
+          hashKey(input.appClientId,input.idempotencyKey),
+          Buffer.from(input.requestFingerprint,'hex'),
+          input.reservationId,input.username,WEBID_ROOT+input.username]
+      );
+      return result.rowCount===1 && result.rows[0]?.claimed===true;
+    },
     async complete(fence, proof) {
       assertDisposable();
       assertFence(fence);
@@ -192,6 +209,9 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
         'paper_account_reservation_proof.start_side_effects(text,text,bytea,uuid,uuid)',
         'EXECUTE') AS can_start,
       has_function_privilege(current_user,
+        'paper_account_reservation_proof.claim_signup_once(text,text,bytea,bytea,uuid,text,text)',
+        'EXECUTE') AS can_claim_signup,
+      has_function_privilege(current_user,
         'paper_account_reservation_proof.complete(text,text,bytea,uuid,uuid,text,text,text,text,bytea)',
         'EXECUTE') AS can_complete,
       has_function_privilege(current_user,
@@ -212,6 +232,7 @@ export async function assertRestrictedAccountProofLogin(pool, kind) {
     row.write_all === false && row.monitor === false &&
     row.can_reserve === (kind === 'worker') &&
     row.can_start === (kind === 'worker') &&
+    row.can_claim_signup === (kind === 'worker') &&
     row.can_complete === (kind === 'worker') &&
     row.can_issue === (kind === 'issuer') &&
     row.can_read_lease === (kind === 'issuer');

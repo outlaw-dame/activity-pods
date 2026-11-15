@@ -81,7 +81,11 @@ function timingSafeEquals(a, b) {
 
 module.exports = {
   name: 'entryway-app-bootstrap-api',
-  dependencies: ['api', 'app-registrations', 'access-grants', 'provider-capabilities', 'auth.account'],
+  dependencies: [
+    'api', 'app-registrations', 'access-grants',
+    'access-authorizations', 'data-authorizations',
+    'provider-capabilities', 'auth.account'
+  ],
 
   settings: {
     enabled: parseBoolean(process.env.ENTRYWAY_APP_BOOTSTRAP_PROVIDER_ENABLED, false),
@@ -177,23 +181,77 @@ module.exports = {
             403, 'BOOTSTRAP_OWNER_UNVERIFIED');
         }
 
-        const appRegistrationUri = await ctx.call('app-registrations.createOrUpdate', {
-          appUri: appConfig.appUri,
-          podOwner: webId,
-          acceptedAccessNeeds: appConfig.acceptedAccessNeeds,
-          acceptedSpecialRights: appConfig.acceptedSpecialRights
-        });
-
-        const accessGrants = await ctx.call('access-grants.getForApp', {
+        // Provider approval is NOT consent from the Pod owner. Only the
+        // existing authenticated SAI authorization-agent flow may create
+        // grants. Entryway confirms the owner's already persisted decision.
+        const appRegistration = await ctx.call('app-registrations.getForApp', {
           appUri: appConfig.appUri,
           podOwner: webId
         });
+        if (!appRegistration ||
+            appRegistration['interop:registeredBy'] !== webId ||
+            appRegistration['interop:registeredAgent'] !== appConfig.appUri) {
+          throw new MoleculerError('Pod owner application authorization is required',
+            428, 'BOOTSTRAP_OWNER_CONSENT_REQUIRED', { retryable: false });
+        }
+
+        const appRegistrationUri = this.assertAbsoluteHttpUrl(
+          appRegistration.id || appRegistration['@id'], 'appRegistrationUri');
+
+        // Read persisted SAI resources rather than deriving access from a
+        // caller body, app allowlist, or unverified bootstrap claim.
+        const [accessGrants, accessAuthorizations, dataAuthorizations] = await Promise.all([
+          ctx.call('access-grants.getForApp', { appUri: appConfig.appUri, podOwner: webId }),
+          ctx.call('access-authorizations.getForApp', { appUri: appConfig.appUri, podOwner: webId }),
+          ctx.call('data-authorizations.getForApp', { appUri: appConfig.appUri, podOwner: webId })
+        ]);
+
+        const grantUris = asArray(accessGrants).map(grant => {
+          if (!grant || grant['interop:grantedBy'] !== webId ||
+              grant['interop:grantee'] !== appConfig.appUri) {
+            throw new MoleculerError('SAI access grant ownership is inconsistent',
+              409, 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH');
+          }
+          return this.assertAbsoluteHttpUrl(grant.id || grant['@id'], 'accessGrantUri');
+        });
+        // Linked access-grant IDs must match the live grant set exactly.
+        // A revoked grant must never be acknowledged by stale registration.
+        const linkedGrants = asArray(appRegistration['interop:hasAccessGrant'])
+          .map(uri => this.assertAbsoluteHttpUrl(uri, 'linkedAccessGrantUri'));
+        if (!this.sameUniqueUris(grantUris, linkedGrants) ||
+            (appConfig.acceptedAccessNeeds.length + appConfig.acceptedSpecialRights.length > 0 &&
+             grantUris.length === 0)) {
+          throw new MoleculerError('Pod owner application authorization must be refreshed',
+            428, 'BOOTSTRAP_OWNER_CONSENT_REQUIRED', { retryable: false });
+        }
+
+        // Persisted owner-approved rights must remain within provider policy,
+        // but policy cannot silently authorize rights the owner did not grant.
+        for (const authorization of asArray(accessAuthorizations)) {
+          if (!authorization ||
+              authorization['interop:grantedBy'] !== webId ||
+              authorization['interop:grantee'] !== appConfig.appUri ||
+              asArray(authorization['apods:hasSpecialRights'])
+                .some(right => typeof right !== 'string' ||
+                  !appConfig.acceptedSpecialRights.includes(right))) {
+            throw new MoleculerError('SAI authorization exceeds approved application policy',
+              409, 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH');
+          }
+        }
+        for (const authorization of asArray(dataAuthorizations)) {
+          if (!authorization ||
+              authorization['interop:dataOwner'] !== webId ||
+              authorization['interop:grantee'] !== appConfig.appUri ||
+              !appConfig.acceptedAccessNeeds.includes(
+                normalizeString(authorization['interop:satisfiesAccessNeed']))) {
+            throw new MoleculerError('SAI data authorization exceeds approved application policy',
+              409, 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH');
+          }
+        }
 
         return {
           appRegistrationUri,
-          accessGrantUris: asArray(accessGrants)
-            .map(grant => normalizeString(grant?.id || grant?.['@id'] || grant))
-            .filter(Boolean),
+          accessGrantUris: grantUris,
           bootstrappedAt: new Date().toISOString(),
           ...(appConfig.sessionHandoff ? { sessionHandoff: appConfig.sessionHandoff } : {})
         };
@@ -202,6 +260,13 @@ module.exports = {
   },
 
   methods: {
+    sameUniqueUris(left, right) {
+      const a = new Set(left);
+      const b = new Set(right);
+      return a.size === left.length && b.size === right.length &&
+        a.size === b.size && [...a].every(uri => b.has(uri));
+    },
+
     assertInternalBearer(ctx) {
       const expected = String(this.settings.internalBearerToken || '').trim();
       if (!expected) {

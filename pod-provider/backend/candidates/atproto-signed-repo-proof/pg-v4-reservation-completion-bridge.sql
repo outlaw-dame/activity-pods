@@ -217,32 +217,17 @@ BEGIN
 END;
 $$;
 
--- The old structural-hash completion candidate may still exercise unrelated
--- legacy fixtures. It must NEVER finalize a reservation bound to v4, where
--- current cryptographic attestation is mandatory.
+-- Once the v4 authority extension is installed, the legacy structural-
+-- digest-only completion path is disabled for ALL reservations. No unbound
+-- reservation may bypass the verified v4 journal by presenting 32 arbitrary
+-- bytes. The older standalone candidate tests keep their unextended proof
+-- schema; this database exclusively uses the restricted v4 finalizer.
 CREATE OR REPLACE FUNCTION paper_account_reservation_proof.complete(
   p_provider text, p_app text, p_key_hash bytea, p_reservation uuid, p_fence uuid,
   p_webid text, p_ap_actor text, p_did text, p_pds_url text, p_evidence bytea
 ) RETURNS boolean
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-DECLARE changed integer;
-BEGIN
-  IF p_webid IS NULL OR p_ap_actor IS NULL OR p_ap_actor !~ '^https://' OR length(p_ap_actor)>512
-     OR p_did IS NULL OR p_did !~ '^did:plc:[a-z2-7]{24}$'
-     OR p_pds_url IS NULL OR p_pds_url !~ '^https://' OR length(p_pds_url)>512
-     OR p_evidence IS NULL OR octet_length(p_evidence)<>32 THEN RETURN false; END IF;
-  UPDATE paper_account_reservation_proof.reservations r
-    SET state='completed',completed_at=clock_timestamp(),
-      activitypub_actor_id=p_ap_actor,atproto_did=p_did,
-      atproto_pds_url=p_pds_url,evidence_hash=p_evidence
-    WHERE r.provider_id=p_provider AND r.app_client_id=p_app
-      AND r.idempotency_hash=p_key_hash AND r.reservation_id=p_reservation
-      AND r.fence_token=p_fence AND r.state='side_effects_started'
-      AND r.signup_claimed_at IS NOT NULL AND r.v4_bound_at IS NULL
-      AND r.expected_webid=p_webid;
-  GET DIAGNOSTICS changed=ROW_COUNT;
-  RETURN changed=1;
-END;
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+  SELECT false;
 $$;
 
 REVOKE ALL ON FUNCTION paper_account_reservation_proof.bind_v4_signup(

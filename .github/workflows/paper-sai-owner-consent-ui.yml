@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pod-provider/frontend/src/pages/AuthorizePage/**'
+      - 'pod-provider/frontend/src/hooks/useGetAppStatus.js'
       - 'pod-provider/frontend/src/config/messages/en.js'
       - 'pod-provider/frontend/src/config/messages/fr.js'
       - '.github/workflows/paper-sai-owner-consent-ui.yml'
@@ -39,6 +40,7 @@ jobs:
           set -euo pipefail
           node --check pod-provider/frontend/src/pages/AuthorizePage/consentPolicy.mjs
           node --test pod-provider/frontend/src/pages/AuthorizePage/consentPolicy.test.mjs
+          node --test pod-provider/frontend/src/pages/AuthorizePage/authorizationNavigationPolicy.test.mjs
 
       - name: Install pinned lightweight JSX syntax parser
         run: |
@@ -56,6 +58,8 @@ jobs:
           const path = require('node:path');
           const parser = require(path.join(process.env.JSX_PARSER_ROOT, '@babel/parser'));
           for (const source of [
+            'pod-provider/frontend/src/pages/AuthorizePage/AuthorizePage.js',
+            'pod-provider/frontend/src/hooks/useGetAppStatus.js',
             'pod-provider/frontend/src/pages/AuthorizePage/RegistrationScreen.js',
             'pod-provider/frontend/src/pages/AuthorizePage/UpgradeScreen.js',
             'pod-provider/frontend/src/config/messages/en.js',

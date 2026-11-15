@@ -410,10 +410,17 @@ async function verify(){
     'Ordinary provider must replay claim after independent admin/Jena restart');
   const count=(await admin.query(
    'SELECT count(*)::int AS count FROM paper_dataset_admin_proof.claims')).rows[0].count;
-  assert.equal(count,1);
+  assert.equal(count,2,
+    'Two independent pre-account datasets, each with one immutable claim');
+  const unique=await admin.query(
+    'SELECT dataset,count(*)::int AS n FROM paper_dataset_admin_proof.claims '+
+    'GROUP BY dataset ORDER BY dataset');
+  assert.equal(unique.rowCount,2);
+  assert(unique.rows.every(row=>row.n===1),
+    'Replays must never create additional claim rows for either dataset');
   console.log('DATASET_ADMIN_SIGNED_PREACCOUNT '+JSON.stringify({
    phase:'verify',jenaRestartPersisted:true,newAdminProcess:true,
-   oneClaimRow:true,productionStorageReleased:false
+   oneClaimPerDataset:true,productionStorageReleased:false
   }));
  }finally{await stop(child);}
 }

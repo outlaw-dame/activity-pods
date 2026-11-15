@@ -78,20 +78,33 @@ function createPgBootstrapReadiness({
     const sql =
       'SELECT r.rolsuper AS is_superuser,r.rolbypassrls AS bypass_rls,'+
       'r.rolcreatedb AS can_create_db,r.rolcreaterole AS can_create_role,'+
-      'r.rolreplication AS can_replicate,'+
-      "pg_has_role(current_user,'paper_account_bootstrap_reader','member') AS reader_member,"+
-      "has_schema_privilege(current_user,'paper_account_candidate','USAGE') AS account_schema,"+
-      "has_schema_privilege(current_user,'paper_account_candidate','CREATE') AS can_create,"+
-      "has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema,"+
-      "has_schema_privilege(current_user,'paper_atproto_authority','USAGE') AS can_read_authority,"+
-      "has_schema_privilege(current_user,'paper_atproto_repo_proof','USAGE') AS can_read_repo,"+
-      "has_function_privilege(current_user,'paper_account_candidate.current_bootstrap_proof("+
+      'r.rolreplication AS can_replicate,r.rolcanlogin AS can_login,'+
+      "pg_catalog.pg_has_role(current_user,'paper_account_bootstrap_reader','MEMBER') AS reader_member,"+
+      "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_importer','MEMBER') AS importer_member,"+
+      "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_revoker','MEMBER') AS revoker_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_read_all_data','MEMBER') AS read_all_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_write_all_data','MEMBER') AS write_all_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_execute_server_program','MEMBER') AS exec_program_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_read_server_files','MEMBER') AS read_files_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_write_server_files','MEMBER') AS write_files_member,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+      "WHERE nspname='paper_account_candidate'),'MEMBER') AS account_owner_member,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+      "WHERE nspname='paper_atproto_authority'),'MEMBER') AS authority_owner_member,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+      "WHERE nspname='paper_atproto_repo_proof'),'MEMBER') AS repo_owner_member,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_account_candidate','USAGE') AS account_schema,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_account_candidate','CREATE') AS can_create,"+
+      "pg_catalog.has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_atproto_authority','USAGE') AS can_read_authority,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_atproto_repo_proof','USAGE') AS can_read_repo,"+
+      "pg_catalog.has_function_privilege(current_user,'paper_account_candidate.current_bootstrap_proof("+
       "text,text,smallint,bytea,text,text,text,text,text,text)','EXECUTE') AS can_prove,"+
-      "has_table_privilege(current_user,'paper_account_candidate.accounts','SELECT') AS can_select_accounts,"+
-      "has_table_privilege(current_user,'paper_account_candidate.signup_operations','SELECT') AS can_select_journal,"+
-      "has_table_privilege(current_user,'paper_account_candidate.accounts',"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.accounts','SELECT') AS can_select_accounts,"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.signup_operations','SELECT') AS can_select_journal,"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.accounts',"+
       "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_accounts,"+
-      "has_table_privilege(current_user,'paper_account_candidate.signup_operations',"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.signup_operations',"+
       "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_journal "+
       'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user LIMIT 2';
     let result;
@@ -104,7 +117,14 @@ function createPgBootstrapReadiness({
     if (result?.rowCount !== 1 || !role ||
         role.is_superuser !== false || role.bypass_rls !== false ||
         role.can_create_db !== false || role.can_create_role !== false ||
-        role.can_replicate !== false ||
+        role.can_replicate !== false || role.can_login !== true ||
+        role.importer_member !== false || role.revoker_member !== false ||
+        role.read_all_member !== false || role.write_all_member !== false ||
+        role.exec_program_member !== false || role.read_files_member !== false ||
+        role.write_files_member !== false ||
+        role.account_owner_member !== false ||
+        role.authority_owner_member !== false ||
+        role.repo_owner_member !== false ||
         role.reader_member !== true || role.account_schema !== true ||
         role.can_create !== false || role.can_create_schema !== false ||
         role.can_read_authority !== false ||

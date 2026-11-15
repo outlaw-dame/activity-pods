@@ -299,6 +299,14 @@ async function verify() {
     assert.equal(nextReceipt.outcome,'reserved');
     const nextFence=fence(nextInput,nextReceipt);
     assert.equal(await service.startSideEffects(nextFence),true);
+    assert.equal(await service.complete(nextFence,proof(nextInput.username)),false,
+      'Account completion requires a previously consumed signup fence');
+    assert.equal(await service.claimSignup({
+      appClientId:nextInput.appClientId,
+      idempotencyKey:nextInput.idempotencyKey,
+      requestFingerprint:nextInput.requestFingerprint,
+      username:nextInput.username,reservationId:nextFence.reservationId
+    }),true);
     await assert.rejects(
       service.complete(nextFence,{...proof(nextInput.username),
         atprotoDid:proof(config.input.username).atprotoDid}),

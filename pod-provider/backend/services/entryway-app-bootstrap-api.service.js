@@ -81,7 +81,7 @@ function timingSafeEquals(a, b) {
 
 module.exports = {
   name: 'entryway-app-bootstrap-api',
-  dependencies: ['api', 'app-registrations', 'access-grants'],
+  dependencies: ['api', 'app-registrations', 'access-grants', 'provider-capabilities', 'auth.account'],
 
   settings: {
     enabled: parseBoolean(process.env.ENTRYWAY_APP_BOOTSTRAP_PROVIDER_ENABLED, false),
@@ -119,11 +119,14 @@ module.exports = {
     bootstrap: {
       params: {
         accountId: { type: 'string', optional: true },
+        // The provider-issued idempotency reference is a scoped signup
+        // lookup, not a caller-provided consent or ownership assertion.
+        idempotencyKey: { type: 'string', min: 1 },
         canonicalAccountId: { type: 'string', min: 1 },
-        username: { type: 'string', optional: true },
+        username: { type: 'string', min: 1 },
         webId: { type: 'string', min: 1 },
-        actorId: { type: 'string', optional: true },
-        podStorageUrl: { type: 'string', optional: true },
+        actorId: { type: 'string', min: 1 },
+        podStorageUrl: { type: 'string', min: 1 },
         providerId: { type: 'string', optional: true },
         appClientId: { type: 'string', min: 1 },
         redirectUri: { type: 'string', optional: true },
@@ -150,6 +153,28 @@ module.exports = {
         const appConfig = this.findApprovedApp(ctx.params.appClientId);
         if (!appConfig) {
           throw new MoleculerError('App is not approved for Entryway bootstrap', 403, 'UNAUTHORIZED_APP');
+        }
+
+        // A shared backend bearer does not authorize operations on any Pod.
+        // Verify the exact previously completed signup in the provider-owned
+        // ledger, then independently check that the canonical local account
+        // still exists and is not disabled before creating any SAI rights.
+        await ctx.call('provider-capabilities.assertCompletedAccountBootstrap', {
+          appClientId: appConfig.appClientId,
+          idempotencyKey: ctx.params.idempotencyKey,
+          username: ctx.params.username,
+          canonicalAccountId,
+          webId,
+          actorId: this.assertAbsoluteHttpUrl(ctx.params.actorId, 'actorId'),
+          podStorageUrl: this.assertAbsoluteHttpUrl(ctx.params.podStorageUrl, 'podStorageUrl'),
+          atprotoDid: ctx.params.atprotoDid,
+          atprotoHandle: ctx.params.atprotoHandle
+        });
+        const account = await ctx.call('auth.account.findByWebId', { webId });
+        if (!account || account.disabled === true ||
+            account.username !== ctx.params.username) {
+          throw new MoleculerError('Bootstrap owner is not an active local account',
+            403, 'BOOTSTRAP_OWNER_UNVERIFIED');
         }
 
         const appRegistrationUri = await ctx.call('app-registrations.createOrUpdate', {

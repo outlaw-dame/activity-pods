@@ -113,18 +113,17 @@ async function createBridgePrincipals(pool,retainedPools){
       " 'EXECUTE') AS can_reflect")).rows[0];
     return role;
   };
-  assert.deepEqual(inventory instanceof Function,true);
   assert.deepEqual(await inventory(worker),{can_bind:false,can_reflect:false});
   assert.deepEqual(await inventory(binder),{can_bind:true,can_reflect:false});
   assert.deepEqual(await inventory(finalizer),{can_bind:false,can_reflect:true});
   return {worker,binder,finalizer};
 }
 const scopedKeyHash=(provider,app,key)=>crypto.createHash('sha256')
-  .update('activitypods:account-reservation:key:v1\\0')
-  .update(provider).update('\\0').update(app).update('\\0')
+  .update('activitypods:account-reservation:key:v1\0')
+  .update(provider).update('\0').update(app).update('\0')
   .update(key).digest();
 const scopedApp=app=>crypto.createHash('sha256')
-  .update('activitypods:approved-app:v1\\0').update(app).digest('hex');
+  .update('activitypods:approved-app:v1\0').update(app).digest('hex');
 
 test('one sealed new signup gets independently signed hosted PDS proof before PG18 atomic ready',async t=>{
   let server=null,cleanupError=null,tlsDir=null;

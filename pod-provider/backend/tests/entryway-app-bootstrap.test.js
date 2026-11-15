@@ -150,6 +150,7 @@ describe('entryway-app-bootstrap-api service', () => {
     const proof = jest.fn();
     for (const result of results) proof.mockResolvedValueOnce({ ...base, ...result });
     providerService.pgBootstrapReadiness = { assertCurrent: proof };
+    providerService.pgBootstrapAppClientId = approvedApp.appClientId;
     return proof;
   }
 
@@ -180,6 +181,53 @@ describe('entryway-app-bootstrap-api service', () => {
     }
     expect(storageGetUrl).toHaveBeenCalledTimes(1);
     expect(createOrUpdateCalls).toHaveLength(0);
+  });
+
+  test('a second approved signup client cannot borrow the pinned PG proof even with the same SAI app URI', async () => {
+    const proof = installPgProof([{}, {}]);
+    const appService = broker.getLocalService('entryway-app-bootstrap-api');
+    const alternateClient = 'https://alternate.example/account-client';
+    appService.settings.approvedApps.push({
+      ...approvedApp,
+      appClientId: alternateClient,
+      // This is deliberately the same SAI application: sharing a grant
+      // cannot confer another signup client's ledger privileges.
+      appUri: approvedApp.appUri
+    });
+
+    await expect(broker.call('entryway-app-bootstrap-api.bootstrap', {
+      ...pgPayload(),
+      appClientId: alternateClient
+    }, {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    })).rejects.toMatchObject({
+      code: 403,
+      type: 'BOOTSTRAP_PG_SCOPE_INVALID'
+    });
+    expect(proof).not.toHaveBeenCalled();
+    expect(storageGetUrl).not.toHaveBeenCalled();
+    expect(createOrUpdateCalls).toEqual([]);
+
+    // The provider-pinned client can still pass the same authority check.
+    const response = await broker.call('entryway-app-bootstrap-api.bootstrap', pgPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    });
+    expect(response.accessGrantUris).toEqual([
+      'http://localhost:3000/alice/data/grant-memory'
+    ]);
+    expect(proof).toHaveBeenCalledTimes(2);
+  });
+
+  test('a configured PG reader without a pinned app client fails closed', async () => {
+    const proof = installPgProof([{}, {}]);
+    providerService.pgBootstrapAppClientId = null;
+    await expect(broker.call('entryway-app-bootstrap-api.bootstrap', pgPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    })).rejects.toMatchObject({
+      code: 403, type: 'BOOTSTRAP_PG_SCOPE_INVALID'
+    });
+    expect(proof).not.toHaveBeenCalled();
+    expect(createOrUpdateCalls).toEqual([]);
   });
 
   test('rejects PG consent grant mismatch, revision drift and owner storage drift', async () => {

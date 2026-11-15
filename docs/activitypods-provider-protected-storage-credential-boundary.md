@@ -433,9 +433,15 @@ in-memory idempotency. The new isolated
 rejects these shortcuts: production/ordinary modes, missing approved
 apps, permissive bearer/user-verification settings, empty explicit
 origin/redirect allowlists, mismatched Origin/redirect, unsigned apps,
-absent or boolean-only verification, invalid canonical usernames and
+absent, static-token or boolean-only verification, invalid canonical usernames and
 missing/invalid scoped idempotency keys. Only a successfully verified
-app bearer and user challenge yields a **non-secret** policy grant.
+app bearer and a provider-signed, short-lived **account-bound** verification
+challenge yields a **non-secret** policy grant. The challenge's canonical
+HMAC covers provider purpose, app identity, exact username/email, origin,
+redirect, idempotency key, server-HMAC request fingerprint, issuance/expiry
+and one-time random nonce. Generic reusable verification tokens cannot
+satisfy this stronger admission; the trusted challenge issuer/consumer
+still needs its own production deployment and audit.
 
 **No raw claim inputs.** The actual HTTP action rejects caller-supplied
 dataset tickets, signer fences, coordinator grants and request
@@ -448,9 +454,9 @@ the app's real identity remains with the ActivityPods capability
 service. No incoming HTTP `ctx.meta` is propagated to the coordinator
 or signup broker calls.
 
-**Separate trust domains.** The ordinary provider holds only two
-service keys: a request-fingerprint HMAC key and a different provider
-→ coordinator HMAC key. It never gets a worker SQL DSN, issuer Ed25519
+**Separate trust domains.** The ordinary provider holds three independent scoped HMAC secrets:
+the trusted user-verification challenge key, a password-safe
+request-fingerprint key and a different provider → coordinator service key. It never gets a worker SQL DSN, issuer Ed25519
 key or Jena admin credential. The worker on a *fixed, disposable*
 localhost endpoint authenticates the provider request's canonical
 bytes, per-request nonce and timestamp, and performs one PG

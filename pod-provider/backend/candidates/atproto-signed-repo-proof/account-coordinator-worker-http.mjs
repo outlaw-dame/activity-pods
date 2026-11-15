@@ -1,0 +1,99 @@
+/**
+ * Separate authenticated PostgreSQL reservation coordinator.
+ * HMAC is a provider-to-worker service credential; app authorization was
+ * independently performed by provider-capabilities before this request.
+ * This process cannot sign Ed25519 tickets or administer Jena.
+ */
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import {Pool} from 'pg';
+import wire from '../../services/utils/atproto-account-coordinator-client.js';
+import {makeAccountReservationAuthority,
+  assertRestrictedAccountProofLogin} from './account-reservation-authority.mjs';
+import {verifyDisposableDatasetClaim} from './dataset-admin-claim-service.mjs';
+import {server,readRequest,respond,exact,refuse,checkFixtureEnv}
+  from './account-coordinator-http.mjs';
+
+const KEYS=[
+ 'NODE_ENV','ATPROTO_REPO_PROOF_DISPOSABLE','ATPROTO_FUSEKI_ISOLATION_DISPOSABLE',
+ 'FUSEKI_ISOLATION_URL','APODS_ACCOUNT_RESERVATION_DISPOSABLE',
+ 'APODS_DATASET_CLAIM_ISSUER_DISPOSABLE','APODS_ACCOUNT_COORDINATOR_DISPOSABLE',
+ 'ACCOUNT_COORDINATOR_WORKER_DSN','ACCOUNT_COORDINATOR_SHARED_KEY',
+ 'ACCOUNT_COORDINATOR_ISSUER_KEY','ACCOUNT_ISSUER_PUBLIC_PEM_B64'
+];
+checkFixtureEnv('worker',KEYS);
+const url=new URL(process.env.ACCOUNT_COORDINATOR_WORKER_DSN);
+assert.equal(url.hostname,'127.0.0.1');
+assert.equal(url.port,'5548');
+assert.equal(url.pathname,'/atproto_signed_repo_proof_test');
+assert.equal(url.username,'paper_account_worker_login');
+const providerSecret=process.env.ACCOUNT_COORDINATOR_SHARED_KEY;
+const issuerSecret=process.env.ACCOUNT_COORDINATOR_ISSUER_KEY;
+const publicKey=crypto.createPublicKey({
+  key:Buffer.from(process.env.ACCOUNT_ISSUER_PUBLIC_PEM_B64,'base64'),
+  format:'pem',type:'spki'
+});
+const pool=new Pool({connectionString:url.toString(),max:4,
+  connectionTimeoutMillis:3000,query_timeout:5000,
+  idleTimeoutMillis:2000,allowExitOnIdle:true});
+await assertRestrictedAccountProofLogin(pool,'worker');
+const authority=makeAccountReservationAuthority({workerPool:pool});
+const keys=['version','appScope','username','idempotencyKey',
+  'requestFingerprint','dailyLimit','issuedAtMs','nonce'];
+
+async function requestIssuer(fence,dataset){
+  const body=JSON.stringify({
+    version:1,fence,dataset,issuedAtMs:Date.now(),nonce:crypto.randomUUID()
+  });
+  const mac=wire.computeMac(issuerSecret,'issuer',body);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),5000);
+  try{
+    const reply=await fetch('http://127.0.0.1:3045/v1/issue',{
+      method:'POST',redirect:'manual',signal:controller.signal,
+      headers:{'content-type':'application/json','x-paper-auth':mac},
+      body
+    });
+    if(reply.status!==200)refuse();
+    const raw=await reply.text();
+    if(Buffer.byteLength(raw,'utf8')>2048 ||
+       !wire.verifyMac(issuerSecret,'issuer-response',raw,
+         reply.headers.get('x-paper-auth')))refuse();
+    const parsed=JSON.parse(raw);
+    if(!exact(parsed,['ticket']))refuse();
+    const verified=verifyDisposableDatasetClaim(parsed.ticket,publicKey);
+    if(verified.dataset!==dataset ||
+       verified.reservationId!==fence.reservationId)refuse();
+    return parsed.ticket;
+  }catch{refuse();}finally{clearTimeout(timer);}
+}
+const listener=await server({port:3043,handler:async(req,res)=>{
+  const input=await readRequest(req,{
+    domain:'client',secret:providerSecret,
+    route:'/v1/reserve',keys
+  });
+  wire.validateMessage(input);
+  const details={
+    appClientId:input.appScope,
+    username:input.username,
+    idempotencyKey:input.idempotencyKey,
+    requestFingerprint:input.requestFingerprint,
+    dailyLimit:input.dailyLimit
+  };
+  const first=await authority.reserve(details);
+  if(first.outcome!=='reserved' || !first.fenceToken)refuse(409);
+  const fence={appClientId:input.appScope,
+    idempotencyKey:input.idempotencyKey,
+    reservationId:first.reservationId,fenceToken:first.fenceToken};
+  if(!(await authority.startSideEffects(fence)))refuse();
+  // A crash or request timeout here does NOT release the fence; retry
+  // returns 409 pending reconciliation rather than minting a second DID.
+  const ticket=await requestIssuer(fence,input.username);
+  respond(res,200,{ticket},{
+    secret:providerSecret,domain:'worker-response'
+  });
+}});
+process.stdout.write('ACCOUNT_COORDINATOR_READY\n');
+for(const signal of ['SIGTERM','SIGINT']){
+  process.once(signal,()=>listener.close(()=>pool.end().finally(()=>process.exit(0))));
+}

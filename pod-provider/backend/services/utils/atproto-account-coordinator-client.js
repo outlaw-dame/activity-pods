@@ -231,7 +231,13 @@ async function consumeCoordinatedSignup({
     const {raw:body,value}=await boundedResponse(response);
     if(!verifyMac(env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
       'consume-response',body,response.headers?.get('x-paper-auth')) ||
-      !isExact(value,['admitted']) || value.admitted!==true) {
+      !isExact(value,[
+        'admitted','requestSha256','reservationId','nonce'
+      ]) || value.admitted!==true ||
+      value.requestSha256!==crypto.createHash('sha256')
+        .update(raw,'utf8').digest('hex') ||
+      value.reservationId!==admission.reservationId ||
+      value.nonce!==message.nonce) {
       reject('ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED');
     }
     return Object.freeze({admitted:true});

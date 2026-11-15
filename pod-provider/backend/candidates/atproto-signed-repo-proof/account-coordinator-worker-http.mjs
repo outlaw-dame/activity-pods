@@ -44,6 +44,27 @@ const authority=makeAccountReservationAuthority({workerPool:pool});
 const keys=['version','appScope','username','idempotencyKey',
   'requestFingerprint','dailyLimit','issuedAtMs','nonce'];
 
+async function readIssuerBounded(reply){
+  const len=reply.headers.get('content-length');
+  if(len!==null && (!/^[0-9]{1,4}$/u.test(len) || Number(len)>2048))refuse();
+  if(!reply.body?.getReader)refuse();
+  const reader=reply.body.getReader();
+  const parts=[];let total=0;
+  try{
+    for(;;){
+      const next=await reader.read();
+      if(next.done)break;
+      total+=next.value.byteLength;
+      if(total>2048)refuse();
+      parts.push(Buffer.from(next.value));
+    }
+  }finally{
+    await reader.cancel().catch(()=>{});
+    reader.releaseLock();
+  }
+  if(!total)refuse();
+  return Buffer.concat(parts,total).toString('utf8');
+}
 async function requestIssuer(fence,dataset){
   const body=JSON.stringify({
     version:1,fence,dataset,issuedAtMs:Date.now(),nonce:crypto.randomUUID()
@@ -58,9 +79,8 @@ async function requestIssuer(fence,dataset){
       body
     });
     if(reply.status!==200)refuse();
-    const raw=await reply.text();
-    if(Buffer.byteLength(raw,'utf8')>2048 ||
-       !wire.verifyMac(issuerSecret,'issuer-response',raw,
+    const raw=await readIssuerBounded(reply);
+    if(!wire.verifyMac(issuerSecret,'issuer-response',raw,
          reply.headers.get('x-paper-auth')))refuse();
     const parsed=JSON.parse(raw);
     if(!exact(parsed,['ticket']))refuse();

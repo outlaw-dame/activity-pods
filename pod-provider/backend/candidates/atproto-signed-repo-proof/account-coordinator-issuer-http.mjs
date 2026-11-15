@@ -30,6 +30,8 @@ const key=crypto.createPrivateKey({
 });
 assert.equal(key.asymmetricKeyType,'ed25519');
 const issuerSecret=process.env.ACCOUNT_COORDINATOR_ISSUER_KEY;
+const {parseSecret}=await import('../../services/utils/atproto-account-coordinator-client.js').then(m=>m.default);
+parseSecret(issuerSecret);
 const pool=new Pool({connectionString:url.toString(),max:3,
   connectionTimeoutMillis:3000,query_timeout:5000,
   idleTimeoutMillis:2000,allowExitOnIdle:true});

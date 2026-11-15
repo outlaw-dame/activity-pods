@@ -50,6 +50,7 @@ module.exports = {
             enabled: { type: 'boolean', optional: true }
           }
         },
+        datasetAdminTicket: { type: 'object', optional: true, strict: false },
         atproto: {
           type: 'object',
           optional: true,
@@ -74,6 +75,19 @@ module.exports = {
           grant: ctx.meta?.accountProvisioning || {},
           requestedProtocols
         });
+
+        const ticket = input.datasetAdminTicket;
+        const delegated = process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed';
+        if (ticket !== undefined && (!delegated ||
+            process.env.NODE_ENV !== 'test' ||
+            process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed')) {
+          throw new MoleculerError('Dataset claims are restricted to trusted account coordination',
+            503,'ACCOUNT_COORDINATOR_NOT_RELEASED',{retryable:false});
+        }
+        if (delegated && (!ticket || typeof ticket !== 'object')) {
+          throw new MoleculerError('Signed dataset claim is required before account state creation',
+            503,'ACCOUNT_COORDINATOR_CLAIM_REQUIRED',{retryable:false});
+        }
 
         const enableSolid = requestedProtocols.solid;
         const enableActivityPub = requestedProtocols.activitypub;
@@ -111,7 +125,8 @@ module.exports = {
             username: input.username,
             email: input.email,
             password: input.password,
-            profile: input.profile
+            profile: input.profile,
+            ...(ticket ? {datasetAdminTicket:ticket} : {})
           });
 
           await ctx.call('account-provisioning-state.markPhase', {

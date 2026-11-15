@@ -191,6 +191,82 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
 
     const model=createCandidate({pool,fixtureOnly:true});
     assert.equal((await model.reserveSignup(scope)).state,'reserved');
+    const bridgeRoles=await createBridgePrincipals(pool,bridgePools);
+    const pgAuthority=makeAccountReservationAuthority({
+      workerPool:bridgeRoles.worker
+    });
+    const bridgeScope={
+      provider:providerId+'/provider',
+      appScope:scopedApp(appClientId),
+      key:'postseal-'+crypto.randomBytes(10).toString('hex'),
+      requestFingerprint:crypto.createHash('sha256')
+        .update('postseal-v4-original-request:'+scope.username).digest('hex'),
+      username:scope.username
+    };
+    const reserved=await pgAuthority.reserve({
+      appClientId:bridgeScope.appScope,
+      username:bridgeScope.username,
+      idempotencyKey:bridgeScope.key,
+      requestFingerprint:bridgeScope.requestFingerprint,
+      dailyLimit:3
+    });
+    assert.equal(reserved.outcome,'reserved');
+    const fence={
+      appClientId:bridgeScope.appScope,
+      idempotencyKey:bridgeScope.key,
+      reservationId:reserved.reservationId,
+      fenceToken:reserved.fenceToken
+    };
+    assert.equal(await pgAuthority.startSideEffects(fence),true);
+    const linkParams=[
+      reserved.reservationId,bridgeScope.provider,bridgeScope.appScope,
+      scopedKeyHash(bridgeScope.provider,bridgeScope.appScope,bridgeScope.key),
+      Buffer.from(bridgeScope.requestFingerprint,'hex'),
+      providerId,appClientId,accountId,opId,1,
+      scope.idempotencyHmac,scope.requestHmac
+    ];
+    const bind=async vars=>{
+      const r=await bridgeRoles.binder.query(
+        'SELECT paper_account_reservation_proof.bind_v4_signup('+
+        '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10::smallint,$11,$12) AS bound',vars);
+      return r.rows[0].bound;
+    };
+    assert.equal(await bind([...linkParams.slice(0,6),
+      'https://unapproved.example.org/client',...linkParams.slice(7)]),false,
+      'A different v4 app cannot bind another application’s PG identity');
+    assert.equal(await bind([...linkParams.slice(0,7),
+      crypto.randomUUID(),...linkParams.slice(8)]),false,
+      'A different v4 account may not inherit the coordinator reservation');
+    assert.equal(await bind(linkParams),true,
+      'A matching, still-reserved v4 journal can be bound once');
+    assert.equal(await bind(linkParams),false,
+      'A v4 account mapping cannot be silently replaced on retries');
+    const invocation={
+      appClientId:bridgeScope.appScope,
+      idempotencyKey:bridgeScope.key,
+      requestFingerprint:bridgeScope.requestFingerprint,
+      username:bridgeScope.username,
+      reservationId:reserved.reservationId
+    };
+    assert.equal(await pgAuthority.claimSignup(invocation),true,
+      'The one-time PG execution CAS is consumed before WebID/DID mutation');
+    assert.equal(await pgAuthority.claimSignup(invocation),false,
+      'A second worker cannot recreate the same identity');
+    const synthetic={
+      username:scope.username,webId,
+      activityPubActorId:webId,
+      atprotoDid:did,atprotoPdsUrl:'https://pds.paper.example.org',
+      evidenceSha256:crypto.randomBytes(32).toString('hex')
+    };
+    assert.equal(await pgAuthority.complete(fence,synthetic),false,
+      'A v4-bound reservation must reject old shape-only completion proof');
+    const reflect=async()=>(
+      await bridgeRoles.finalizer.query(
+        'SELECT paper_account_reservation_proof.reflect_v4_ready('+
+        '$1,$2,$3,$4,$5) AS reflected',linkParams.slice(0,5))
+    ).rows[0].reflected;
+    assert.equal(await reflect(),false,
+      'No unsigned or unsealed v4 account can complete the coordinator');
     assert.equal((await model.markSignupMayHaveSideEffects(scope)).state,
       'reconciliation_required');
     assert.equal((await model.change({

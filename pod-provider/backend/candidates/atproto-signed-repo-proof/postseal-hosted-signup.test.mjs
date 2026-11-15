@@ -16,6 +16,7 @@ import {fileURLToPath} from 'node:url';
 import {Pool} from 'pg';
 import {makeAccountReservationAuthority,assertRestrictedAccountProofLogin}
   from './account-reservation-authority.mjs';
+import {assertRestrictedV4BridgeLogin} from './pg-v4-bridge-role-admission.mjs';
 import {base58btc} from 'multiformats/bases/base58';
 import {createSignedRepoProofStore} from './store.mjs';
 import {createProviderManagedRepoAuthority} from './provider-authority.mjs';
@@ -116,6 +117,37 @@ async function createBridgePrincipals(pool,retainedPools){
   assert.deepEqual(await inventory(worker),{can_bind:false,can_reflect:false});
   assert.deepEqual(await inventory(binder),{can_bind:true,can_reflect:false});
   assert.deepEqual(await inventory(finalizer),{can_bind:false,can_reflect:true});
+  assert.equal(await assertRestrictedV4BridgeLogin(binder,'binder'),true);
+  assert.equal(await assertRestrictedV4BridgeLogin(finalizer,'finalizer'),true);
+  const drift=[
+    ['paper_bridge_binder_login',
+      'SELECT (fence_token) ON paper_account_reservation_proof.reservations',
+      'binder'],
+    ['paper_bridge_finalizer_login',
+      'UPDATE (atproto_did) ON paper_account_reservation_proof.reservations',
+      'finalizer'],
+    ['paper_bridge_binder_login','paper_account_proof_worker','binder'],
+    ['paper_bridge_finalizer_login','pg_monitor','finalizer']
+  ];
+  for(const [login,grant,kind] of drift){
+    const isRole=!grant.includes(' ON ');
+    const grantSql=isRole ? 'GRANT '+grant+' TO '+login+
+      ' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE' :
+      'GRANT '+grant+' TO '+login;
+    const revokeSql=isRole ? 'REVOKE '+grant+' FROM '+login :
+      'REVOKE '+grant+' FROM '+login;
+    await pool.query(grantSql);
+    try{
+      await assert.rejects(
+        assertRestrictedV4BridgeLogin(kind==='binder'?binder:finalizer,kind),
+        e=>e?.code==='V4_BRIDGE_SQL_PRIVILEGES_UNSAFE',
+        'Unexpected SQL grant must prevent entry: '+grant);
+    }finally{
+      await pool.query(revokeSql);
+    }
+    assert.equal(await assertRestrictedV4BridgeLogin(
+      kind==='binder'?binder:finalizer,kind),true);
+  }
   return {worker,binder,finalizer};
 }
 const scopedKeyHash=(provider,app,key)=>crypto.createHash('sha256')

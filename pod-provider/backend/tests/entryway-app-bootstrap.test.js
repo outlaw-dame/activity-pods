@@ -73,7 +73,7 @@ describe('entryway-app-bootstrap-api service', () => {
 
     await broker.start();
     providerService = broker.getLocalService('provider-capabilities');
-    seedCompletedSignup();
+    seedCompletedSignup(providerService, approvedApp.appClientId);
   });
 
   afterEach(async () => {
@@ -238,7 +238,7 @@ function bootstrapPayload() {
 const PROVIDER_IDEMPOTENCY_KEY =
   'entryway:acct_11111111-1111-4111-8111-111111111111:aaaaaaaaaaaaaaaaaaaaaaaa';
 
-function seedCompletedSignup(overrides = {}) {
+function seedCompletedSignup(providerService, appClientId, overrides = {}) {
   const account = {
     canonicalAccountId: 'http://localhost:3000/alice/profile/card#me',
     webId: 'http://localhost:3000/alice/profile/card#me',
@@ -253,10 +253,10 @@ function seedCompletedSignup(overrides = {}) {
   };
   providerService.idempotencyRecords.set(
     providerService.buildIdempotencyRecordKey(
-      approvedApp.appClientId, PROVIDER_IDEMPOTENCY_KEY),
+      appClientId, PROVIDER_IDEMPOTENCY_KEY),
     {
       key: PROVIDER_IDEMPOTENCY_KEY,
-      appClientId: approvedApp.appClientId,
+      appClientId,
       username: 'alice',
       requestFingerprint: 'provider-record-fingerprint',
       status: 'completed',

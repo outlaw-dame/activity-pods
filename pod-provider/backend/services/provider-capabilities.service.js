@@ -159,6 +159,61 @@ module.exports = {
   created() {
     this.idempotencyRecords = new Map();
     this.dailyUsage = new Map();
+    this.pgBootstrapReadiness = null;
+    this.pgBootstrapPool = null;
+
+    // Disposable provider integration only. A production environment flag
+    // can never activate PG-based signup or mint a grant: the actual signup
+    // release fuse remains closed in all HTTP and identity-minting actions.
+    if (process.env.NODE_ENV !== 'test' ||
+        process.env.APODS_ENTRYWAY_PG_PROOF_DISPOSABLE !== 'confirmed') return;
+
+    const dsn = process.env.APODS_ENTRYWAY_PG_PROOF_DSN || '';
+    const secret = process.env.APODS_ENTRYWAY_PG_HMAC_KEY_BASE64 || '';
+    const hmacKey = /^[A-Za-z0-9+/]{43}=$/u.test(secret)
+      ? Buffer.from(secret, 'base64') : Buffer.alloc(0);
+    const appClientId = process.env.APODS_ENTRYWAY_PG_APP_CLIENT_ID || '';
+    const appUri = process.env.APODS_ENTRYWAY_PG_APP_URI || '';
+    const providerId = process.env.APODS_ENTRYWAY_PG_PROVIDER_ID || '';
+    const version = Number(process.env.APODS_ENTRYWAY_PG_HMAC_KEY_VERSION || '1');
+    if (!/^postgres(?:ql)?:\/\/[^@\s]+@127\.0\.0\.1:5547\/paper_account_completion_test$/u.test(dsn) ||
+        hmacKey.length !== 32 || !Number.isInteger(version) || version < 1 || version > 255) {
+      throw new MoleculerError('Disposable PostgreSQL bootstrap config is invalid',
+        503, 'BOOTSTRAP_PG_CONFIGURATION_INVALID', { retryable: false });
+    }
+
+    // Sensitive pool credentials and the HMAC key remain in process-local
+    // provider ownership, never Moleculer settings/meta or HTTP responses.
+    const { Pool } = require('pg');
+    const { createPgBootstrapReadiness } = require('../candidates/postgres-bootstrap-readiness');
+    const pool = new Pool({
+      connectionString: dsn,
+      max: 2,
+      connectionTimeoutMillis: 2500,
+      idleTimeoutMillis: 5000,
+      allowExitOnIdle: true
+    });
+    try {
+      this.pgBootstrapReadiness = createPgBootstrapReadiness({
+        pool, providerId, appClientId, appUri,
+        hmacKey, hmacKeyVersion: version, fixtureOnly: true
+      });
+      this.pgBootstrapPool = pool;
+    } catch (error) {
+      // Pool is lazy and has not opened a socket, but always close its
+      // resources if provider-scoped configuration cannot be validated.
+      void pool.end();
+      throw error;
+    }
+  },
+
+  async stopped() {
+    if (this.pgBootstrapPool) {
+      const pool = this.pgBootstrapPool;
+      this.pgBootstrapPool = null;
+      this.pgBootstrapReadiness = null;
+      await pool.end();
+    }
   },
 
   actions: {
@@ -307,7 +362,37 @@ module.exports = {
         atprotoDid: { type: 'string', optional: true },
         atprotoHandle: { type: 'string', optional: true }
       },
-      handler(ctx) {
+      async handler(ctx) {
+        // This is a disposable integration, not a production cutover.
+        // Even an erroneously injected reader cannot bypass the existing
+        // production signup / bootstrap release fuses.
+        if (process.env.NODE_ENV === 'production') {
+          this.assertCompletedAccountBootstrap(ctx.params);
+        }
+        if (this.pgBootstrapReadiness) {
+          // The reader is scoped to the configured provider/app/HMAC and
+          // checks current account + signed PDS + SAI state. Never fall back
+          // to the volatile Map after a PostgreSQL outage or proof mismatch.
+          if (ctx.params.canonicalAccountId !== ctx.params.webId) {
+            throw new MoleculerError('Canonical account does not match Pod owner',
+              403, 'BOOTSTRAP_PG_SCOPE_INVALID', { retryable: false });
+          }
+          try {
+            return await this.pgBootstrapReadiness.assertCurrent({
+              idempotencyKey: ctx.params.idempotencyKey,
+              username: ctx.params.username,
+              webId: ctx.params.webId,
+              actorId: ctx.params.actorId,
+              atprotoDid: ctx.params.atprotoDid,
+              atprotoHandle: ctx.params.atprotoHandle
+            });
+          } catch (error) {
+            throw new MoleculerError('Durable account bootstrap proof unavailable',
+              503, error?.code === 'BOOTSTRAP_PG_NOT_READY'
+                ? 'BOOTSTRAP_PG_NOT_READY' : 'BOOTSTRAP_PG_PROOF_UNAVAILABLE',
+              { retryable: false });
+          }
+        }
         this.assertCompletedAccountBootstrap(ctx.params);
         return { verified: true };
       }

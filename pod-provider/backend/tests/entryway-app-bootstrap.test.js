@@ -9,6 +9,7 @@ describe('entryway-app-bootstrap-api service', () => {
   let storedGrants;
   let storedAccessAuthorizations;
   let storedDataAuthorizations;
+  let storageGetUrl;
 
   const approvedApp = {
     appClientId: 'https://memory.example/app',
@@ -63,6 +64,11 @@ describe('entryway-app-bootstrap-api service', () => {
       }
     });
     findByWebId = jest.fn(async () => ({ username: 'alice', disabled: false }));
+    storageGetUrl = jest.fn(async () => 'http://localhost:3000/alice/data/');
+    broker.createService({
+      name: 'solid-storage',
+      actions: { getUrl: storageGetUrl }
+    });
     broker.createService({
       name: 'auth.account',
       actions: { findByWebId }
@@ -130,6 +136,101 @@ describe('entryway-app-bootstrap-api service', () => {
     expect(JSON.stringify(result)).not.toContain('provider-internal-token');
 
     expect(createOrUpdateCalls).toEqual([]);
+  });
+
+  function installPgProof(results = [{}]) {
+    providerService.idempotencyRecords.clear();
+    const base = {
+      verified: true,
+      accountId: '11111111-1111-4111-8111-111111111111',
+      grantUri: 'http://localhost:3000/alice/data/grant-memory',
+      consentRevision: '1', accountGeneration: '3',
+      releaseAuthorized: false, canAuthenticate: false
+    };
+    const proof = jest.fn();
+    for (const result of results) proof.mockResolvedValueOnce({ ...base, ...result });
+    providerService.pgBootstrapReadiness = { assertCurrent: proof };
+    return proof;
+  }
+
+  function pgPayload() {
+    return {
+      ...bootstrapPayload(),
+      atprotoDid: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',
+      atprotoHandle: 'alice.paper.example.org'
+    };
+  }
+
+  test('uses current PG readiness instead of the volatile Map and rechecks SAI revision', async () => {
+    const proof = installPgProof([{}, {}]);
+    const result = await broker.call('entryway-app-bootstrap-api.bootstrap', pgPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    });
+    expect(result.accessGrantUris).toEqual(['http://localhost:3000/alice/data/grant-memory']);
+    expect(proof).toHaveBeenCalledTimes(2);
+    for (const [input] of proof.mock.calls) {
+      expect(input).toMatchObject({
+        idempotencyKey: PROVIDER_IDEMPOTENCY_KEY,
+        username: 'alice',
+        webId: 'http://localhost:3000/alice/profile/card#me',
+        actorId: 'http://localhost:3000/alice',
+        atprotoDid: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',
+        atprotoHandle: 'alice.paper.example.org'
+      });
+    }
+    expect(storageGetUrl).toHaveBeenCalledTimes(1);
+    expect(createOrUpdateCalls).toHaveLength(0);
+  });
+
+  test('rejects PG consent grant mismatch, revision drift and owner storage drift', async () => {
+    const call = () => broker.call('entryway-app-bootstrap-api.bootstrap', pgPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    });
+
+    installPgProof([{ grantUri: 'http://localhost:3000/alice/data/other-grant' }]);
+    await expect(call()).rejects.toMatchObject({
+      code: 409, type: 'BOOTSTRAP_CANONICAL_SAI_MISMATCH'
+    });
+
+    const proof = installPgProof([{}, { consentRevision: '2' }]);
+    await expect(call()).rejects.toMatchObject({
+      code: 409, type: 'BOOTSTRAP_CANONICAL_SAI_MISMATCH'
+    });
+    expect(proof).toHaveBeenCalledTimes(2);
+
+    installPgProof([{}]);
+    storageGetUrl.mockResolvedValueOnce('http://localhost:3000/bob/data/');
+    await expect(call()).rejects.toMatchObject({
+      code: 409, type: 'BOOTSTRAP_STORAGE_MISMATCH'
+    });
+    expect(createOrUpdateCalls).toHaveLength(0);
+  });
+
+  test('PG error never falls back to volatile Map or leaks database details', async () => {
+    const proof = installPgProof();
+    proof.mockReset().mockRejectedValue(new Error('postgres://admin:password@db/private'));
+    await expect(broker.call('entryway-app-bootstrap-api.bootstrap', pgPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    })).rejects.toMatchObject({
+      code: 503, type: 'BOOTSTRAP_PG_PROOF_UNAVAILABLE'
+    });
+    expect(createOrUpdateCalls).toHaveLength(0);
+  });
+
+  test('an injected PG reader never overrides the production bootstrap release fuse', async () => {
+    installPgProof([{}, {}]);
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(broker.call('entryway-app-bootstrap-api.bootstrap', pgPayload(), {
+        meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+      })).rejects.toMatchObject({
+        code: 503, type: 'BOOTSTRAP_DURABLE_AUTHORITY_REQUIRED'
+      });
+    } finally {
+      if (original === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = original;
+    }
   });
 
   test('does not turn app approval into owner consent or create missing grants', async () => {

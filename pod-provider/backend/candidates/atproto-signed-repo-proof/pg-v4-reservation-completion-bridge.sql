@@ -123,6 +123,8 @@ DECLARE
   o paper_account_candidate.signup_operations%ROWTYPE;
   ident paper_atproto_authority.identities%ROWTYPE;
   consent paper_atproto_authority.consents%ROWTYPE;
+  event paper_atproto_repo_proof.native_event_outbox%ROWTYPE;
+  blocked integer;
   head paper_atproto_repo_proof.repos%ROWTYPE;
   applied paper_atproto_repo_proof.rdf_projection_jobs%ROWTYPE;
   changed integer;
@@ -192,6 +194,16 @@ BEGIN
      consent.revision<>o.completion_consent_revision THEN
     RETURN false;
   END IF;
+  SELECT * INTO event FROM paper_atproto_repo_proof.native_event_outbox
+    WHERE did=a.atproto_did AND commit_cid=head.head_cid FOR SHARE;
+  IF NOT FOUND OR event.blocked_at IS NOT NULL OR
+     event.status NOT IN ('pending','delivered') OR
+     event.rev<>head.rev THEN
+    RETURN false;
+  END IF;
+  SELECT count(*) INTO blocked FROM paper_atproto_repo_proof.native_event_outbox
+    WHERE did=a.atproto_did AND status='pending' AND blocked_at IS NOT NULL;
+  IF blocked>0 THEN RETURN false; END IF;
   -- Zero release rights: the digest is obtained exclusively from the
   -- v4 journal's independently attested, same-transaction completion.
   UPDATE paper_account_reservation_proof.reservations

@@ -470,7 +470,12 @@ reservation under the PG server clock, and signs the immutable short
 dataset claim. Worker and issuer responses are individually MACed, the
 worker verifies the Ed25519 signature using a trusted *public* key,
 and the ordinary client reuses the exact dataset-admin claim
-validation before forwarding the claim. HTTP bodies and response
+validation before forwarding the claim. Both authenticated reservation
+and one-time signup consumption acknowledgments include the SHA-256 digest
+of the **exact canonical request bytes** and the unique per-request nonce,
+with the consumption receipt additionally binding the reservation UUID.
+These values are verified inside the service-MAC before admission; an old
+valid 200+MAC is never valid for a different attempt. HTTP bodies and response
 streams are bounded, endpoints fixed, redirects refused, timeouts
 bounded, no unbounded per-request memory ledger or background retry
 loop exists.

@@ -11,6 +11,9 @@ import AppHeader from './AppHeader';
 import { arrayOf } from '../../utils';
 import useRemoveApp from '../../hooks/useRemoveApp';
 import useUpgradeApp from '../../hooks/useUpgradeApp';
+import {
+  acceptedUpgradeNeeds, hasMissingRequirements, initialConsentSelection
+} from './consentPolicy.mjs';
 
 const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
   const [step, setStep] = useState();
@@ -33,10 +36,18 @@ const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
         try {
           setStep('upgrading');
 
-          await upgradeApp({
-            appUri: application.id,
-            grantedAccessNeeds: [...grantedAccessNeeds, ...allowedAccessNeeds]
-          });
+          // The app may have added optional rights since its last install.
+          // Unchecked optional rights are not silently granted on upgrade.
+          const approved = acceptedUpgradeNeeds(
+            grantedAccessNeeds, missingAccessNeeds.required,
+            allowedAccessNeeds, missingAccessNeeds.optional
+          );
+          if (approved.changed) {
+            await upgradeApp({
+              appUri: application.id,
+              grantedAccessNeeds: approved.grants
+            });
+          }
 
           await accessApp();
         } catch (e) {
@@ -45,7 +56,10 @@ const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
         }
       }
     })();
-  }, [application, upgradeApp, allowedAccessNeeds, grantedAccessNeeds, accessApp, step, setStep]);
+  }, [
+    application, upgradeApp, allowedAccessNeeds, grantedAccessNeeds,
+    missingAccessNeeds, accessApp, step, setStep, notify
+  ]);
 
   useEffect(() => {
     if (accessNeedsLoaded && grantsLoaded && !step) {
@@ -81,17 +95,15 @@ const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
 
       setMissingAccessNeeds(missingAccessNeeds);
       setGrantedAccessNeeds(grantedAccessNeeds);
-      setAllowedAccessNeeds([
-        ...missingAccessNeeds.required.map(a => (typeof a === 'string' ? a : a?.id)),
-        ...missingAccessNeeds.optional.map(a => (typeof a === 'string' ? a : a?.id))
-      ]);
+      setAllowedAccessNeeds(initialConsentSelection(missingAccessNeeds.required));
 
-      // If at least one required access need is missing
-      if (missingAccessNeeds.required.length > 0) {
-        // Show screen to get consent
+      // Even when only optional rights changed, the owner must see and
+      // explicitly choose them. No automatic optional permission expansion.
+      if (hasMissingRequirements(
+        missingAccessNeeds.required, missingAccessNeeds.optional
+      )) {
         setStep('ask');
       } else {
-        // Upgrade directly
         setStep('upgrade');
       }
     }
@@ -146,9 +158,15 @@ const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
         <Button variant="contained" color="secondary" onClick={() => setStep('upgrade')} sx={{ ml: 10 }}>
           {translate('app.action.accept')}
         </Button>
-        <Button variant="contained" onClick={() => setRejectDialogOpen(true)} sx={{ ml: 1 }}>
-          {translate('app.action.reject')}
-        </Button>
+        {missingAccessNeeds.required.length === 0 ? (
+          <Button variant="contained" onClick={accessApp} sx={{ ml: 1 }}>
+            {translate('app.action.skip_optional_permissions')}
+          </Button>
+        ) : (
+          <Button variant="contained" onClick={() => setRejectDialogOpen(true)} sx={{ ml: 1 }}>
+            {translate('app.action.reject')}
+          </Button>
+        )}
       </Box>
       <Dialog onClose={() => setRejectDialogOpen(false)} open={rejectDialogOpen}>
         <DialogTitle>{translate('app.message.app_upgrade_cancel')}</DialogTitle>

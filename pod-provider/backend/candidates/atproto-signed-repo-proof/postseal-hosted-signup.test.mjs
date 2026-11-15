@@ -505,6 +505,52 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     assert.equal(ready.state,'ready');
     assert.equal(ready.releaseAuthorized,false);
     assert.equal(ready.canAuthenticate,false);
+    // The v4 journal is ready only after live TLS/DNS-pinned signed CAR,
+    // current Solid/SAI, consent and one-transaction repo/projection seals.
+    // Test that the separate admission ledger cannot mirror a revoked grant.
+    await pool.query(
+      "UPDATE paper_atproto_authority.consents SET state='blocked',"+
+      "revision=revision+1 WHERE owner_webid=$1 AND app_uri=$2",
+      [webId,appUri]
+    );
+    assert.equal(await reflect(),false,
+      'Even a previously attested ready journal cannot bypass current consent revocation');
+    // Fixture-only superuser restore lets the same proof assert the positive
+    // attested transition; never implement grant revival this way in a provider.
+    await pool.query(
+      "UPDATE paper_atproto_authority.consents SET state='active',"+
+      "revision=revision-1 WHERE owner_webid=$1 AND app_uri=$2",
+      [webId,appUri]
+    );
+    assert.equal(await reflect(),true,
+      'Only one current v4-ready signed PDS/SAI operation may complete the admission ledger');
+    assert.equal(await reflect(),false,
+      'No other PG replica may promote an already reflected account again');
+    const linked=await pool.query(
+      'SELECT state,v4_provider_id,v4_account_id,v4_operation_id,'+
+      'activitypub_actor_id,atproto_did,atproto_pds_url,evidence_hash '+
+      'FROM paper_account_reservation_proof.reservations WHERE reservation_id=$1',
+      [reserved.reservationId]
+    );
+    assert.equal(linked.rowCount,1);
+    assert.equal(linked.rows[0].state,'completed');
+    assert.equal(linked.rows[0].v4_provider_id,providerId);
+    assert.equal(linked.rows[0].v4_account_id,accountId);
+    assert.equal(linked.rows[0].v4_operation_id,opId);
+    assert.equal(linked.rows[0].activitypub_actor_id,webId);
+    assert.equal(linked.rows[0].atproto_did,did);
+    assert.equal(linked.rows[0].atproto_pds_url,pds);
+    const journal=await pool.query(
+      'SELECT completion_proof_digest FROM paper_account_candidate.signup_operations '+
+      'WHERE operation_id=$1',[opId]
+    );
+    assert(journal.rows[0].completion_proof_digest.equals(
+      linked.rows[0].evidence_hash),
+      'Finalizer may only mirror the verified v4 completion digest');
+    await assert.rejects(bridgeRoles.finalizer.query(
+      'UPDATE paper_account_reservation_proof.reservations SET state=\'reserved\''),
+      e=>e?.code==='42501',
+      'Restricted finalizer must have no raw table writes');
     const rows=await pool.query(
       'SELECT a.state AS account_state,s.state AS signup_state,'+
       's.completion_consent_revision FROM paper_account_candidate.accounts a '+
@@ -529,6 +575,8 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       dnsPinned:true,noRedirect:true,
       currentSolidAndPgConsent:true,corruptCarRejected:true,
       hostedPdsMoveRejected:true,atomicCompletionReady:true,
+      coordinatorV4Binding:true,postSealReservationReflection:true,
+      revokedConsentDeniedBeforeMirror:true,
       accountGeneration:ready.generation,
       productionAuthorization:false
     }));

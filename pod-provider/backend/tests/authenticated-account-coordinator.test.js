@@ -205,23 +205,28 @@ test('wrong app credentials, missing origin, redirect mismatch and user verifica
   const f=makeFetch(),orig=global.fetch;global.fetch=f;
   const {broker,create}=await setup();
   try{
-    for(const [payload,hdr] of [
-      [request(),headers({authorization:'Bearer wrong-app-token'})],
-      [request(),headers({origin:''})],
-      [request({redirectUri:'https://malicious.example/return'}),headers()],
-      [request({verification:{verified:true}}),headers()],
-      [request({verification:{method:'app'}}),headers()],
-      [request({verification:{method:'app',challengeToken:VERIFY}}),headers()],
-      [request({
+    for(const [caseName,payload,hdr] of [
+      ['wrong-app-bearer',request(),headers({authorization:'Bearer wrong-app-token'})],
+      ['missing-origin',request(),headers({origin:''})],
+      ['redirect-not-allowed',request({redirectUri:'https://malicious.example/return'}),headers()],
+      ['trusted-boolean-only',request({verification:{verified:true}}),headers()],
+      ['missing-challenge',request({verification:{method:'app'}}),headers()],
+      ['reusable-static-challenge',request({verification:{method:'app',challengeToken:VERIFY}}),headers()],
+      ['wrong-idempotency-binding',request({
         idempotencyKey:'durable-key-other',
         verification:request().verification
       }),headers()],
-      [request({username:'Claimtest-noncanonical'}),headers()]
+      ['noncanonical-username',request({username:'Claimtest-noncanonical'}),headers()]
     ]){
+      const callsBefore=f.mock.calls.length;
       await expect(broker.call('unified-account-api.create',payload,
         {meta:{$headers:hdr}})).rejects.toMatchObject({
         code:expect.any(Number)
       });
+      expect(f.mock.calls.length).toBe(callsBefore);
+      if(f.mock.calls.length!==callsBefore){
+        throw Error('Invalid credential case contacted coordinator: '+caseName);
+      }
     }
     expect(f).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();

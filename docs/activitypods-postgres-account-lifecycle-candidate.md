@@ -351,3 +351,39 @@ protected operation. A production rollout needs a reviewed migration and
 restricted non-superuser LOGIN, real signed hosted PDS authority, full
 Solid-OIDC/SAI consent flow, multi-replica crash tests and a separate
 release authorization decision.
+
+
+## November 15 — restricted runtime bootstrap reader (candidate only)
+
+The provider-owned `current_bootstrap_proof` function is the **only** SQL
+entry point needed to check a completed new account's current PostgreSQL
+identity, signed repository, applied RDF projection, native outbox and SAI
+revocation revision. Its reader role
+`paper_account_bootstrap_reader` is deliberately `NOLOGIN`.
+
+The provider proof adapter now exposes a concrete privilege preflight and
+an opt-in `requireRestrictedReader` policy. When configured for the provider,
+its service refuses startup unless the pool login inherits only the
+restricted reader authority and can execute the exact proof function.
+It checks for absence of superuser, `BYPASSRLS`, database/role creation,
+replication, account/journal table read/write, arbitrary schema creation,
+and direct access to canonical ATProto authority and repository schemas.
+The same probe runs before every later proof read. Database driver errors
+are reduced to stable, noncredentialed codes. Connection, statement and query
+timeouts bound failed provider access.
+
+The PostgreSQL 18 acceptance creates a **disposable dedicated LOGIN** with
+membership in the `NOLOGIN` reader role, proves the exact account lookup
+under that connection, and independently verifies that a privileged
+migration-owner connection is rejected by the runtime gate. The account
+schema is not duplicated, and neither login/session secrets nor new
+identities are emitted by the reader.
+
+**Deployment contract:** an eventual deployment must provision a separate
+restricted login through reviewed secrets/IAM, grant membership in
+`paper_account_bootstrap_reader`, and keep general provider, Fuseki and
+migration-owner credentials out of the bootstrap pool. Test-only local DSNs
+and passwords in the disposable proof must never be reused. These changes
+do not authorize production signup or replace the canonical
+Solid-OIDC/SAI consent, signed hosted PDS, PostgreSQL writer or storage
+isolation acceptance gates.

@@ -779,7 +779,7 @@ module.exports = {
       if (signature.length !== 32 ||
           signature.toString('base64url') !== pieces[1]) return false;
       const expected = crypto.createHmac('sha256', key)
-        .update('activitypods:durable-user-verification:v1\\0', 'utf8')
+        .update('activitypods:durable-user-verification:v1\0', 'utf8')
         .update(pieces[0], 'utf8').digest();
       if (!crypto.timingSafeEqual(signature, expected)) return false;
       const bytes = Buffer.from(pieces[0], 'base64url');

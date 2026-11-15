@@ -223,7 +223,6 @@ test('wrong app credentials, missing origin, redirect mismatch and user verifica
         {meta:{$headers:hdr}})).rejects.toMatchObject({
         code:expect.any(Number)
       });
-      expect(f.mock.calls.length).toBe(callsBefore);
       if(f.mock.calls.length!==callsBefore){
         throw Error('Invalid credential case contacted coordinator: '+caseName);
       }

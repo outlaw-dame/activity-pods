@@ -156,6 +156,19 @@ async function prepare() {
     assert.equal(await serviceA.startSideEffects(active),true);
     assert.equal(await serviceB.startSideEffects(active),false,
       'No second start after irreversible side effects are permitted');
+    const invocation={
+      appClientId:input.appClientId,
+      idempotencyKey:input.idempotencyKey,
+      requestFingerprint:input.requestFingerprint,
+      username:input.username,reservationId:active.reservationId
+    };
+    assert.equal(await serviceA.claimSignup({
+      ...invocation,requestFingerprint:fingerprint('different-account-password')
+    }),false,'A changed request fingerprint cannot claim signup execution');
+    assert.equal(await serviceB.claimSignup(invocation),true,
+      'One provider cell can consume the signed account invocation exactly once');
+    assert.equal(await serviceA.claimSignup(invocation),false,
+      'Another provider cell cannot mint a second DID with the same ticket');
     assert.equal(await serviceA.assertDatasetBinding(active,username,ROOT+username),true);
     assert.equal(await serviceB.assertDatasetBinding(active,username+'x',ROOT+username+'x'),false);
     assert.equal(await serviceB.assertDatasetBinding({...active,
@@ -203,6 +216,12 @@ async function prepare() {
       'SELECT paper_account_reservation_proof.dataset_binding_is_live($1,$2,$3,$4,$5,$6)',
       [PROVIDER,input.appClientId,active.reservationId,active.fenceToken,username,ROOT+username]),
       e=>e?.code==='42501');
+    await assert.rejects(issuer.query(
+      'SELECT paper_account_reservation_proof.claim_signup_once($1,$2,$3,$4,$5,$6,$7)',
+      [PROVIDER,input.appClientId,Buffer.alloc(32),Buffer.alloc(32),
+        active.reservationId,input.username,ROOT+input.username]),
+      e=>e?.code==='42501',
+      'Read-only signer must never claim the account execution lease');
     await assert.rejects(issuer.query(
       'SELECT * FROM paper_account_reservation_proof.reserve($1,$2,$3,$4,$5,$6,$7,$8)',
       [PROVIDER,input.appClientId,Buffer.alloc(32),Buffer.alloc(32),
@@ -260,6 +279,13 @@ async function verify() {
     assert.equal((await service.reserve(config.input)).fenceToken,null);
     assert.equal(await service.startSideEffects(config.active),false,
       'No re-entrant identity creator after process/Jena restart');
+    assert.equal(await service.claimSignup({
+      appClientId:config.input.appClientId,
+      idempotencyKey:config.input.idempotencyKey,
+      requestFingerprint:config.input.requestFingerprint,
+      username:config.input.username,
+      reservationId:config.active.reservationId
+    }),false,'Completed or restarted signup execution can never be re-entered');
     // The original fenced worker may reconcile and complete; another token,
     // another WebID, or a new lease cannot claim this identity.
     assert.equal(await service.complete(config.active,
@@ -273,6 +299,14 @@ async function verify() {
     assert.equal(nextReceipt.outcome,'reserved');
     const nextFence=fence(nextInput,nextReceipt);
     assert.equal(await service.startSideEffects(nextFence),true);
+    assert.equal(await service.complete(nextFence,proof(nextInput.username)),false,
+      'Account completion requires a previously consumed signup fence');
+    assert.equal(await service.claimSignup({
+      appClientId:nextInput.appClientId,
+      idempotencyKey:nextInput.idempotencyKey,
+      requestFingerprint:nextInput.requestFingerprint,
+      username:nextInput.username,reservationId:nextFence.reservationId
+    }),true);
     await assert.rejects(
       service.complete(nextFence,{...proof(nextInput.username),
         atprotoDid:proof(config.input.username).atprotoDid}),
@@ -307,7 +341,7 @@ async function verify() {
     assert.equal(binding.rows[0].username,adminMeta.dataset);
     assert.equal(binding.rows[0].expected_webid,ROOT+adminMeta.dataset);
     assert.deepEqual(rows.rows.map(x=>[x.state,x.count]),
-      [['completed',2],['reserved',1],['side_effects_started',1]],
+      [['completed',2],['reserved',1],['side_effects_started',3]],
       'Post-crash state must remain monotonic and exact');
     console.log('ACCOUNT_PG_RESERVATION '+JSON.stringify({phase:'verify',
       restartedProcess:true,immutableCompletedIdentity:true,

@@ -206,6 +206,28 @@ module.exports = {
       }
     },
 
+    // Higher-assurance authorization used only by the nonactivated durable
+    // account coordinator. Never return app bearer or verification tokens.
+    authorizeDurableAccountProvisioning: {
+      params: {
+        appClientId: { type: 'string' },
+        authorization: { type: 'string' },
+        origin: { type: 'string' },
+        redirectUri: { type: 'string' },
+        idempotencyKey: { type: 'string' },
+        requestFingerprint: { type: 'string' },
+        username: { type: 'string' },
+        email: { type: 'string', optional: true },
+        requestedProtocols: { type: 'object', strict: false },
+        verification: { type: 'object', strict: false }
+      },
+      handler(ctx) {
+        const decision = this.authorizeDurableAccountProvisioning(ctx.params);
+        if (!decision.allowed) this.throwDenied(decision);
+        return decision;
+      }
+    },
+
     reserveAccountProvisioning: {
       params: {
         appClientId: { type: 'string', optional: true },
@@ -425,6 +447,68 @@ module.exports = {
         requestFingerprint: normalizeString(input.requestFingerprint) || null,
         issuedAt: now,
         retryable: false
+      };
+    },
+
+    authorizeDurableAccountProvisioning(input) {
+      // Source-controlled nonrelease boundary: a production configuration
+      // change must not activate new WebID / DID identities.
+      if (process.env.NODE_ENV !== 'test' ||
+          process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
+          process.env.APODS_ACCOUNT_RESERVATION_DISPOSABLE !== 'confirmed' ||
+          process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed') {
+        return this.deny('durable_account_coordinator_not_released',
+          'Durable account coordinator is not released', false, 503);
+      }
+      // Do not re-use the permissive legacy origin/redirect matching or
+      // trusted-user-boolean bypass for a durable account reservation.
+      if (!this.settings.requiresApprovedApps || !this.settings.requireBearerToken ||
+          !this.settings.requiresUserVerification || this.settings.allowTrustedVerification) {
+        return this.deny('durable_account_policy_unsafe',
+          'Account coordinator requires mandatory approved app and user verification', false, 503);
+      }
+      const appClientId = normalizeString(input.appClientId);
+      const app = this.findApprovedApp(appClientId);
+      if (!app || app.allowUnsigned ||
+          !Array.isArray(app.bearerTokens) || !app.bearerTokens.length ||
+          !Array.isArray(app.allowedOrigins) || !app.allowedOrigins.length ||
+          !Array.isArray(app.allowedRedirectUris) || !app.allowedRedirectUris.length ||
+          !app.allowedOrigins.includes(normalizeString(input.origin)) ||
+          !app.allowedRedirectUris.includes(normalizeString(input.redirectUri))) {
+        return this.deny('unauthorized_app',
+          'Approved application origin, redirect and bearer authorization required', false, 403);
+      }
+      const challenge = normalizeString(
+        input.verification?.challengeToken || input.verification?.token);
+      if (!challenge || input.verification?.verified === true ||
+          !this.verifyDurableSignupChallenge(input)) {
+        return this.deny('user_verification_required',
+          'A signed, account-bound verification challenge is required', false, 403);
+      }
+      const key = normalizeString(input.idempotencyKey);
+      const username = normalizeString(input.username);
+      const fp = normalizeString(input.requestFingerprint);
+      if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key) ||
+          !/^[a-z][a-z0-9_-]{1,31}$/.test(username) ||
+          !/^[a-f0-9]{64}$/.test(fp)) {
+        return this.deny('invalid_reservation_scope',
+          'Canonical account reservation scope is invalid', false, 400);
+      }
+      const protocols = this.normalizeRequestedProtocols(input.requestedProtocols);
+      if (!protocols.solid || !protocols.activitypub || !protocols.atproto) {
+        return this.deny('protocol_disabled',
+          'New unified accounts must provision Solid, ActivityPub and ATProto together', false, 403);
+      }
+      const result = this.evaluateAccountProvisioning(input);
+      if (!result.allowed) return result;
+      return {
+        ...result,
+        idempotencyKey: key,
+        requestFingerprint: fp,
+        username,
+        // The app identifier is hashed by the restricted coordinator client
+        // before it reaches the PostgreSQL per-app quota ledger.
+        dailyLimit: this.resolveDailyLimit(app)
       };
     },
 
@@ -653,6 +737,10 @@ module.exports = {
       }
 
       if (challengeToken) {
+        if (process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE === 'confirmed' &&
+            this.verifyDurableSignupChallenge(input)) {
+          return true;
+        }
         const configuredTokens = [
           ...(Array.isArray(this.settings.verificationTokens) ? this.settings.verificationTokens : []),
           ...(Array.isArray(app?.verificationTokens) ? app.verificationTokens : [])
@@ -668,6 +756,66 @@ module.exports = {
       }
 
       return false;
+    },
+
+    verifyDurableSignupChallenge(input) {
+      // The legacy provider accepts reusable, static verification tokens.
+      // New canonical identities require a short-lived provider-signed
+      // challenge bound to the *entire* approved signup + idempotency scope.
+      // Only an independent trusted verifier may issue these tokens.
+      const token = normalizeString(
+        input?.verification?.challengeToken || input?.verification?.token);
+      const secret = process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY;
+      if (!token || token.length > 1400 ||
+          typeof secret !== 'string' ||
+          !/^[A-Za-z0-9_-]{43}$/.test(secret)) return false;
+      const key = Buffer.from(secret, 'base64url');
+      if (key.length !== 32 || key.toString('base64url') !== secret) return false;
+      const pieces = token.split('.');
+      if (pieces.length !== 2 ||
+          !/^[A-Za-z0-9_-]{32,1300}$/.test(pieces[0]) ||
+          !/^[A-Za-z0-9_-]{43}$/.test(pieces[1])) return false;
+      const signature = Buffer.from(pieces[1], 'base64url');
+      if (signature.length !== 32 ||
+          signature.toString('base64url') !== pieces[1]) return false;
+      const expected = crypto.createHmac('sha256', key)
+        .update('activitypods:durable-user-verification:v1\0', 'utf8')
+        .update(pieces[0], 'utf8').digest();
+      if (!crypto.timingSafeEqual(signature, expected)) return false;
+      const bytes = Buffer.from(pieces[0], 'base64url');
+      if (bytes.toString('base64url') !== pieces[0] ||
+          bytes.length > 900) return false;
+      let payload;
+      try { payload = JSON.parse(bytes.toString('utf8')); }
+      catch { return false; }
+      const keys = [
+        'version','purpose','appClientId','username','email','origin',
+        'redirectUri','idempotencyKey','requestFingerprint',
+        'issuedAtMs','expiresAtMs','nonce'
+      ];
+      if (!payload || typeof payload !== 'object' ||
+          Array.isArray(payload) ||
+          Object.keys(payload).length !== keys.length ||
+          keys.some((name,index) => Object.keys(payload)[index] !== name) ||
+          JSON.stringify(payload) !== bytes.toString('utf8')) return false;
+      const now = Date.now();
+      return payload.version === 1 &&
+        payload.purpose === 'activitypods:new-account:v1' &&
+        payload.appClientId === normalizeString(input.appClientId) &&
+        payload.username === normalizeString(input.username) &&
+        payload.email === normalizeString(input.email) &&
+        payload.origin === normalizeString(input.origin) &&
+        payload.redirectUri === normalizeString(input.redirectUri) &&
+        payload.idempotencyKey === normalizeString(input.idempotencyKey) &&
+        payload.requestFingerprint === normalizeString(input.requestFingerprint) &&
+        Number.isSafeInteger(payload.issuedAtMs) &&
+        Number.isSafeInteger(payload.expiresAtMs) &&
+        now >= payload.issuedAtMs - 30000 &&
+        now < payload.expiresAtMs &&
+        payload.expiresAtMs - payload.issuedAtMs >= 1000 &&
+        payload.expiresAtMs - payload.issuedAtMs <= 120000 &&
+        typeof payload.nonce === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(payload.nonce);
     },
 
     verifySignedVerificationToken(token, input) {

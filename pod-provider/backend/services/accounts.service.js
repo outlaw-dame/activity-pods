@@ -9,6 +9,8 @@ module.exports = {
         username: 'string|min:1',
         email: { type: 'string', optional: true },
         password: 'string|min:8',
+        datasetAdminTicket: { type: 'object', optional: true, strict: false },
+        accountCoordinatorAdmission: { type: 'object', optional: true, strict: false },
         profile: {
           type: 'object',
           props: {
@@ -18,7 +20,15 @@ module.exports = {
         }
       },
       async handler(ctx) {
-        const { username, email, password, profile } = ctx.params;
+        const { username, email, password, profile,
+          datasetAdminTicket, accountCoordinatorAdmission } = ctx.params;
+        if ((datasetAdminTicket !== undefined || accountCoordinatorAdmission !== undefined) &&
+            (process.env.NODE_ENV !== 'test' ||
+             process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
+             process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE !== 'confirmed')) {
+          throw new MoleculerError('Dataset ticket is unavailable outside authenticated fixture',
+            503,'ACCOUNT_COORDINATOR_NOT_RELEASED',{retryable:false});
+        }
 
         const existing = await ctx.call('auth.account.findByUsername', { username });
         if (existing) {
@@ -33,6 +43,14 @@ module.exports = {
 
         if (email) signupPayload.email = email;
         if (profile.summary) signupPayload.summary = profile.summary;
+        if (datasetAdminTicket) {
+          if (!accountCoordinatorAdmission || typeof accountCoordinatorAdmission !== 'object') {
+            throw new MoleculerError('Single-use signup admission is required',
+              503,'ACCOUNT_COORDINATOR_ADMISSION_REQUIRED',{retryable:false});
+          }
+          signupPayload.datasetAdminTicket = datasetAdminTicket;
+          signupPayload.accountCoordinatorAdmission = accountCoordinatorAdmission;
+        }
 
         const signupResult = await ctx.call('auth.signup', signupPayload);
         if (!signupResult?.webId) {

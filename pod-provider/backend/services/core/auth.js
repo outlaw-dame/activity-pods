@@ -7,6 +7,7 @@ const { AuthLocalService } = require('@semapps/auth');
 const CONFIG = require('../../config/config');
 const transport = require('../../config/transport');
 const { mustPreserveFailedSignup } = require('../../utils/account-signup-rollback-policy');
+const { consumeCoordinatedSignup } = require('../utils/atproto-account-coordinator-client');
 
 module.exports = {
   mixins: [AuthLocalService],
@@ -57,10 +58,12 @@ module.exports = {
       // A signed dataset ticket is an operation-scoped bearer capability.
       // Never include it in rest: rest becomes account profile data,
       // WebID attributes and the auth.registered event payload.
-      const { username, email, password, datasetAdminTicket, ...rest } = ctx.params;
+      const { username, email, password, datasetAdminTicket,
+        accountCoordinatorAdmission, ...rest } = ctx.params;
       const delegatedDatasetProof =
         process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed';
-      if (datasetAdminTicket !== undefined && !delegatedDatasetProof) {
+      if ((datasetAdminTicket !== undefined ||
+           accountCoordinatorAdmission !== undefined) && !delegatedDatasetProof) {
         throw new MoleculerError(
           'Signed dataset claim is unavailable outside disposable admission',
           503, 'ACCOUNT_DATASET_CLAIM_NOT_RELEASED', { retryable: false }
@@ -69,7 +72,9 @@ module.exports = {
       if (delegatedDatasetProof &&
           (process.env.NODE_ENV !== 'test' ||
            process.env.APODS_ACCOUNT_RESERVATION_DISPOSABLE !== 'confirmed' ||
-           !datasetAdminTicket || typeof datasetAdminTicket !== 'object')) {
+           process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
+           !datasetAdminTicket || typeof datasetAdminTicket !== 'object' ||
+           !accountCoordinatorAdmission || typeof accountCoordinatorAdmission !== 'object')) {
         throw new MoleculerError(
           'Durable pre-account reservation claim is required',
           503, 'ACCOUNT_RESERVATION_REQUIRED', { retryable: false }
@@ -86,6 +91,30 @@ module.exports = {
           email: email || undefined
         });
         this.logger.info(`[Auth] signup moderation passed for ${username}`);
+
+        if (delegatedDatasetProof) {
+          // The signed dataset claim may be replayed for idempotent Jena
+          // creation. Identity minting must NOT be idempotently re-entered:
+          // consume an independent PG CAS before any dataset/account/WebID/
+          // ActivityPub/PLC/PDS mutation. Unknown consume outcomes remain
+          // fenced for operator reconciliation, never retried automatically.
+          try {
+            const admitted = await consumeCoordinatedSignup({
+              ticket: datasetAdminTicket,
+              admission: accountCoordinatorAdmission,
+              dataset: String(username).trim().toLowerCase()
+            });
+            if (admitted?.admitted !== true) throw new Error('not admitted');
+          } catch (error) {
+            const conflict = error?.code === 'ACCOUNT_COORDINATOR_INVOCATION_ALREADY_CLAIMED';
+            throw new MoleculerError(
+              'Canonical signup invocation requires one-time PostgreSQL admission',
+              conflict ? 409 : 503,
+              conflict ? 'ACCOUNT_SIGNUP_ALREADY_CLAIMED' : 'ACCOUNT_SIGNUP_ADMISSION_UNCERTAIN',
+              { retryable: false }
+            );
+          }
+        }
 
         await ctx.call('dataset-provisioning.ensureSecureDataset', {
           dataset: String(username).trim().toLowerCase(),

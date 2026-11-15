@@ -48,3 +48,26 @@ export function acceptedUpgradeNeeds(existingGrants, requiredMissing, selectedMi
     changed: additions.length > 0
   };
 }
+
+
+/**
+ * An app manifest refresh must be acknowledged even when no new rights were
+ * selected. Otherwise the remote and locally cached dc:modified values
+ * diverge, causing the authorizer to redirect back to /authorize indefinitely.
+ * Persisting the *same* grants is not consent to new optional rights.
+ *
+ * Reject malformed selections before performing a network mutation.
+ */
+export async function persistApprovedUpgrade({
+  appUri, existingGrants, requiredMissing, selectedMissing, optionalMissing, upgradeApp
+}) {
+  const approved = acceptedUpgradeNeeds(
+    existingGrants, requiredMissing, selectedMissing, optionalMissing
+  );
+  if (typeof appUri !== 'string' || !appUri ||
+      typeof upgradeApp !== 'function') {
+    throw new Error('SAI_UPGRADE_INVALID');
+  }
+  await upgradeApp({ appUri, grantedAccessNeeds: approved.grants });
+  return approved;
+}

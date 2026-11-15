@@ -73,6 +73,39 @@ async function requestIssuer(fence,dataset){
 const workerPort=Number(process.env.ACCOUNT_COORDINATOR_PORT);
 assert([3043,3044].includes(workerPort),'Only fixed disposable worker ports are allowed');
 const listener=await server({port:workerPort,handler:async(req,res)=>{
+  if(req.url==='/v1/consume'){
+    const scope=await readRequest(req,{
+      domain:'consume',secret:providerSecret,route:'/v1/consume',
+      keys:[
+        'version','appScope','username','idempotencyKey',
+        'requestFingerprint','reservationId','ticket','issuedAtMs','nonce'
+      ]
+    });
+    if(scope.version!==1||!Number.isSafeInteger(scope.issuedAtMs)||
+       Math.abs(Date.now()-scope.issuedAtMs)>30000 ||
+       !/^[a-f0-9]{64}$/.test(scope.appScope||'') ||
+       !/^[a-f0-9]{64}$/.test(scope.requestFingerprint||'') ||
+       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(scope.nonce||'')){
+      refuse();
+    }
+    let verified;
+    try{verified=verifyDisposableDatasetClaim(scope.ticket,publicKey);}
+    catch{refuse();}
+    if(verified.dataset!==scope.username ||
+       verified.ownerWebid!=='https://paper.example.org/users/'+scope.username ||
+       verified.reservationId!==scope.reservationId)refuse();
+    const claimed=await authority.claimSignup({
+      appClientId:scope.appScope,
+      idempotencyKey:scope.idempotencyKey,
+      requestFingerprint:scope.requestFingerprint,
+      username:scope.username,reservationId:scope.reservationId
+    });
+    if(!claimed)refuse(409);
+    respond(res,200,{admitted:true},{
+      secret:providerSecret,domain:'consume-response'
+    });
+    return;
+  }
   const input=await readRequest(req,{
     domain:'client',secret:providerSecret,
     route:'/v1/reserve',keys
@@ -94,7 +127,14 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
   // A crash or request timeout here does NOT release the fence; retry
   // returns 409 pending reconciliation rather than minting a second DID.
   const ticket=await requestIssuer(fence,input.username);
-  respond(res,200,{ticket},{
+  const admission={
+    appScope:input.appScope,
+    username:input.username,
+    idempotencyKey:input.idempotencyKey,
+    requestFingerprint:input.requestFingerprint,
+    reservationId:first.reservationId
+  };
+  respond(res,200,{ticket,admission},{
     secret:providerSecret,domain:'worker-response'
   });
 }});

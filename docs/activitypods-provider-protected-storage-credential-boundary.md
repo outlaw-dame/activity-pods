@@ -473,11 +473,33 @@ streams are bounded, endpoints fixed, redirects refused, timeouts
 bounded, no unbounded per-request memory ledger or background retry
 loop exists.
 
+**Single-use execution fence.** Dataset administration remains
+intentionally idempotent: an identical signed claim can confirm that an
+existing TDB2 dataset was created. That is **not** permission to run the
+account, WebID, ActivityPub actor or DID-creation sequence twice.
+The canonical PostgreSQL ledger therefore has a distinct,
+indexed `signup_claimed_at` CAS, exposed only by the restricted worker
+`claim_signup_once` function. Its compare-and-swap matches the provider,
+approved-app scope, idempotency hash, request fingerprint, immutable
+reservation UUID, username, expected WebID, unexpired database lease,
+and `side_effects_started`, and succeeds only while
+`signup_claimed_at IS NULL`. A second provider cell, retry after a
+crash, mismatched request or expired fence cannot reacquire execution.
+The same HMAC-authenticated worker has a separate fixed
+`POST /v1/consume` operation. It independently verifies the signed
+ticket and the full scope, then consumes the PostgreSQL CAS. This is
+called inside the **real `auth.signup` action after username moderation
+but before any dataset/account/WebID/AP/PLC/PDS mutation**. A failed or
+uncertain consume never triggers a fallback, cleanup, or new identity.
+
 **Operation-scoped handoff.** The real `unified-account-api` calls
 the coordinator only after approved-app/user verification, then sends
 the issued ticket as an explicit parameter through
 `unified-account.create`, `accounts.create` and `auth.signup` to the
-previously merged dataset-administration branch. The ticket is neither
+previously merged dataset-administration branch. A matching non-secret
+admission scope is forwarded alongside the ticket for the one-time
+consumption; it is validated against the ticket and is stripped before
+the account/profile/WebID/event pipeline. The ticket is neither
 in user request parameters nor copied to `ctx.meta`, account/profile
 records, registration events or API responses. The ordinary legacy
 non-coordinator paths remain unchanged when the test-only flag is off.
@@ -489,7 +511,8 @@ takeover is permitted. The two-cell live PostgreSQL 18 acceptance
 runs *two independent restricted worker processes* against the same
 table, a separate claim issuer, an independent admin SQL/Jena child
 and the ordinary provider client. It tests valid HMAC, forged HMAC,
-cross-cell replay, irreversible issuer outage, signed dataset
+cross-cell reservation replay, *independent cross-cell signup-consume
+replay*, irreversible issuer outage, signed dataset
 creation, identical replay after persistent Jena/process restart,
 and ledger retention. Every spawned process has an explicit
 environment allowlist: the superuser harness connection, worker SQL

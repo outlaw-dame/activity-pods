@@ -76,11 +76,19 @@ export async function assertRestrictedV4BridgeLogin(pool,kind){
      p?.schema_create!==false || p?.read_all!==false ||
      p?.write_all!==false || p?.monitor!==false)reject();
   for(const name of TABLES){
+    // Passing a relation name to has_table_privilege invokes regclass
+    // resolution, which itself requires schema USAGE for unrelated v4
+    // schemas. Never grant that permission merely for admission checks:
+    // resolve the catalog OID through public pg_catalog metadata instead.
+    const [schema,table]=name.split('.');
     const x=await pool.query(
-      'SELECT has_table_privilege(current_user,$1,'+
-      "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') "+
-      'AS table_access, has_any_column_privilege(current_user,$1,'+
-      "'SELECT,INSERT,UPDATE,REFERENCES') AS column_access",[name]
+      "SELECT has_table_privilege(current_user,c.oid,"+
+      "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')"+
+      " AS table_access, has_any_column_privilege(current_user,c.oid,"+
+      "'SELECT,INSERT,UPDATE,REFERENCES') AS column_access"+
+      " FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n"+
+      " ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2"+
+      " AND c.relkind IN ('r','p')",[schema,table]
     );
     if(x.rowCount!==1 || x.rows[0]?.table_access!==false ||
        x.rows[0]?.column_access!==false)reject();

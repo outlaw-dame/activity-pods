@@ -5,7 +5,8 @@ import {
   uniqueNeedIdentifiers,
   initialConsentSelection,
   hasMissingRequirements,
-  acceptedUpgradeNeeds
+  acceptedUpgradeNeeds,
+  persistApprovedUpgrade
 } from './consentPolicy.mjs';
 
 test('first install preselects required rights only, never optional rights', () => {
@@ -100,4 +101,83 @@ test('never silently expand existing grants when manifest adds optional needs', 
   const result = acceptedUpgradeNeeds(oldRights, required, initialConsentSelection(required), optional);
   assert.deepEqual(result.grants, oldRights);
   assert.equal(result.changed, false);
+});
+
+
+test('declining all new optional rights persists the new manifest without expanding grants', async () => {
+  let called = 0;
+  const result = await persistApprovedUpgrade({
+    appUri: 'https://memory.example/app',
+    existingGrants: ['apods:ReadInbox'],
+    requiredMissing: [],
+    selectedMissing: [],
+    optionalMissing: ['apods:PostOutbox', 'apods:UpdateWebId'],
+    upgradeApp: async ({ appUri, grantedAccessNeeds }) => {
+      called += 1;
+      assert.equal(appUri, 'https://memory.example/app');
+      assert.deepEqual(grantedAccessNeeds, ['apods:ReadInbox']);
+    }
+  });
+  assert.equal(called, 1, 'manifest acknowledgment must not be skipped when rights do not change');
+  assert.equal(result.changed, false);
+  assert.deepEqual(result.additions, []);
+});
+
+test('accepted optional rights are persisted once, while existing grants survive', async () => {
+  const calls = [];
+  const approved = await persistApprovedUpgrade({
+    appUri: 'https://memory.example/app',
+    existingGrants: ['apods:ReadInbox'],
+    requiredMissing: [],
+    selectedMissing: ['apods:PostOutbox', 'apods:PostOutbox'],
+    optionalMissing: ['apods:PostOutbox', 'apods:UpdateWebId'],
+    upgradeApp: async payload => calls.push(payload)
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    appUri: 'https://memory.example/app',
+    grantedAccessNeeds: ['apods:ReadInbox', 'apods:PostOutbox']
+  });
+  assert.deepEqual(approved.additions, ['apods:PostOutbox']);
+});
+
+test('invalid selected rights and backend failures do not permit a false manifest acknowledgment', async () => {
+  let writes = 0;
+  const write = async () => { writes += 1; };
+  await assert.rejects(persistApprovedUpgrade({
+    appUri: 'https://memory.example/app',
+    existingGrants: ['apods:ReadInbox'],
+    requiredMissing: [],
+    selectedMissing: ['apods:UpdateWebId'],
+    optionalMissing: ['apods:PostOutbox'],
+    upgradeApp: write
+  }), /SAI_CONSENT_SELECTION_INVALID/);
+  assert.equal(writes, 0);
+
+  await assert.rejects(persistApprovedUpgrade({
+    appUri: 'https://memory.example/app',
+    existingGrants: ['apods:ReadInbox'],
+    requiredMissing: [],
+    selectedMissing: [],
+    optionalMissing: ['apods:PostOutbox'],
+    upgradeApp: async () => {
+      throw new Error('SAI revision failed to commit');
+    }
+  }), /SAI revision failed to commit/);
+});
+
+test('manifest-only upgrade calls the backend exactly once even if no permission requirements changed', async () => {
+  const operations = [];
+  await persistApprovedUpgrade({
+    appUri: 'https://memory.example/app',
+    existingGrants: ['apods:ReadOutbox'],
+    requiredMissing: [],
+    selectedMissing: [],
+    optionalMissing: [],
+    upgradeApp: async payload => operations.push(payload)
+  });
+  assert.deepEqual(operations, [{
+    appUri: 'https://memory.example/app',
+    grantedAccessNeeds: ['apods:ReadOutbox']
+  }]);
 });

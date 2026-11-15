@@ -1,0 +1,70 @@
+name: ActivityPods native SAI owner-consent UI
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/frontend/src/pages/AuthorizePage/**'
+      - 'pod-provider/frontend/src/config/messages/en.js'
+      - 'pod-provider/frontend/src/config/messages/fr.js'
+      - '.github/workflows/paper-sai-owner-consent-ui.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'pod-provider/frontend/src/pages/AuthorizePage/**'
+      - 'pod-provider/frontend/src/config/messages/en.js'
+      - 'pod-provider/frontend/src/config/messages/fr.js'
+      - '.github/workflows/paper-sai-owner-consent-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-sai-owner-consent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate native SAI consent policy and adversarial selection cases
+        run: |
+          set -euo pipefail
+          node --check pod-provider/frontend/src/pages/AuthorizePage/consentPolicy.mjs
+          node --test pod-provider/frontend/src/pages/AuthorizePage/consentPolicy.test.mjs
+
+      - name: Install pinned lightweight JSX syntax parser
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/sai-jsx-parser" \
+            --no-save --ignore-scripts --no-audit --no-fund @babel/parser@7.28.5
+
+      - name: Validate the modified JSX and locale modules
+        env:
+          JSX_PARSER_ROOT: ${{ runner.temp }}/sai-jsx-parser/node_modules
+        run: |
+          set -euo pipefail
+          node - <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const parser = require(path.join(process.env.JSX_PARSER_ROOT, '@babel/parser'));
+          for (const source of [
+            'pod-provider/frontend/src/pages/AuthorizePage/RegistrationScreen.js',
+            'pod-provider/frontend/src/pages/AuthorizePage/UpgradeScreen.js',
+            'pod-provider/frontend/src/config/messages/en.js',
+            'pod-provider/frontend/src/config/messages/fr.js'
+          ]) {
+            parser.parse(fs.readFileSync(source, 'utf8'), {
+              sourceType: 'unambiguous',
+              plugins: ['jsx']
+            });
+          }
+          console.log('Owner-consent JSX and translation syntax verified');
+          JS

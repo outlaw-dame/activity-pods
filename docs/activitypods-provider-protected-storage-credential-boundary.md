@@ -434,7 +434,9 @@ rejects these shortcuts: production/ordinary modes, missing approved
 apps, permissive bearer/user-verification settings, empty explicit
 origin/redirect allowlists, mismatched Origin/redirect, unsigned apps,
 absent, static-token or boolean-only verification, invalid canonical usernames and
-missing/invalid scoped idempotency keys. Only a successfully verified
+missing/invalid scoped idempotency keys. Conflicting body and header
+idempotency keys are rejected before any provider grant, SQL reservation
+or issuer request. Only a successfully verified
 app bearer and a provider-signed, short-lived **account-bound** verification
 challenge yields a **non-secret** policy grant. The challenge's canonical
 HMAC covers provider purpose, app identity, exact username/email, origin,

@@ -55,15 +55,58 @@ function newAccountProofEnabled() {
 
 function createPgBootstrapReadiness({
   pool, providerId, appClientId, appUri, hmacKey, hmacKeyVersion = 1,
-  fixtureOnly = false
+  fixtureOnly = false, requireRestrictedReader = false
 } = {}) {
   if (!pool || typeof pool.query !== 'function' ||
       !canonicalOrigin(providerId) || !canonicalHttps(appClientId) ||
       !canonicalHttps(appUri) ||
       !Buffer.isBuffer(hmacKey) || hmacKey.length < 32 ||
       !Number.isSafeInteger(hmacKeyVersion) ||
-      hmacKeyVersion < 1 || hmacKeyVersion > 255) {
+      hmacKeyVersion < 1 || hmacKeyVersion > 255 ||
+      typeof requireRestrictedReader !== 'boolean') {
     deny('BOOTSTRAP_PG_CONFIGURATION_INVALID');
+  }
+
+  async function assertReaderRole() {
+    if (fixtureOnly !== true || !newAccountProofEnabled()) {
+      deny('BOOTSTRAP_PG_NOT_RELEASED');
+    }
+    // A shared superuser/ordinary app DSN can bypass canonical revocation
+    // and read every user's account, grant and signing evidence. Fail closed
+    // before accepting a bootstrap proof and recheck on every read so a
+    // changed grant cannot leave a long-running service overprivileged.
+    const sql =
+      'SELECT r.rolsuper AS is_superuser,r.rolbypassrls AS bypass_rls,'+
+      "pg_has_role(current_user,'paper_account_bootstrap_reader','member') AS reader_member,"+
+      "has_schema_privilege(current_user,'paper_account_candidate','USAGE') AS account_schema,"+
+      "has_schema_privilege(current_user,'paper_account_candidate','CREATE') AS can_create,"+
+      "has_schema_privilege(current_user,'paper_atproto_authority','USAGE') AS can_read_authority,"+
+      "has_schema_privilege(current_user,'paper_atproto_repo_proof','USAGE') AS can_read_repo,"+
+      "has_function_privilege(current_user,'paper_account_candidate.current_bootstrap_proof("+
+      "text,text,smallint,bytea,text,text,text,text,text,text)','EXECUTE') AS can_prove,"+
+      "has_table_privilege(current_user,'paper_account_candidate.accounts','SELECT') AS can_select_accounts,"+
+      "has_table_privilege(current_user,'paper_account_candidate.signup_operations','SELECT') AS can_select_journal,"+
+      "has_table_privilege(current_user,'paper_account_candidate.accounts',"+
+      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_accounts "+
+      'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user LIMIT 2';
+    let result;
+    try {
+      result = await pool.query(sql);
+    } catch {
+      deny('BOOTSTRAP_PG_ROLE_UNAVAILABLE');
+    }
+    const role = result?.rows?.[0];
+    if (result?.rowCount !== 1 || !role ||
+        role.is_superuser !== false || role.bypass_rls !== false ||
+        role.reader_member !== true || role.account_schema !== true ||
+        role.can_create !== false || role.can_read_authority !== false ||
+        role.can_read_repo !== false || role.can_prove !== true ||
+        role.can_select_accounts !== false ||
+        role.can_select_journal !== false ||
+        role.can_write_accounts !== false) {
+      deny('BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
+    }
+    return true;
   }
 
   async function assertCurrent({ idempotencyKey, username, webId, actorId, atprotoDid, atprotoHandle } = {}) {
@@ -72,6 +115,7 @@ function createPgBootstrapReadiness({
     if (fixtureOnly !== true || !newAccountProofEnabled()) {
       deny('BOOTSTRAP_PG_NOT_RELEASED');
     }
+    if (requireRestrictedReader) await assertReaderRole();
     if (typeof idempotencyKey !== 'string' || !KEY.test(idempotencyKey) ||
         typeof username !== 'string' ||
         !/^[a-z0-9][a-z0-9_-]{1,63}$/u.test(username) ||
@@ -124,7 +168,7 @@ function createPgBootstrapReadiness({
     });
   }
 
-  return Object.freeze({ assertCurrent });
+  return Object.freeze({ assertCurrent, assertReaderRole });
 }
 
 module.exports = { createPgBootstrapReadiness };

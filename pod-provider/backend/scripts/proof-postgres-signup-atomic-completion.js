@@ -246,6 +246,13 @@ async function main(){
     const roleClient=await pool.connect();
     try {
       await roleClient.query('BEGIN');
+      // A privileged migration login cannot impersonate the correctly
+      // permissioned runtime role with SET ROLE: session_user must match.
+      await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_runtime_test');
+      await error(createPgBootstrapReadiness({
+        ...bootstrapConfig,
+        pool:{query:(...args)=>roleClient.query(...args)}
+      }).assertReaderRole(),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
       await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_reader');
       // The NOLOGIN role may exercise the definer's narrow function, but
       // a deployed provider must use a separately verified LOGIN. The

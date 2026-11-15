@@ -602,7 +602,14 @@ might otherwise fabricate a digest without having passed v4 attestation.
 In the live PostgreSQL 18 hosted-PDS test, three separate SQL logins
 have independent, exact roles: worker (reserve/claim), binder
 (only original v4 mapping), and finalizer (only ready reflection).
-Direct table selection or mutation fails for every role. The test
+Direct table selection or mutation fails for every role. A separate
+exact PostgreSQL 18 startup check now rejects unexpected login/role-switch
+rights, inherited role membership, extra schema or SQL function grants, and
+table-level or column-level DML against **both** coordinator and canonical
+v4/SAI/repository tables. The live acceptance injects and revokes a
+fence-token column read, a DID column update, inherited worker mutation
+authority and `pg_monitor` privileges; each must fail closed before
+servicing any request. The test
 proves mismatched app/account mapping, a replayed original bind, duplicate
 signup execution, and refusal of the old shape-only completion method.
 It runs the existing DNS-pinned TLS/XRPC signed CAR, current Solid

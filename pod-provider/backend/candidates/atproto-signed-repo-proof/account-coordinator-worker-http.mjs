@@ -163,7 +163,12 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
     requestFingerprint:input.requestFingerprint,
     reservationId:first.reservationId
   };
-  respond(res,200,{ticket,admission},{
+  respond(res,200,{
+    ticket,admission,
+    requestSha256:crypto.createHash('sha256')
+      .update(JSON.stringify(input),'utf8').digest('hex'),
+    nonce:input.nonce
+  },{
     secret:providerSecret,domain:'worker-response'
   });
 }});

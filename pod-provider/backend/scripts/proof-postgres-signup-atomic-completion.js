@@ -23,6 +23,7 @@ if(process.env.NODE_ENV!=='test' ||
 }
 const pool=new Pool({connectionString:dsn,max:6,
   connectionTimeoutMillis:3000,idleTimeoutMillis:3000,allowExitOnIdle:true});
+let readerPool=null;
 const providerId='https://paper.example.org';
 const appClientId='https://app.paper.example.org/app';
 const appUri='https://writer.paper.example.org/app';
@@ -56,6 +57,13 @@ async function migrate(){
     '../sql/paper-atproto-canonical-authority-v1.sql'),'utf8'));
   await pool.query(fs.readFileSync(path.resolve(__dirname,
     '../sql/paper-account-postgres-candidate-v5-bootstrap-proof.sql'),'utf8'));
+  // Disposable exact-role acceptance: a real independent LOGIN inherits
+  // only the NOLOGIN proof reader, not the migration owner or table roles.
+  await pool.query("CREATE ROLE paper_account_bootstrap_runtime_test "+
+    "LOGIN PASSWORD 'disposable_reader_local_only' "+
+    "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+  await pool.query("GRANT paper_account_bootstrap_reader "+
+    "TO paper_account_bootstrap_runtime_test");
 }
 async function setup(label,letter){
   const accountId=uuid(),operationId=uuid();
@@ -166,6 +174,12 @@ async function main(){
   let errorInRun=null;
   try{
     await migrate();
+    readerPool=new Pool({
+      connectionString:'postgresql://paper_account_bootstrap_runtime_test:'+
+        'disposable_reader_local_only@127.0.0.1:5547/paper_account_completion_test',
+      max:2,connectionTimeoutMillis:3000,statement_timeout:3000,
+      query_timeout:3500,idleTimeoutMillis:3000,allowExitOnIdle:true
+    });
     const ok=await setup('good','a');
     let calls=0;
     const allowed=completion(ok,{verifyCurrent:async ()=>{
@@ -181,8 +195,8 @@ async function main(){
     // current SAI revocation revision, not a provider process-local Map.
     // The read-only function never creates grants, sessions or identities.
     const bootstrapConfig={
-      pool,providerId,appClientId,appUri,hmacKey:secret,
-      hmacKeyVersion:1,fixtureOnly:true
+      pool:readerPool,providerId,appClientId,appUri,hmacKey:secret,
+      hmacKeyVersion:1,fixtureOnly:true,requireRestrictedReader:true
     };
     const identityClaim=fixture=>({
       idempotencyKey:fixture.idempotencyKey,username:fixture.username,
@@ -224,7 +238,7 @@ async function main(){
     // A PostgreSQL superuser can execute the SECURITY DEFINER function
     // but must never qualify as the provider-owned runtime reader login.
     await error(createPgBootstrapReadiness({
-      ...bootstrapConfig,requireRestrictedReader:true
+      ...bootstrapConfig,pool
     }).assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
 
     const roleClient=await pool.connect();
@@ -492,12 +506,16 @@ async function main(){
   }catch(e){errorInRun=e;throw e;}
   finally{
     let cleanup=null;
+    if(readerPool){
+      try{await readerPool.end();}catch(e){cleanup=e;}
+    }
     for(const s of ['paper_account_candidate','paper_atproto_repo_proof',
       'paper_atproto_authority']){
       try{await pool.query('DROP SCHEMA IF EXISTS '+s+' CASCADE');}
       catch(e){cleanup=e;}
     }
-    for(const role of ['paper_account_bootstrap_reader',
+    for(const role of ['paper_account_bootstrap_runtime_test',
+      'paper_account_bootstrap_reader',
       'paper_atproto_authority_importer',
       'paper_atproto_authority_revoker','paper_atproto_authority_reader']){
       try{await pool.query('DROP ROLE IF EXISTS '+role);}catch(e){cleanup=e;}

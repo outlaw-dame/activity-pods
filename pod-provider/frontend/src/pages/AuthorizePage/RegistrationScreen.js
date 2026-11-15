@@ -8,10 +8,11 @@ import AccessNeedsList from '../../common/list/AccessNeedsList';
 import ProgressMessage from '../../common/ProgressMessage';
 import AppHeader from './AppHeader';
 import useRegisterApp from '../../hooks/useRegisterApp';
+import { initialConsentSelection } from './consentPolicy.mjs';
 
 const RegistrationScreen = ({ application, accessApp, isTrustedApp }) => {
   const [isRegistering, setIsRegistering] = useState(false);
-  const [grantedAccessNeedsUris, setGrantedAccessNeedsUris] = useState();
+  const [grantedAccessNeedsUris, setGrantedAccessNeedsUris] = useState([]);
   const translate = useTranslate();
   const notify = useNotify();
   const registerApp = useRegisterApp();
@@ -20,14 +21,14 @@ const RegistrationScreen = ({ application, accessApp, isTrustedApp }) => {
 
   useEffect(() => {
     if (loaded) {
-      setGrantedAccessNeedsUris([
-        ...requiredAccessNeeds.map(a => (typeof a === 'string' ? a : a?.id)),
-        ...optionalAccessNeeds.map(a => (typeof a === 'string' ? a : a?.id))
-      ]);
+      // Optional rights are never preselected. The Pod owner must actively
+      // opt in to each optional right before its SAI grant is persisted.
+      setGrantedAccessNeedsUris(initialConsentSelection(requiredAccessNeeds));
     }
-  }, [loaded, requiredAccessNeeds, optionalAccessNeeds, setGrantedAccessNeedsUris]);
+  }, [loaded, requiredAccessNeeds]);
 
   const onRegister = useCallback(async () => {
+    if (!loaded || isRegistering) return;
     try {
       setIsRegistering(true);
 
@@ -38,7 +39,7 @@ const RegistrationScreen = ({ application, accessApp, isTrustedApp }) => {
       setIsRegistering(false);
       notify(`Error on app registration: ${e.message}`, { type: 'error' });
     }
-  }, [registerApp, notify, application, grantedAccessNeedsUris, accessApp, setIsRegistering]);
+  }, [registerApp, notify, application, grantedAccessNeedsUris, accessApp, setIsRegistering, loaded, isRegistering]);
 
   if (isRegistering) return <ProgressMessage message="app.notification.app_registration_progress" />;
 
@@ -65,7 +66,7 @@ const RegistrationScreen = ({ application, accessApp, isTrustedApp }) => {
         </>
       )}
       <Box display="flex" justifyContent="end">
-        <Button variant="contained" color="secondary" onClick={onRegister} sx={{ ml: 10 }}>
+        <Button variant="contained" color="secondary" onClick={onRegister} disabled={!loaded || isRegistering} sx={{ ml: 10 }}>
           {translate('app.action.accept')}
         </Button>
         <Link to="/apps">

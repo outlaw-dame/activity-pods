@@ -20,6 +20,7 @@ CREATE TABLE paper_account_reservation_proof.reservations (
   lease_expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   started_at timestamptz,
+  signup_claimed_at timestamptz,
   completed_at timestamptz,
   activitypub_actor_id text,
   atproto_did text,
@@ -144,6 +145,38 @@ BEGIN
 END;
 $$;
 
+-- A signed dataset ticket is intentionally idempotent at the Jena admin.
+-- It is NOT permission to mint the WebID/DID multiple times. The actual
+-- auth.signup path must consume this one-time, PG-serialized execution fence
+-- after username moderation and before ANY dataset/account/PLC side effect.
+CREATE FUNCTION paper_account_reservation_proof.claim_signup_once(
+  p_provider text, p_app text, p_key_hash bytea, p_fingerprint bytea,
+  p_reservation uuid, p_dataset text, p_webid text
+) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $
+DECLARE changed integer;
+BEGIN
+  IF p_provider IS NULL OR p_app IS NULL OR p_key_hash IS NULL OR
+     p_fingerprint IS NULL OR octet_length(p_key_hash) <> 32 OR
+     octet_length(p_fingerprint) <> 32 OR p_reservation IS NULL OR
+     p_dataset IS NULL OR p_webid IS NULL THEN
+    RETURN false;
+  END IF;
+  UPDATE paper_account_reservation_proof.reservations r
+    SET signup_claimed_at = clock_timestamp()
+    WHERE r.provider_id = p_provider AND r.app_client_id = p_app
+      AND r.idempotency_hash = p_key_hash
+      AND r.request_hash = p_fingerprint
+      AND r.reservation_id = p_reservation
+      AND r.username = p_dataset AND r.expected_webid = p_webid
+      AND r.state = 'side_effects_started'
+      AND r.signup_claimed_at IS NULL
+      AND r.lease_expires_at > clock_timestamp();
+  GET DIAGNOSTICS changed = ROW_COUNT;
+  RETURN changed = 1;
+END;
+$;
+
 CREATE FUNCTION paper_account_reservation_proof.complete(
   p_provider text, p_app text, p_key_hash bytea, p_reservation uuid, p_fence uuid,
   p_webid text, p_ap_actor text, p_did text, p_pds_url text, p_evidence bytea
@@ -210,6 +243,9 @@ GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.reserve(
 ) TO paper_account_proof_worker;
 GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.start_side_effects(
   text, text, bytea, uuid, uuid
+) TO paper_account_proof_worker;
+GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.claim_signup_once(
+  text, text, bytea, bytea, uuid, text, text
 ) TO paper_account_proof_worker;
 GRANT EXECUTE ON FUNCTION paper_account_reservation_proof.complete(
   text, text, bytea, uuid, uuid, text, text, text, text, bytea

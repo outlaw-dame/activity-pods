@@ -291,6 +291,26 @@ module.exports = {
         }
         return result;
       }
+    },
+
+    // Provider-owned authority check: never treat caller-supplied account
+    // identifiers or the shared internal bearer as proof of Pod ownership.
+    assertCompletedAccountBootstrap: {
+      params: {
+        appClientId: { type: 'string', min: 1 },
+        idempotencyKey: { type: 'string', min: 1 },
+        username: { type: 'string', min: 1 },
+        canonicalAccountId: { type: 'string', min: 1 },
+        webId: { type: 'string', min: 1 },
+        actorId: { type: 'string', min: 1 },
+        podStorageUrl: { type: 'string', min: 1 },
+        atprotoDid: { type: 'string', optional: true },
+        atprotoHandle: { type: 'string', optional: true }
+      },
+      handler(ctx) {
+        this.assertCompletedAccountBootstrap(ctx.params);
+        return { verified: true };
+      }
     }
   },
 
@@ -596,6 +616,7 @@ module.exports = {
       this.idempotencyRecords.set(idempotencyRecordKey, {
         key: idempotencyKey,
         appClientId,
+        username: normalizeString(input.username),
         requestFingerprint,
         status: 'in_progress',
         createdAt: now,
@@ -638,6 +659,40 @@ module.exports = {
       });
 
       return { ok: true, stored: true };
+    },
+
+    assertCompletedAccountBootstrap(input) {
+      // This volatile map is non-production only. Never release production
+      // grants until the canonical PostgreSQL ledger provides durable proof.
+      if (process.env.NODE_ENV === 'production') {
+        throw new MoleculerError('Durable account bootstrap authority is not released',
+          503, 'BOOTSTRAP_DURABLE_AUTHORITY_REQUIRED', { retryable: false });
+      }
+      const key = normalizeString(input.idempotencyKey);
+      const appClientId = normalizeString(input.appClientId);
+      if (!/^entryway:acct_[0-9a-f-]{36}:[a-f0-9]{24}$/i.test(key)) {
+        throw new MoleculerError('Valid Entryway provisioning reference required',
+          403, 'BOOTSTRAP_PROVISIONING_UNVERIFIED');
+      }
+      const record = this.idempotencyRecords.get(
+        this.buildIdempotencyRecordKey(appClientId, key));
+      const account = record?.response;
+      if (!record || record.status !== 'completed' || record.expiresAt <= Date.now() ||
+          record.appClientId !== appClientId ||
+          !record.requestFingerprint ||
+          record.username !== normalizeString(input.username) ||
+          !account || typeof account !== 'object' ||
+          account.canonicalAccountId !== input.canonicalAccountId ||
+          account.webId !== input.webId ||
+          account.solid?.webId !== input.webId ||
+          account.activitypub?.actorId !== input.actorId ||
+          account.solid?.podBaseUrl !== input.podStorageUrl ||
+          input.canonicalAccountId !== input.webId ||
+          (input.atprotoDid && account.atproto?.did !== input.atprotoDid) ||
+          (input.atprotoHandle && account.atproto?.handle !== input.atprotoHandle)) {
+        throw new MoleculerError('Account bootstrap does not match a completed signup',
+          403, 'BOOTSTRAP_PROVISIONING_UNVERIFIED');
+      }
     },
 
     failAccountProvisioning(grant, failure) {

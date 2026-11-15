@@ -93,7 +93,12 @@ an app advertises them in its remote manifest. An application upgrade
 that requests only *new optional* permissions shows the decision screen,
 instead of calling `upgradeApp` automatically with all newly requested
 rights. The owner may choose individual rights or continue with the
-previously granted rights without an upgrade call. Required rights
+previously granted rights. Even when no additional rights are selected, the
+frontend calls the native authenticated upgrade operation **with exactly the
+existing grants** to persist the app's latest manifest cache/revision; otherwise
+the unchanged `dc:modified` comparison would redirect the owner into a
+repeated `/authorize` loop. The metadata acknowledgment cannot silently add
+any newly requested optional rights. Required rights
 remain non-toggleable. Invalid or unexpected selected-right IDs refuse
 the upgrade, and existing grants are preserved if selected additions
 are empty.
@@ -106,3 +111,13 @@ complete and validate the authenticated OIDC/SAI browser continuation,
 explicit redirect URI restrictions, delegated app registration,
 cross-store PostgreSQL revision fencing, revocation races, and actual
 signed PDS readiness. The new account release fuse remains closed.
+
+## Codex follow-up: exact approved-app scope in PostgreSQL bootstrap
+
+The disposable PostgreSQL reader is configured for exactly one approved
+signup client. Provider bootstrap now compares the *requested* app client
+with that constructor-pinned client **before** querying PostgreSQL. This
+remains mandatory even when two approved signup clients share the same
+native SAI app resource. Missing scope rejects, without falling back
+to volatile registration state. The runtime test verifies both the
+malicious cross-client case and the original authorized client's success.

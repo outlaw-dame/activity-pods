@@ -274,3 +274,79 @@ test('role validation is unavailable once the disposable authority is disabled',
   });
   expect(pool.query).not.toHaveBeenCalled();
 });
+
+test('concurrent requests cannot use a safe role probe from another pooled session', async () => {
+  const safe = {
+    query: jest.fn(async sql => sql.includes('FROM pg_catalog.pg_roles')
+      ? { rowCount: 1, rows: [{ ...restrictedRole }] }
+      : { rowCount: 1, rows: [row] }),
+    release: jest.fn()
+  };
+  const privileged = {
+    query: jest.fn(async sql => sql.includes('FROM pg_catalog.pg_roles')
+      ? { rowCount: 1, rows: [{ ...restrictedRole, is_superuser: true }] }
+      : { rowCount: 1, rows: [row] }),
+    release: jest.fn()
+  };
+  const pool = {
+    query: jest.fn(() => {
+      throw new Error('Must not run unbound pool queries during a proof');
+    }),
+    connect: jest.fn().mockResolvedValueOnce(safe).mockResolvedValueOnce(privileged)
+  };
+  const proof = createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  });
+  const results = await Promise.allSettled([
+    proof.assertCurrent(scope), proof.assertCurrent(scope)
+  ]);
+  expect(results.map(x => x.status)).toEqual(['fulfilled', 'rejected']);
+  expect(results[0].value.verified).toBe(true);
+  expect(results[1].reason).toMatchObject({
+    code: 'BOOTSTRAP_PG_ROLE_UNAUTHORIZED'
+  });
+  expect(safe.query).toHaveBeenCalledTimes(2);
+  expect(privileged.query).toHaveBeenCalledTimes(1);
+  expect(safe.release).toHaveBeenCalledWith(false);
+  expect(privileged.release).toHaveBeenCalledWith(false);
+  expect(pool.query).not.toHaveBeenCalled();
+});
+
+test('bounded proof failures discard the exact borrowed PostgreSQL connection', async () => {
+  const { pool, client } = mockRestrictedPool(async sql => {
+    if (sql.includes('FROM pg_catalog.pg_roles'))
+      return { rowCount: 1, rows: [{ ...restrictedRole }] };
+    throw new Error('postgresql://reader:secret@private-db/proof failure');
+  });
+  await expect(createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  }).assertCurrent(scope)).rejects.toMatchObject({
+    code: 'BOOTSTRAP_PG_UNAVAILABLE',
+    message: 'Current provider signup readiness is unavailable'
+  });
+  expect(client.query).toHaveBeenCalledTimes(2);
+  expect(client.release).toHaveBeenCalledWith(true);
+  expect(pool.query).not.toHaveBeenCalled();
+});
+
+test('failed connection checkout is redacted and does not run an unbound proof', async () => {
+  const pool = {
+    query: jest.fn(),
+    connect: jest.fn(async () => {
+      throw new Error('postgresql://reader:secret@private-db/pool exhausted');
+    })
+  };
+  await expect(createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  }).assertCurrent(scope)).rejects.toMatchObject({
+    code: 'BOOTSTRAP_PG_UNAVAILABLE',
+    message: 'Current provider signup readiness is unavailable'
+  });
+  expect(pool.query).not.toHaveBeenCalled();
+});
+
+test('restricted proof cannot be constructed without a pinned checkout capability', () => {
+  expect(() => createPgBootstrapReadiness({
+    ...config({ query: jest.fn() }), requireRestrictedReader: true
+  })).toThrow('Current provider signup readiness is unavailable');
+});

@@ -55,15 +55,89 @@ function newAccountProofEnabled() {
 
 function createPgBootstrapReadiness({
   pool, providerId, appClientId, appUri, hmacKey, hmacKeyVersion = 1,
-  fixtureOnly = false
+  fixtureOnly = false, requireRestrictedReader = false
 } = {}) {
   if (!pool || typeof pool.query !== 'function' ||
       !canonicalOrigin(providerId) || !canonicalHttps(appClientId) ||
       !canonicalHttps(appUri) ||
       !Buffer.isBuffer(hmacKey) || hmacKey.length < 32 ||
       !Number.isSafeInteger(hmacKeyVersion) ||
-      hmacKeyVersion < 1 || hmacKeyVersion > 255) {
+      hmacKeyVersion < 1 || hmacKeyVersion > 255 ||
+      typeof requireRestrictedReader !== 'boolean') {
     deny('BOOTSTRAP_PG_CONFIGURATION_INVALID');
+  }
+
+  async function assertReaderRole() {
+    if (fixtureOnly !== true || !newAccountProofEnabled()) {
+      deny('BOOTSTRAP_PG_NOT_RELEASED');
+    }
+    // A shared superuser/ordinary app DSN can bypass canonical revocation
+    // and read every user's account, grant and signing evidence. Fail closed
+    // before accepting a bootstrap proof and recheck on every read so a
+    // changed grant cannot leave a long-running service overprivileged.
+    const sql =
+      'SELECT r.rolsuper AS is_superuser,r.rolbypassrls AS bypass_rls,'+
+      'r.rolcreatedb AS can_create_db,r.rolcreaterole AS can_create_role,'+
+      'r.rolreplication AS can_replicate,r.rolcanlogin AS can_login,'+
+      '(session_user=current_user) AS session_matches,'+
+      "pg_catalog.pg_has_role(current_user,'paper_account_bootstrap_reader','MEMBER') AS reader_member,"+
+      "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_importer','MEMBER') AS importer_member,"+
+      "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_revoker','MEMBER') AS revoker_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_read_all_data','MEMBER') AS read_all_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_write_all_data','MEMBER') AS write_all_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_execute_server_program','MEMBER') AS exec_program_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_read_server_files','MEMBER') AS read_files_member,"+
+      "pg_catalog.pg_has_role(current_user,'pg_write_server_files','MEMBER') AS write_files_member,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+      "WHERE nspname='paper_account_candidate'),'MEMBER') AS account_owner_member,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+      "WHERE nspname='paper_atproto_authority'),'MEMBER') AS authority_owner_member,"+
+      "pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace "+
+      "WHERE nspname='paper_atproto_repo_proof'),'MEMBER') AS repo_owner_member,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_account_candidate','USAGE') AS account_schema,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_account_candidate','CREATE') AS can_create,"+
+      "pg_catalog.has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_atproto_authority','USAGE') AS can_read_authority,"+
+      "pg_catalog.has_schema_privilege(current_user,'paper_atproto_repo_proof','USAGE') AS can_read_repo,"+
+      "pg_catalog.has_function_privilege(current_user,'paper_account_candidate.current_bootstrap_proof("+
+      "text,text,smallint,bytea,text,text,text,text,text,text)','EXECUTE') AS can_prove,"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.accounts','SELECT') AS can_select_accounts,"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.signup_operations','SELECT') AS can_select_journal,"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.accounts',"+
+      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_accounts,"+
+      "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.signup_operations',"+
+      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_journal "+
+      'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user LIMIT 2';
+    let result;
+    try {
+      result = await pool.query(sql);
+    } catch {
+      deny('BOOTSTRAP_PG_ROLE_UNAVAILABLE');
+    }
+    const role = result?.rows?.[0];
+    if (result?.rowCount !== 1 || !role ||
+        role.is_superuser !== false || role.bypass_rls !== false ||
+        role.can_create_db !== false || role.can_create_role !== false ||
+        role.can_replicate !== false || role.can_login !== true ||
+        role.session_matches !== true ||
+        role.importer_member !== false || role.revoker_member !== false ||
+        role.read_all_member !== false || role.write_all_member !== false ||
+        role.exec_program_member !== false || role.read_files_member !== false ||
+        role.write_files_member !== false ||
+        role.account_owner_member !== false ||
+        role.authority_owner_member !== false ||
+        role.repo_owner_member !== false ||
+        role.reader_member !== true || role.account_schema !== true ||
+        role.can_create !== false || role.can_create_schema !== false ||
+        role.can_read_authority !== false ||
+        role.can_read_repo !== false || role.can_prove !== true ||
+        role.can_select_accounts !== false ||
+        role.can_select_journal !== false ||
+        role.can_write_accounts !== false ||
+        role.can_write_journal !== false) {
+      deny('BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
+    }
+    return true;
   }
 
   async function assertCurrent({ idempotencyKey, username, webId, actorId, atprotoDid, atprotoHandle } = {}) {
@@ -81,6 +155,7 @@ function createPgBootstrapReadiness({
         !HANDLE.test(atprotoHandle)) {
       deny('BOOTSTRAP_PG_SCOPE_INVALID');
     }
+    if (requireRestrictedReader) await assertReaderRole();
 
     // Domain separation means an offline hash of the request password is
     // never stored, and the raw Entryway key is never sent to PostgreSQL.
@@ -124,7 +199,7 @@ function createPgBootstrapReadiness({
     });
   }
 
-  return Object.freeze({ assertCurrent });
+  return Object.freeze({ assertCurrent, assertReaderRole });
 }
 
 module.exports = { createPgBootstrapReadiness };

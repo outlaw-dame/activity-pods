@@ -154,3 +154,107 @@ test('requires provider-owned configuration and a secret unrelated to raw HTTP c
     })).toThrow('Current provider signup readiness is unavailable');
   }
 });
+
+const restrictedRole = Object.freeze({
+  is_superuser: false, bypass_rls: false,
+  can_create_db: false, can_create_role: false, can_replicate: false,
+  can_login: true, session_matches: true,
+  importer_member: false, revoker_member: false,
+  read_all_member: false, write_all_member: false,
+  exec_program_member: false, read_files_member: false, write_files_member: false,
+  account_owner_member: false, authority_owner_member: false,
+  repo_owner_member: false,
+  reader_member: true, account_schema: true,
+  can_create: false, can_create_schema: false,
+  can_read_authority: false,
+  can_read_repo: false, can_prove: true,
+  can_select_accounts: false, can_select_journal: false,
+  can_write_accounts: false, can_write_journal: false
+});
+
+test('restricted provider bootstrap mode checks DB role at every current proof read', async () => {
+  const pool = { query: jest.fn(async sql => sql.includes('FROM pg_catalog.pg_roles')
+    ? { rowCount: 1, rows: [{ ...restrictedRole }] }
+    : { rowCount: 1, rows: [row] }) };
+  const reader = createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  });
+  expect(await reader.assertReaderRole()).toBe(true);
+  expect((await reader.assertCurrent(scope)).verified).toBe(true);
+  expect((await reader.assertCurrent(scope)).verified).toBe(true);
+  const operations = pool.query.mock.calls.map(([sql]) =>
+    sql.includes('FROM pg_catalog.pg_roles') ? 'role' : 'proof');
+  expect(operations).toEqual(['role','role','proof','role','proof']);
+  const roleSql = pool.query.mock.calls[0][0];
+  expect(roleSql).toContain('paper_account_bootstrap_reader');
+  expect(roleSql).toContain('has_table_privilege');
+  expect(roleSql).toContain('has_function_privilege');
+  expect(roleSql).not.toContain(scope.idempotencyKey);
+});
+
+test.each([
+  { is_superuser: true },
+  { bypass_rls: true },
+  { can_create_db: true },
+  { can_create_role: true },
+  { can_replicate: true },
+  { can_login: false },
+  { session_matches: false },
+  { importer_member: true },
+  { revoker_member: true },
+  { read_all_member: true },
+  { write_all_member: true },
+  { exec_program_member: true },
+  { read_files_member: true },
+  { write_files_member: true },
+  { account_owner_member: true },
+  { authority_owner_member: true },
+  { repo_owner_member: true },
+  { reader_member: false },
+  { account_schema: false },
+  { can_create: true },
+  { can_create_schema: true },
+  { can_read_authority: true },
+  { can_read_repo: true },
+  { can_prove: false },
+  { can_select_accounts: true },
+  { can_select_journal: true },
+  { can_write_accounts: true },
+  { can_write_journal: true },
+])('rejects overly broad or incomplete PostgreSQL reader role: %j', async change => {
+  const pool = { query: jest.fn(async sql =>
+    sql.includes('FROM pg_catalog.pg_roles')
+      ? { rowCount: 1, rows: [{ ...restrictedRole, ...change }] }
+      : { rowCount: 1, rows: [row] }) };
+  await expect(createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  }).assertCurrent(scope)).rejects.toMatchObject({
+    code: 'BOOTSTRAP_PG_ROLE_UNAUTHORIZED',
+    message: 'Current provider signup readiness is unavailable'
+  });
+  expect(pool.query).toHaveBeenCalledTimes(1);
+});
+
+test('credentialed database failures do not leak through reader role checks', async () => {
+  const pool = { query: jest.fn(async () => {
+    throw new Error('postgresql://admin:password@private-db/production');
+  }) };
+  await expect(createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  }).assertCurrent(scope)).rejects.toMatchObject({
+    code: 'BOOTSTRAP_PG_ROLE_UNAVAILABLE',
+    message: 'Current provider signup readiness is unavailable'
+  });
+});
+
+test('role validation is unavailable once the disposable authority is disabled', async () => {
+  const pool = { query: jest.fn() };
+  const reader = createPgBootstrapReadiness({
+    ...config(pool), requireRestrictedReader: true
+  });
+  process.env.NODE_ENV = 'production';
+  await expect(reader.assertReaderRole()).rejects.toMatchObject({
+    code: 'BOOTSTRAP_PG_NOT_RELEASED'
+  });
+  expect(pool.query).not.toHaveBeenCalled();
+});

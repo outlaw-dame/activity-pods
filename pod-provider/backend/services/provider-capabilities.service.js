@@ -191,13 +191,16 @@ module.exports = {
       connectionString: dsn,
       max: 2,
       connectionTimeoutMillis: 2500,
+      statement_timeout: 3000,
+      query_timeout: 3500,
       idleTimeoutMillis: 5000,
       allowExitOnIdle: true
     });
     try {
       this.pgBootstrapReadiness = createPgBootstrapReadiness({
         pool, providerId, appClientId, appUri,
-        hmacKey, hmacKeyVersion: version, fixtureOnly: true
+        hmacKey, hmacKeyVersion: version, fixtureOnly: true,
+        requireRestrictedReader: true
       });
       // This scope must accompany the injected PG reader. A caller whose
       // approved app differs must never borrow another app's signup proof,
@@ -209,6 +212,26 @@ module.exports = {
       // resources if provider-scoped configuration cannot be validated.
       void pool.end();
       throw error;
+    }
+  },
+
+  async started() {
+    if (!this.pgBootstrapReadiness) return;
+    try {
+      // The provider must not start serving bootstrap requests with a DB
+      // login that can read journal HMACs or mutate canonical permissions.
+      // Every subsequent proof also rechecks privileges at call time.
+      await this.pgBootstrapReadiness.assertReaderRole();
+    } catch {
+      const pool = this.pgBootstrapPool;
+      this.pgBootstrapReadiness = null;
+      this.pgBootstrapPool = null;
+      this.pgBootstrapAppClientId = null;
+      if (pool) await pool.end().catch(() => undefined);
+      throw new MoleculerError(
+        'Restricted PostgreSQL bootstrap reader is unavailable',
+        503, 'BOOTSTRAP_PG_READER_NOT_AUTHORIZED', { retryable: false }
+      );
     }
   },
 

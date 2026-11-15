@@ -24,6 +24,7 @@ module.exports = {
       delete_app: 'Delete application',
       open: 'Open',
       reject: 'Reject',
+      skip_optional_permissions: 'Continue without optional permissions',
       reject_contact_request: 'Reject contact request',
       remove_contact: 'Remove contact',
       send: 'Send',

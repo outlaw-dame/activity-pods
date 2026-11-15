@@ -251,7 +251,10 @@ async function main(){
       await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_runtime_test');
       await error(createPgBootstrapReadiness({
         ...bootstrapConfig,
-        pool:{query:(...args)=>roleClient.query(...args)}
+        pool:{query:(...args)=>roleClient.query(...args)},
+        // This is an already-borrowed admin session; call the role probe
+        // directly, not the proof path which requires pool.connect().
+        requireRestrictedReader:false
       }).assertReaderRole(),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
       await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_reader');
       // The NOLOGIN role may exercise the definer's narrow function, but
@@ -265,7 +268,10 @@ async function main(){
       assert.equal((await narrow.assertCurrent(identityClaim(ok))).verified,true);
       await error(createPgBootstrapReadiness({
         ...bootstrapConfig,
-        pool:{query:(...args)=>roleClient.query(...args)}
+        pool:{query:(...args)=>roleClient.query(...args)},
+        // This is an already-borrowed admin session; call the role probe
+        // directly, not the proof path which requires pool.connect().
+        requireRestrictedReader:false
       }).assertReaderRole(),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
       for(const table of [
         'paper_account_candidate.accounts',

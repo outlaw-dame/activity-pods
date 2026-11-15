@@ -63,11 +63,12 @@ function createPgBootstrapReadiness({
       !Buffer.isBuffer(hmacKey) || hmacKey.length < 32 ||
       !Number.isSafeInteger(hmacKeyVersion) ||
       hmacKeyVersion < 1 || hmacKeyVersion > 255 ||
-      typeof requireRestrictedReader !== 'boolean') {
+      typeof requireRestrictedReader !== 'boolean' ||
+      (requireRestrictedReader && typeof pool.connect !== 'function')) {
     deny('BOOTSTRAP_PG_CONFIGURATION_INVALID');
   }
 
-  async function assertReaderRole() {
+  async function assertReaderRole(client = pool) {
     if (fixtureOnly !== true || !newAccountProofEnabled()) {
       deny('BOOTSTRAP_PG_NOT_RELEASED');
     }
@@ -110,7 +111,7 @@ function createPgBootstrapReadiness({
       'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user LIMIT 2';
     let result;
     try {
-      result = await pool.query(sql);
+      result = await client.query(sql);
     } catch {
       deny('BOOTSTRAP_PG_ROLE_UNAVAILABLE');
     }
@@ -155,29 +156,54 @@ function createPgBootstrapReadiness({
         !HANDLE.test(atprotoHandle)) {
       deny('BOOTSTRAP_PG_SCOPE_INVALID');
     }
-    if (requireRestrictedReader) await assertReaderRole();
-
     // Domain separation means an offline hash of the request password is
     // never stored, and the raw Entryway key is never sent to PostgreSQL.
     const idempotencyHmac = crypto.createHmac('sha256', hmacKey)
       .update('account-signup-idempotency-v1\0', 'utf8')
       .update(idempotencyKey, 'utf8').digest();
 
+    // Pool.query() can select a DIFFERENT PostgreSQL session for the proof
+    // than the preceding privilege check under concurrent request load.
+    // Pin both operations to one borrowed connection, never keep a DB
+    // transaction open across provider HTTP, Jena or signing work.
+    let client = null;
+    let discardConnection = false;
+    if (requireRestrictedReader) {
+      try {
+        client = await pool.connect();
+      } catch {
+        deny('BOOTSTRAP_PG_UNAVAILABLE');
+      }
+    }
     let result;
     try {
-      result = await pool.query(
-        'SELECT account_id,grant_uri,consent_revision,account_generation FROM ' +
-        'paper_account_candidate.current_bootstrap_proof(' +
-        '$1,$2,$3::smallint,$4,$5,$6,$7,$8,$9,$10)',
-        [
-          providerId, appClientId, hmacKeyVersion, idempotencyHmac,
-          username, webId, actorId, atprotoDid, atprotoHandle, appUri
-        ]
-      );
-    } catch {
-      // Never relay SQL errors: connection strings and query diagnostics may
-      // contain provider credentials, account details or HMACs.
-      deny('BOOTSTRAP_PG_UNAVAILABLE');
+      const connection = client || pool;
+      if (requireRestrictedReader) {
+        try {
+          await assertReaderRole(connection);
+        } catch (error) {
+          discardConnection = error?.code === 'BOOTSTRAP_PG_ROLE_UNAVAILABLE';
+          throw error;
+        }
+      }
+      try {
+        result = await connection.query(
+          'SELECT account_id,grant_uri,consent_revision,account_generation FROM ' +
+          'paper_account_candidate.current_bootstrap_proof(' +
+          '$1,$2,$3::smallint,$4,$5,$6,$7,$8,$9,$10)',
+          [
+            providerId, appClientId, hmacKeyVersion, idempotencyHmac,
+            username, webId, actorId, atprotoDid, atprotoHandle, appUri
+          ]
+        );
+      } catch {
+        discardConnection = true;
+        // Do not relay SQL errors: connection strings and query diagnostics
+        // may contain credentials, account details or HMACs.
+        deny('BOOTSTRAP_PG_UNAVAILABLE');
+      }
+    } finally {
+      if (client) client.release(discardConnection);
     }
 
     if (result.rowCount !== 1 || !result.rows?.[0] ||

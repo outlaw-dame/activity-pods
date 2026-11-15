@@ -23,6 +23,7 @@ module.exports = {
       atproto_link_starting: 'Démarrage de la liaison...',
       delete_app: "Supprimer l'appli",
       reject: 'Refuser',
+      skip_optional_permissions: 'Continuer sans les autorisations facultatives',
       reject_contact_request: 'Rejeter la demande',
       remove_contact: 'Retirer de mes contacts',
       send: 'Envoyer',

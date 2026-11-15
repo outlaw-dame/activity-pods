@@ -32,6 +32,7 @@ CREATE TABLE paper_account_reservation_proof.reservations (
   UNIQUE (activitypub_actor_id),
   UNIQUE (atproto_did),
   CHECK ((state = 'reserved') = (started_at IS NULL)),
+  CHECK (signup_claimed_at IS NULL OR started_at IS NOT NULL),
   CHECK ((state = 'completed') = (completed_at IS NOT NULL)),
   CHECK ((state = 'completed') = (atproto_did IS NOT NULL)),
   CHECK ((state = 'completed') = (evidence_hash IS NOT NULL))

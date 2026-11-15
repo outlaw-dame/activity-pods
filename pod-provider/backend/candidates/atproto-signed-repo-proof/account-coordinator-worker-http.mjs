@@ -121,7 +121,16 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
       username:scope.username,reservationId:scope.reservationId
     });
     if(!claimed)refuse(409);
-    respond(res,200,{admitted:true},{
+    // The signed acknowledgment is specific to exactly this consumed
+    // request. An older successful HTTP response has a valid service MAC,
+    // but its request digest and nonce cannot authorize a new attempt.
+    respond(res,200,{
+      admitted:true,
+      requestSha256:crypto.createHash('sha256')
+        .update(JSON.stringify(scope),'utf8').digest('hex'),
+      reservationId:scope.reservationId,
+      nonce:scope.nonce
+    },{
       secret:providerSecret,domain:'consume-response'
     });
     return;

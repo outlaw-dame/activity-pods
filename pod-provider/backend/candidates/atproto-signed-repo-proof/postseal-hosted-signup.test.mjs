@@ -70,6 +70,62 @@ async function close(server){
   if(server)await new Promise((ok,no)=>server.close(e=>e?no(e):ok()));
 }
 
+// These are three real, separately authenticated PostgreSQL 18 principals:
+// worker can reserve/claim but not bind/reflect; binder can ONLY bind a
+// matching unstarted v4 journal; finalizer can ONLY mirror the attested ready
+// state. None can enumerate canonical tables or invent PDS evidence.
+async function createBridgePrincipals(pool,retainedPools){
+  const roles=[
+    ['paper_bridge_worker_login','paper_account_proof_worker'],
+    ['paper_bridge_binder_login','paper_account_bridge_binder'],
+    ['paper_bridge_finalizer_login','paper_account_bridge_finalizer']
+  ];
+  const result={};
+  for(const [name,role] of roles){
+    const password=crypto.randomBytes(24).toString('hex');
+    await pool.query('CREATE ROLE '+name+
+      " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '"+
+      password+"'");
+    await pool.query('GRANT '+role+' TO '+name+
+      ' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
+    const u=new URL(DSN);u.username=name;u.password=password;
+    const restricted=new Pool({
+      connectionString:u.toString(),max:2,
+      connectionTimeoutMillis:3000,query_timeout:6000,
+      idleTimeoutMillis:1500,allowExitOnIdle:true
+    });
+    retainedPools.push(restricted);
+    result[name.split('_')[2]]=restricted;
+    await assert.rejects(restricted.query(
+      'SELECT * FROM paper_account_reservation_proof.reservations'),
+      e=>e?.code==='42501',
+      'No restricted client may enumerate reservation fence tokens');
+  }
+  const worker=result.worker,binder=result.binder,finalizer=result.finalizer;
+  assert.equal(await assertRestrictedAccountProofLogin(worker,'worker'),true);
+  const inventory=async login=>{
+    const role=(await login.query(
+      "SELECT has_function_privilege(current_user,"+
+      " 'paper_account_reservation_proof.bind_v4_signup(uuid,text,text,bytea,bytea,text,text,uuid,uuid,smallint,bytea,bytea)',"+
+      " 'EXECUTE') AS can_bind,"+
+      " has_function_privilege(current_user,"+
+      " 'paper_account_reservation_proof.reflect_v4_ready(uuid,text,text,bytea,bytea)',"+
+      " 'EXECUTE') AS can_reflect")).rows[0];
+    return role;
+  };
+  assert.deepEqual(inventory instanceof Function,true);
+  assert.deepEqual(await inventory(worker),{can_bind:false,can_reflect:false});
+  assert.deepEqual(await inventory(binder),{can_bind:true,can_reflect:false});
+  assert.deepEqual(await inventory(finalizer),{can_bind:false,can_reflect:true});
+  return {worker,binder,finalizer};
+}
+const scopedKeyHash=(provider,app,key)=>crypto.createHash('sha256')
+  .update('activitypods:account-reservation:key:v1\\0')
+  .update(provider).update('\\0').update(app).update('\\0')
+  .update(key).digest();
+const scopedApp=app=>crypto.createHash('sha256')
+  .update('activitypods:approved-app:v1\\0').update(app).digest('hex');
+
 test('one sealed new signup gets independently signed hosted PDS proof before PG18 atomic ready',async t=>{
   let server=null,cleanupError=null,tlsDir=null;
   const bridgePools=[];

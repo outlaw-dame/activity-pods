@@ -55,8 +55,17 @@ async function coordinatedDisposableSignup({
   const headers=ctx.meta?.$headers || {};
   const appClientId=ctx.params?.appClientId;
   const redirectUri=ctx.params?.redirectUri;
-  const idempotencyKey=headers['idempotency-key'] ||
-    headers['Idempotency-Key'] || ctx.params?.idempotencyKey;
+  const headerIdempotencyKey = headers['idempotency-key'] ||
+    headers['Idempotency-Key'];
+  const bodyIdempotencyKey = ctx.params?.idempotencyKey;
+  // Never let a valid header-bound verification silently override a
+  // different body key: those would identify different durable requests.
+  if (headerIdempotencyKey !== undefined &&
+      bodyIdempotencyKey !== undefined &&
+      headerIdempotencyKey !== bodyIdempotencyKey) {
+    deny('ACCOUNT_COORDINATOR_IDEMPOTENCY_SCOPE_CONFLICT',400);
+  }
+  const idempotencyKey=headerIdempotencyKey||bodyIdempotencyKey;
   const protocols=api.requestedProtocolsFromAccountParams(accountParams);
   const requestFingerprint=fingerprint({
     api,appClientId,redirectUri,accountParams,protocols,env

@@ -159,7 +159,12 @@ function makeFetch({status=200, ticketValue=ticket()}={}){
       requestFingerprint:body.requestFingerprint,
       reservationId:ticketValue.claim.reservationId
     };
-    const raw=JSON.stringify({ticket:ticketValue,admission});
+    const raw=JSON.stringify({
+      ticket:ticketValue,admission,
+      requestSha256:crypto.createHash('sha256')
+        .update(options.body,'utf8').digest('hex'),
+      nonce:body.nonce
+    });
     const signed=wire.computeMac(process.env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
       'worker-response',raw);
     return new Response(status===200?raw:JSON.stringify({error:'denied'}),{
@@ -266,6 +271,49 @@ test('an external ticket, fence or grant is rejected without authorizing or cont
     expect(f).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   }finally{await broker.stop();global.fetch=orig;}
+});
+test('a captured, correctly MACed reservation response cannot be reused for another request nonce',async()=>{
+  const actualFetch=makeFetch();
+  let recorded=null;
+  const capture=async(url,options)=>{
+    const reply=await actualFetch(url,options);
+    recorded={
+      raw:await reply.text(),
+      mac:reply.headers.get('x-paper-auth'),
+      request:options.body
+    };
+    return new Response(recorded.raw,{status:200,headers:{
+      'x-paper-auth':recorded.mac
+    }});
+  };
+  const grant={
+    allowed:true,approvedApp:true,verifiedUser:true,
+    capabilityId:'provider.account.provisioning',
+    appClientId:APP,username:USER,
+    idempotencyKey:KEY,requestFingerprint:'a'.repeat(64),
+    dailyLimit:3
+  };
+  const env={...FIXTURE_FLAGS,
+    APODS_ACCOUNT_COORDINATOR_SHARED_KEY:
+      process.env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY
+  };
+  const first=await wire.reserveCoordinatedDataset({
+    grant,username:USER,appClientId:APP,env,fetchImpl:capture
+  });
+  expect(first.ticket.claim.dataset).toBe(USER);
+  let nextRequest=null;
+  await expect(wire.reserveCoordinatedDataset({
+    grant,username:USER,appClientId:APP,env,
+    fetchImpl:async(_url,options)=>{
+      nextRequest=options.body;
+      return new Response(recorded.raw,{status:200,headers:{
+        'x-paper-auth':recorded.mac
+      }});
+    }
+  })).rejects.toMatchObject({
+    code:'ACCOUNT_COORDINATOR_RESPONSE_INVALID'
+  });
+  expect(nextRequest).not.toBe(recorded.request);
 });
 test('lost coordinator acknowledgement and second worker conflict never create another identity',async()=>{
   const orig=global.fetch;

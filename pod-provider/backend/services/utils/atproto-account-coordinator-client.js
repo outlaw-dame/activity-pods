@@ -72,7 +72,7 @@ function validateMessage(message, now = Date.now()) {
   }
 }
 function computeMac(secret, domain, raw) {
-  if (!['client','issuer'].includes(domain) || typeof raw !== 'string')
+  if (!['client','issuer','issuer-response','worker-response'].includes(domain) || typeof raw !== 'string')
     reject('ACCOUNT_COORDINATOR_REQUEST_INVALID');
   return crypto.createHmac('sha256', parseSecret(secret))
     .update(DOMAIN + domain + '\0', 'utf8')
@@ -99,7 +99,8 @@ async function boundedResponse(response) {
     await reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
-  try { return JSON.parse(Buffer.concat(parts, size).toString('utf8')); }
+  const raw=Buffer.concat(parts, size).toString('utf8');
+  try {return {raw,value:JSON.parse(raw)};}
   catch { reject('ACCOUNT_COORDINATOR_RESPONSE_INVALID'); }
 }
 async function reserveCoordinatedDataset({
@@ -144,7 +145,12 @@ async function reserveCoordinatedDataset({
       reject(response.status===409 ?
         'ACCOUNT_COORDINATOR_CONFLICT' : 'ACCOUNT_COORDINATOR_UNAVAILABLE');
     }
-    const data=await boundedResponse(response);
+    const body=await boundedResponse(response);
+    const data=body.value;
+    if (!verifyMac(env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
+      'worker-response',body.raw,response.headers?.get('x-paper-auth'))) {
+      reject('ACCOUNT_COORDINATOR_RESPONSE_INVALID');
+    }
     if(!isExact(data,['ticket']) ||
         !isExact(data.ticket,['claim','signature']) ||
         !isExact(data.ticket.claim,[

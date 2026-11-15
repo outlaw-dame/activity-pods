@@ -415,3 +415,104 @@ Deploy issuer, privileged dataset admin and ordinary provider under
 physically distinct secrets, principals and network boundaries. Preserve
 the source-controlled production signup and protected-storage fuses
 until all acceptance and performance gates pass.
+
+## P1e — approved-app authenticated coordinator to canonical pre-account fence (disposable)
+
+This gate connects the **actual** `unified-account-api.create` and
+`unified-account.create`/ `accounts.create` / `auth.signup` action
+parameter chain to the PostgreSQL reservation and independent signer
+already exercised in P1c/P1d. It is deliberately not an alternative
+identity authority: only ActivityPods issues the WebID, ActivityPub
+actor and managed ATProto signer.
+
+**Authentication first.** The existing provider capability evaluator
+supports legacy/test shortcuts: optional origin/redirect match,
+`verification.verified=true` under a policy option, unsigned apps and
+in-memory idempotency. The new isolated
+`provider-capabilities.authorizeDurableAccountProvisioning` action
+rejects these shortcuts: production/ordinary modes, missing approved
+apps, permissive bearer/user-verification settings, empty explicit
+origin/redirect allowlists, mismatched Origin/redirect, unsigned apps,
+absent or boolean-only verification, invalid canonical usernames and
+missing/invalid scoped idempotency keys. Only a successfully verified
+app bearer and user challenge yields a **non-secret** policy grant.
+
+**No raw claim inputs.** The actual HTTP action rejects caller-supplied
+dataset tickets, signer fences, coordinator grants and request
+fingerprints before any reservation. It derives a domain-separated,
+server-HMAC request fingerprint (including the password), not an
+unkeyed password-dictionary hash, and keeps this secret off the broker
+and database. The app's public client ID is separately SHA-256 scoped
+to a fixed hexadecimal identifier for the PostgreSQL app/quota key;
+the app's real identity remains with the ActivityPods capability
+service. No incoming HTTP `ctx.meta` is propagated to the coordinator
+or signup broker calls.
+
+**Separate trust domains.** The ordinary provider holds only two
+service keys: a request-fingerprint HMAC key and a different provider
+→ coordinator HMAC key. It never gets a worker SQL DSN, issuer Ed25519
+key or Jena admin credential. The worker on a *fixed, disposable*
+localhost endpoint authenticates the provider request's canonical
+bytes, per-request nonce and timestamp, and performs one PG
+`reserve` and monotone `start_side_effects` transition. It has a
+restricted SQL role, not the signing private key. The worker authenticates
+to a separate issuer using **another** service HMAC key; the issuer
+holds only its restricted SQL lookup role and Ed25519 key, confirms the
+reservation under the PG server clock, and signs the immutable short
+dataset claim. Worker and issuer responses are individually MACed, the
+worker verifies the Ed25519 signature using a trusted *public* key,
+and the ordinary client reuses the exact dataset-admin claim
+validation before forwarding the claim. HTTP bodies and response
+streams are bounded, endpoints fixed, redirects refused, timeouts
+bounded, no unbounded per-request memory ledger or background retry
+loop exists.
+
+**Operation-scoped handoff.** The real `unified-account-api` calls
+the coordinator only after approved-app/user verification, then sends
+the issued ticket as an explicit parameter through
+`unified-account.create`, `accounts.create` and `auth.signup` to the
+previously merged dataset-administration branch. The ticket is neither
+in user request parameters nor copied to `ctx.meta`, account/profile
+records, registration events or API responses. The ordinary legacy
+non-coordinator paths remain unchanged when the test-only flag is off.
+
+**Crash/timeout contract.** Once the coordinator RPC begins, it may
+have committed an irreversible PostgreSQL fence even if the caller
+lost the HTTP response. No retry with a new fence or automatic lease
+takeover is permitted. The two-cell live PostgreSQL 18 acceptance
+runs *two independent restricted worker processes* against the same
+table, a separate claim issuer, an independent admin SQL/Jena child
+and the ordinary provider client. It tests valid HMAC, forged HMAC,
+cross-cell replay, irreversible issuer outage, signed dataset
+creation, identical replay after persistent Jena/process restart,
+and ledger retention. Every spawned process has an explicit
+environment allowlist: the superuser harness connection, worker SQL
+login, issuer signing key and admin password do not cross into other
+roles. If the issuer fails after the PG fence commits, the username
+stays `side_effects_started` and is never silently released.
+
+**Strict completion NO-GO.** The unified facade's current returned
+`repoInitialized` and binding fields are not proof of a remotely
+hosted, cryptographically signed PDS CAR with current Solid/SAI
+consent. The *existing* `hosted-signup-pds-attestation.mjs`,
+`postseal-signup-completion-evidence.mjs` and canonical v4 PG
+completion-fence candidates are the reviewed direction for that
+separate integration. This PR intentionally returns
+`ACCOUNT_COMPLETION_ATTESTATION_PENDING` (HTTP 503, no retry) even
+when a disposable signup RPC returns success. It does **not** invoke
+`paper_account_reservation_proof.complete` on an unverified metadata
+Boolean, store replayable login/session tokens in PostgreSQL, or
+tell a caller that an account is ready. A signup RPC timeout is
+`ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED`, not a reason to
+roll back an unknown DID or delete the reservation.
+
+**Remaining before production:** Replace same-host disposable services
+with correctly isolated production network identities/credentials,
+bridge real trusted PG v4 account lifecycle CAS to the existing
+post-seal Solid/SAI + signed CAR/hosted PDS evidence, implement
+authorized nonautomated reconciliation of stranded reservations,
+enforce current consent and app grants at final completion, remove
+the generic SemApps Jena admin credential, execute real end-to-end
+multi-cell WebID/ActivityPub/PDS integration and p95/p99/memory/cost
+measurements. The production signup guard and
+`NATIVE_PROTECTED_STORAGE_RELEASED = false` are unchanged.

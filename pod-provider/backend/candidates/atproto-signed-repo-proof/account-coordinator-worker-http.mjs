@@ -19,7 +19,8 @@ const KEYS=[
  'FUSEKI_ISOLATION_URL','APODS_ACCOUNT_RESERVATION_DISPOSABLE',
  'APODS_DATASET_CLAIM_ISSUER_DISPOSABLE','APODS_ACCOUNT_COORDINATOR_DISPOSABLE',
  'ACCOUNT_COORDINATOR_WORKER_DSN','ACCOUNT_COORDINATOR_SHARED_KEY',
- 'ACCOUNT_COORDINATOR_ISSUER_KEY','ACCOUNT_ISSUER_PUBLIC_PEM_B64'
+ 'ACCOUNT_COORDINATOR_ISSUER_KEY','ACCOUNT_ISSUER_PUBLIC_PEM_B64',
+ 'ACCOUNT_COORDINATOR_PORT'
 ];
 checkFixtureEnv('worker',KEYS);
 const url=new URL(process.env.ACCOUNT_COORDINATOR_WORKER_DSN);
@@ -69,7 +70,9 @@ async function requestIssuer(fence,dataset){
     return parsed.ticket;
   }catch{refuse();}finally{clearTimeout(timer);}
 }
-const listener=await server({port:3043,handler:async(req,res)=>{
+const workerPort=Number(process.env.ACCOUNT_COORDINATOR_PORT);
+assert([3043,3044].includes(workerPort),'Only fixed disposable worker ports are allowed');
+const listener=await server({port:workerPort,handler:async(req,res)=>{
   const input=await readRequest(req,{
     domain:'client',secret:providerSecret,
     route:'/v1/reserve',keys

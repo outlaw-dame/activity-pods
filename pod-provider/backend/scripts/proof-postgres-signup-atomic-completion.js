@@ -174,6 +174,21 @@ async function main(){
     const replay=await allowed.complete(ok.scope);
     assert.equal(replay.replay,true);
     assert.equal(calls,1,'already-ready replay never reruns external verification');
+    const live=await allowed.readCurrentReady(ok.scope);
+    assert.equal(live.state,'ready');
+    assert.equal(live.accountId,ok.accountId);
+    assert.equal(live.webId,ok.webId);
+    assert.equal(live.appUri,appUri);
+    assert.equal(live.grantUri,ok.grantUri);
+    assert.equal(live.consentRevision,'1');
+    assert.equal(live.canAuthenticate,false,'read path never issues auth');
+    assert.equal(live.releaseAuthorized,false,'read path never releases signup');
+    await error(allowed.readCurrentReady({
+      ...ok.scope,appClientId:'https://foreign-app.example.org'
+    }),'SIGNUP_COMPLETION_CURRENT_NOT_READY');
+    await error(allowed.readCurrentReady({
+      ...ok.scope,idempotencyHmac:crypto.randomBytes(32)
+    }),'SIGNUP_COMPLETION_CURRENT_NOT_READY');
     await error(createCandidate({pool,fixtureOnly:true}).change({
       providerId,accountId:ok.accountId,operationId:uuid(),
       expectedGeneration:3,kind:'transition_state',nextState:'ready'
@@ -298,6 +313,12 @@ async function main(){
     proceed.release();
     assert.equal((await running).state,'ready');
     assert.equal((await revoking).rows[0].new_state,'blocked');
+    // Historical ready+signed-PDS completion must NOT be replayable as
+    // current authorization once the canonical grant is blocked.
+    await error(completion(serialization).readCurrentReady(serialization.scope),
+      'SIGNUP_COMPLETION_CURRENT_AUTHORITY_DENIED');
+    await error(completion(serialization).complete(serialization.scope),
+      'SIGNUP_COMPLETION_CURRENT_AUTHORITY_DENIED');
     await error(pool.query(
       "SELECT state FROM paper_atproto_authority.consents WHERE owner_webid=$1",
       [serialization.webId]).then(v=>{
@@ -310,6 +331,8 @@ async function main(){
     try{
       process.env.NODE_ENV='production';
       await error(completion(production).complete(production.scope),
+        'SIGNUP_COMPLETION_NOT_RELEASED');
+      await error(completion(production).readCurrentReady(production.scope),
         'SIGNUP_COMPLETION_NOT_RELEASED');
     }finally{process.env.NODE_ENV=beforeEnv;}
     assert.equal((await getState(production)).account.state,'provisioning');

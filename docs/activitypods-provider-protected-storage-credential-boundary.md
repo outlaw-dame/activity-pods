@@ -594,6 +594,10 @@ digest from the existing real signed-CAR / hosted-PDS / Solid / SAI
 acceptance. Its only write copies the canonical DID/AP actor/PDS URL
 and **the existing v4 completion digest** into the original admission
 ledger. It cannot issue tokens or transition an account to ready.
+Once the bridge extension is installed, the previous 32-byte
+shape-only `complete` routine is **disabled for every reservation**,
+including unbound ones. This closes a downgrade path in which a caller
+might otherwise fabricate a digest without having passed v4 attestation.
 
 In the live PostgreSQL 18 hosted-PDS test, three separate SQL logins
 have independent, exact roles: worker (reserve/claim), binder

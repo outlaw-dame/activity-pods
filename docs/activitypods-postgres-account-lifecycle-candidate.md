@@ -317,3 +317,37 @@ resolution, and resolve the canonical WebID shape (the candidate currently
 requires no URL fragment while some legacy Solid WebIDs use `#me`).
 Do not open production signup merely because v5 and its disposable tests
 pass.
+
+## Entryway provider service wiring — disposable integration
+
+The provider's `provider-capabilities.assertCompletedAccountBootstrap` action
+can now **opt in only under test/disposable markers** to the v5 proof. The
+ordinary in-memory provider reservation remains a non-production fixture.
+The production branch continues to refuse bootstrap and new signup, even
+if an internal reader object is accidentally present.
+
+The optional integration uses `APODS_ENTRYWAY_PG_PROOF_DISPOSABLE=confirmed`
+with `NODE_ENV=test` and the existing account/repository/completion
+disposable markers, a fixed loopback PostgreSQL completion-fixture database,
+one provider-scoped app-client URI, SAI app URI and provider ID, an explicit
+HMAC key version, and a base64-encoded 32-byte provider-held HMAC key.
+It connects lazily through a bounded (max 2 connections) pool with connect
+and idle timeouts, never transmits raw idempotency keys to PostgreSQL, and
+closes the pool on service stop.
+
+The actual Entryway app-bootstrap service consumes this result. After PG
+verification it checks the current `auth.account` local owner, obtains the
+Pod storage URL from `solid-storage.getUrl` (never from the untrusted request
+alone), confirms the native SAI application registration and AccessGrant
+membership, and rechecks the **same PostgreSQL account generation, grant
+URI and consent revision** immediately before returning metadata. Mismatched
+or unavailable evidence refuses bootstrap; there is no fallback to the
+process-local Map after a PG error, and no grant-creating call.
+
+This does not implement a production signup, authentication handoff or
+permission lease. PostgreSQL and Solid/Jena cannot be read atomically, and
+revocation after the final read still requires enforcement at each
+protected operation. A production rollout needs a reviewed migration and
+restricted non-superuser LOGIN, real signed hosted PDS authority, full
+Solid-OIDC/SAI consent flow, multi-replica crash tests and a separate
+release authorization decision.

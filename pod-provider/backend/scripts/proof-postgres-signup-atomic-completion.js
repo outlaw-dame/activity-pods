@@ -204,6 +204,8 @@ async function main(){
       atprotoDid:fixture.did,atprotoHandle:fixture.handle
     });
     const pgBootstrap=createPgBootstrapReadiness(bootstrapConfig);
+    assert.equal(await pgBootstrap.assertReaderRole(),true,
+      'the independently authenticated reader LOGIN must have only exact proof access');
     const readiness=await pgBootstrap.assertCurrent(identityClaim(ok));
     assert.equal(readiness.verified,true);
     assert.equal(readiness.accountId,ok.accountId);
@@ -245,13 +247,19 @@ async function main(){
     try {
       await roleClient.query('BEGIN');
       await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_reader');
+      // The NOLOGIN role may exercise the definer's narrow function, but
+      // a deployed provider must use a separately verified LOGIN. The
+      // runtime role probe intentionally rejects this SET ROLE session.
       const narrow=createPgBootstrapReadiness({
         ...bootstrapConfig,
         pool:{query:(...args)=>roleClient.query(...args)},
-        requireRestrictedReader:true
+        requireRestrictedReader:false
       });
-      assert.equal(await narrow.assertReaderRole(),true);
       assert.equal((await narrow.assertCurrent(identityClaim(ok))).verified,true);
+      await error(createPgBootstrapReadiness({
+        ...bootstrapConfig,
+        pool:{query:(...args)=>roleClient.query(...args)}
+      }).assertReaderRole(),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
       for(const table of [
         'paper_account_candidate.accounts',
         'paper_account_candidate.signup_operations'

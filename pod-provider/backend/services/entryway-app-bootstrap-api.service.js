@@ -231,8 +231,9 @@ module.exports = {
           if (!authorization ||
               authorization['interop:grantedBy'] !== webId ||
               authorization['interop:grantee'] !== appConfig.appUri ||
-              normalizeStringArray(authorization['apods:hasSpecialRights'])
-                .some(right => !appConfig.acceptedSpecialRights.includes(right))) {
+              asArray(authorization['apods:hasSpecialRights'])
+                .some(right => typeof right !== 'string' ||
+                  !appConfig.acceptedSpecialRights.includes(right))) {
             throw new MoleculerError('SAI authorization exceeds approved application policy',
               409, 'BOOTSTRAP_CONSENT_SCOPE_MISMATCH');
           }

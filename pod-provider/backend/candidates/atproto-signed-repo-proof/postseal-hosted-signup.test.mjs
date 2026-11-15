@@ -14,6 +14,8 @@ import {test} from 'node:test';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {Pool} from 'pg';
+import {makeAccountReservationAuthority,assertRestrictedAccountProofLogin}
+  from './account-reservation-authority.mjs';
 import {base58btc} from 'multiformats/bases/base58';
 import {createSignedRepoProofStore} from './store.mjs';
 import {createProviderManagedRepoAuthority} from './provider-authority.mjs';
@@ -45,7 +47,7 @@ const appClientId='https://app.paper.example.org/client';
 const appUri='https://app.paper.example.org/app';
 const uuid=()=>crypto.randomUUID();
 const opId=uuid(),accountId=uuid();
-const webId=providerId+'/users/probed-new-user';
+const webId=providerId+'/users/probed_new_user';
 const did='did:plc:'+'u'.repeat(24);
 const handle='probed-new-user.paper.example.org';
 let pds;
@@ -70,6 +72,7 @@ async function close(server){
 
 test('one sealed new signup gets independently signed hosted PDS proof before PG18 atomic ready',async t=>{
   let server=null,cleanupError=null,tlsDir=null;
+  const bridgePools=[];
   const oldEnv=process.env.NODE_ENV;
   try{
     const pre=await pool.query(
@@ -83,7 +86,9 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       '../../sql/paper-account-postgres-candidate-v3-evidence-seal.sql',
       '../../sql/paper-account-postgres-candidate-v4-atomic-completion.sql',
       './schema.sql',
-      '../../sql/paper-atproto-canonical-authority-v1.sql'
+      '../../sql/paper-atproto-canonical-authority-v1.sql',
+      './pg-preaccount-reservations.sql',
+      './pg-v4-reservation-completion-bridge.sql'
     ]){
       await pool.query(await fs.readFile(fileURLToPath(new URL(sql,import.meta.url)),'utf8'));
     }
@@ -399,12 +404,16 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     process.env.NODE_ENV=oldEnv;
     await close(server);
     if(tlsDir)await fs.rm(tlsDir,{recursive:true,force:true});
-    for(const schema of ['paper_account_candidate','paper_atproto_repo_proof',
+    await Promise.all(bridgePools.map(client=>client.end()));
+    for(const schema of ['paper_account_reservation_proof','paper_account_candidate','paper_atproto_repo_proof',
       'paper_atproto_authority']){
       try{await pool.query('DROP SCHEMA IF EXISTS '+schema+' CASCADE');}
       catch(e){cleanupError=e;}
     }
-    for(const role of ['paper_atproto_authority_reader',
+    for(const role of ['paper_bridge_worker_login','paper_bridge_binder_login','paper_bridge_finalizer_login',
+      'paper_account_bridge_binder','paper_account_bridge_finalizer',
+      'paper_account_proof_worker','paper_account_proof_issuer',
+      'paper_atproto_authority_reader',
       'paper_atproto_authority_revoker','paper_atproto_authority_importer']){
       try{await pool.query('DROP ROLE IF EXISTS '+role);}
       catch(e){cleanupError=e;}

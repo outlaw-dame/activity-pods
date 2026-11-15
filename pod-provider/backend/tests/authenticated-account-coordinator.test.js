@@ -152,7 +152,14 @@ function makeFetch({status=200, ticketValue=ticket()}={}){
     expect(body).not.toHaveProperty('password');
     expect(body).not.toHaveProperty('authorization');
     expect(body).not.toHaveProperty('verification');
-    const raw=JSON.stringify({ticket:ticketValue});
+    const admission={
+      appScope:body.appScope,
+      username:body.username,
+      idempotencyKey:body.idempotencyKey,
+      requestFingerprint:body.requestFingerprint,
+      reservationId:ticketValue.claim.reservationId
+    };
+    const raw=JSON.stringify({ticket:ticketValue,admission});
     const signed=wire.computeMac(process.env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
       'worker-response',raw);
     return new Response(status===200?raw:JSON.stringify({error:'denied'}),{
@@ -176,6 +183,8 @@ test('real API authorizes approved app and user, calls coordinator, forwards onl
     const call=create.mock.calls[0][0];
     const params=call.params, meta=call.meta;
     expect(params.datasetAdminTicket.claim.dataset).toBe(USER);
+    expect(params.accountCoordinatorAdmission.reservationId)
+      .toBe(params.datasetAdminTicket.claim.reservationId);
     expect(params.password).toBe(PWD);
     expect(params.accountProvisioning).toBeUndefined();
     expect(meta.accountProvisioning).toMatchObject({
@@ -189,6 +198,7 @@ test('real API authorizes approved app and user, calls coordinator, forwards onl
     expect(JSON.stringify(meta)).not.toContain('signature');
     expect(JSON.stringify(meta)).not.toContain(PWD);
     expect(JSON.stringify(meta)).not.toContain('fenceToken');
+    expect(JSON.stringify(meta)).not.toContain('accountCoordinatorAdmission');
   }finally{await broker.stop();global.fetch=orig;}
 });
 test('wrong app credentials, missing origin, redirect mismatch and user verification shortcut cannot reserve',async()=>{
@@ -292,14 +302,23 @@ test('real accounts adapter forwards signed ticket to auth.signup but not accoun
     const result=await broker.call('accounts.create',{
       username:USER,email:'new-account@example.net',password:PWD,
       profile:{displayName:'A new account'},
-      datasetAdminTicket:signed
+      datasetAdminTicket:signed,
+      accountCoordinatorAdmission:{
+        appScope:'a'.repeat(64),username:USER,
+        idempotencyKey:KEY,
+        requestFingerprint:'b'.repeat(64),
+        reservationId:signed.claim.reservationId
+      }
     });
     expect(seen).toHaveBeenCalledTimes(1);
     const forwarded=seen.mock.calls[0][0].params;
     expect(forwarded.datasetAdminTicket).toEqual(signed);
+    expect(forwarded.accountCoordinatorAdmission.reservationId)
+      .toBe(signed.claim.reservationId);
     expect(forwarded.password).toBe(PWD);
     expect(forwarded.name).toBe('A new account');
     expect(JSON.stringify(result)).not.toContain('signature');
+    expect(JSON.stringify(result)).not.toContain(KEY);
     expect(JSON.stringify(result)).not.toContain(PWD);
   }finally{await broker.stop();}
 });

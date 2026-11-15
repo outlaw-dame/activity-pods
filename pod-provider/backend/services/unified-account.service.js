@@ -51,6 +51,7 @@ module.exports = {
           }
         },
         datasetAdminTicket: { type: 'object', optional: true, strict: false },
+        accountCoordinatorAdmission: { type: 'object', optional: true, strict: false },
         atproto: {
           type: 'object',
           optional: true,
@@ -77,14 +78,16 @@ module.exports = {
         });
 
         const ticket = input.datasetAdminTicket;
+        const admission = input.accountCoordinatorAdmission;
         const delegated = process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed';
-        if (ticket !== undefined && (!delegated ||
+        if ((ticket !== undefined || admission !== undefined) && (!delegated ||
             process.env.NODE_ENV !== 'test' ||
             process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed')) {
           throw new MoleculerError('Dataset claims are restricted to trusted account coordination',
             503,'ACCOUNT_COORDINATOR_NOT_RELEASED',{retryable:false});
         }
-        if (delegated && (!ticket || typeof ticket !== 'object')) {
+        if (delegated && (!ticket || typeof ticket !== 'object' ||
+            !admission || typeof admission !== 'object')) {
           throw new MoleculerError('Signed dataset claim is required before account state creation',
             503,'ACCOUNT_COORDINATOR_CLAIM_REQUIRED',{retryable:false});
         }
@@ -126,7 +129,8 @@ module.exports = {
             email: input.email,
             password: input.password,
             profile: input.profile,
-            ...(ticket ? {datasetAdminTicket:ticket} : {})
+            ...(ticket ? {datasetAdminTicket:ticket,
+              accountCoordinatorAdmission:admission} : {})
           });
 
           await ctx.call('account-provisioning-state.markPhase', {

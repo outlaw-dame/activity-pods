@@ -29,6 +29,8 @@ assert.equal(url.pathname,'/atproto_signed_repo_proof_test');
 assert.equal(url.username,'paper_account_worker_login');
 const providerSecret=process.env.ACCOUNT_COORDINATOR_SHARED_KEY;
 const issuerSecret=process.env.ACCOUNT_COORDINATOR_ISSUER_KEY;
+wire.parseSecret(providerSecret);
+wire.parseSecret(issuerSecret);
 const publicKey=crypto.createPublicKey({
   key:Buffer.from(process.env.ACCOUNT_ISSUER_PUBLIC_PEM_B64,'base64'),
   format:'pem',type:'spki'

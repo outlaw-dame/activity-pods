@@ -172,19 +172,32 @@ const restrictedRole = Object.freeze({
   can_write_accounts: false, can_write_journal: false
 });
 
+function mockRestrictedPool(query) {
+  const client = { query: jest.fn(query), release: jest.fn() };
+  return {
+    client,
+    pool: { query: jest.fn(query), connect: jest.fn(async () => client) }
+  };
+}
+
 test('restricted provider bootstrap mode checks DB role at every current proof read', async () => {
-  const pool = { query: jest.fn(async sql => sql.includes('FROM pg_catalog.pg_roles')
-    ? { rowCount: 1, rows: [{ ...restrictedRole }] }
-    : { rowCount: 1, rows: [row] }) };
+  const { pool, client } = mockRestrictedPool(async sql =>
+    sql.includes('FROM pg_catalog.pg_roles')
+      ? { rowCount: 1, rows: [{ ...restrictedRole }] }
+      : { rowCount: 1, rows: [row] });
   const reader = createPgBootstrapReadiness({
     ...config(pool), requireRestrictedReader: true
   });
   expect(await reader.assertReaderRole()).toBe(true);
   expect((await reader.assertCurrent(scope)).verified).toBe(true);
   expect((await reader.assertCurrent(scope)).verified).toBe(true);
-  const operations = pool.query.mock.calls.map(([sql]) =>
+  expect(pool.query).toHaveBeenCalledTimes(1); // startup
+  expect(pool.connect).toHaveBeenCalledTimes(2);
+  const operations = client.query.mock.calls.map(([sql]) =>
     sql.includes('FROM pg_catalog.pg_roles') ? 'role' : 'proof');
-  expect(operations).toEqual(['role','role','proof','role','proof']);
+  expect(operations).toEqual(['role','proof','role','proof']);
+  expect(client.release).toHaveBeenCalledTimes(2);
+  expect(client.release).toHaveBeenCalledWith(false);
   const roleSql = pool.query.mock.calls[0][0];
   expect(roleSql).toContain('paper_account_bootstrap_reader');
   expect(roleSql).toContain('has_table_privilege');
@@ -222,33 +235,36 @@ test.each([
   { can_write_accounts: true },
   { can_write_journal: true },
 ])('rejects overly broad or incomplete PostgreSQL reader role: %j', async change => {
-  const pool = { query: jest.fn(async sql =>
+  const { pool, client } = mockRestrictedPool(async sql =>
     sql.includes('FROM pg_catalog.pg_roles')
       ? { rowCount: 1, rows: [{ ...restrictedRole, ...change }] }
-      : { rowCount: 1, rows: [row] }) };
+      : { rowCount: 1, rows: [row] });
   await expect(createPgBootstrapReadiness({
     ...config(pool), requireRestrictedReader: true
   }).assertCurrent(scope)).rejects.toMatchObject({
     code: 'BOOTSTRAP_PG_ROLE_UNAUTHORIZED',
     message: 'Current provider signup readiness is unavailable'
   });
-  expect(pool.query).toHaveBeenCalledTimes(1);
+  expect(pool.query).not.toHaveBeenCalled();
+  expect(client.query).toHaveBeenCalledTimes(1);
+  expect(client.release).toHaveBeenCalledWith(false);
 });
 
 test('credentialed database failures do not leak through reader role checks', async () => {
-  const pool = { query: jest.fn(async () => {
+  const { pool, client } = mockRestrictedPool(async () => {
     throw new Error('postgresql://admin:password@private-db/production');
-  }) };
+  });
   await expect(createPgBootstrapReadiness({
     ...config(pool), requireRestrictedReader: true
   }).assertCurrent(scope)).rejects.toMatchObject({
     code: 'BOOTSTRAP_PG_ROLE_UNAVAILABLE',
     message: 'Current provider signup readiness is unavailable'
   });
+  expect(client.release).toHaveBeenCalledWith(true);
 });
 
 test('role validation is unavailable once the disposable authority is disabled', async () => {
-  const pool = { query: jest.fn() };
+  const pool = { query: jest.fn(), connect: jest.fn() };
   const reader = createPgBootstrapReadiness({
     ...config(pool), requireRestrictedReader: true
   });

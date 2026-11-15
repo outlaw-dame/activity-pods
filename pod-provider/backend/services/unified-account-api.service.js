@@ -47,7 +47,7 @@ module.exports = {
       // apparent grant; those belong exclusively to the trusted coordinator.
       const rawParams=ctx.params||{};
       if (Object.keys(rawParams).some(key=>[
-        'datasetAdminTicket','accountCoordinatorTicket','accountCoordinatorProof',
+        'datasetAdminTicket','accountCoordinatorTicket','accountCoordinatorAdmission','accountCoordinatorProof',
         'accountProvisioning','reservationId','fenceToken','dailyLimit',
         'requestFingerprint','issuer','signedTicket'
       ].includes(key))) {

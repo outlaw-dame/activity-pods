@@ -47,15 +47,47 @@ function app(overrides={}){
     ...overrides
   };
 }
+function issueSignedChallenge(params){
+  const helper=require('../services/utils/atproto-account-coordinated-signup');
+  const normalized=api.methods.normalizeAccountCreateParams.call(
+    api.methods,params);
+  const protocols=api.methods.requestedProtocolsFromAccountParams.call(
+    api.methods,normalized);
+  const fp=helper.fingerprint({
+    api:api.methods,appClientId:params.appClientId,
+    redirectUri:params.redirectUri,accountParams:normalized,
+    protocols,env:process.env
+  });
+  const now=Date.now();
+  const payload={
+    version:1,purpose:'activitypods:new-account:v1',
+    appClientId:params.appClientId,username:params.username,
+    email:params.email||'',origin:ORIGIN,
+    redirectUri:params.redirectUri,idempotencyKey:params.idempotencyKey,
+    requestFingerprint:fp,
+    issuedAtMs:now,expiresAtMs:now+60000,
+    nonce:crypto.randomUUID()
+  };
+  const data=Buffer.from(JSON.stringify(payload),'utf8').toString('base64url');
+  const signature=crypto.createHmac('sha256',
+    Buffer.from(process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY,'base64url'))
+    .update('activitypods:durable-user-verification:v1\\0')
+    .update(data).digest('base64url');
+  return data+'.'+signature;
+}
 function request(overrides={}){
-  return {
+  const params={
     appClientId:APP,redirectUri:REDIRECT,
     idempotencyKey:KEY,
     username:USER,email:'new-account@example.net',password:PWD,
     profile:{displayName:'A new account'},
-    verification:{method:'app',challengeToken:VERIFY},
     ...overrides
   };
+  if(!Object.hasOwn(overrides,'verification')){
+    params.verification={method:'provider-signed',
+      challengeToken:issueSignedChallenge(params)};
+  }
+  return params;
 }
 function headers(overrides={}){
   return {
@@ -66,13 +98,16 @@ function headers(overrides={}){
 }
 let priorEnv;
 const KEYS=[...Object.keys(FIXTURE_FLAGS),
-  'APODS_ACCOUNT_COORDINATOR_SHARED_KEY','APODS_ACCOUNT_REQUEST_FINGERPRINT_KEY'];
+  'APODS_ACCOUNT_COORDINATOR_SHARED_KEY','APODS_ACCOUNT_REQUEST_FINGERPRINT_KEY',
+  'APODS_ACCOUNT_VERIFICATION_HMAC_KEY'];
 beforeEach(()=>{
   priorEnv=Object.fromEntries(KEYS.map(k=>[k,process.env[k]]));
   for(const [k,v] of Object.entries(FIXTURE_FLAGS))process.env[k]=v;
   process.env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY=
     crypto.randomBytes(32).toString('base64url');
   process.env.APODS_ACCOUNT_REQUEST_FINGERPRINT_KEY=
+    crypto.randomBytes(32).toString('base64url');
+  process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY=
     crypto.randomBytes(32).toString('base64url');
 });
 afterEach(()=>{

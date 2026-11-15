@@ -157,11 +157,13 @@ test('requires provider-owned configuration and a secret unrelated to raw HTTP c
 
 const restrictedRole = Object.freeze({
   is_superuser: false, bypass_rls: false,
+  can_create_db: false, can_create_role: false, can_replicate: false,
   reader_member: true, account_schema: true,
-  can_create: false, can_read_authority: false,
+  can_create: false, can_create_schema: false,
+  can_read_authority: false,
   can_read_repo: false, can_prove: true,
   can_select_accounts: false, can_select_journal: false,
-  can_write_accounts: false
+  can_write_accounts: false, can_write_journal: false
 });
 
 test('restricted provider bootstrap mode checks DB role at every current proof read', async () => {
@@ -187,15 +189,20 @@ test('restricted provider bootstrap mode checks DB role at every current proof r
 test.each([
   { is_superuser: true },
   { bypass_rls: true },
+  { can_create_db: true },
+  { can_create_role: true },
+  { can_replicate: true },
   { reader_member: false },
   { account_schema: false },
   { can_create: true },
+  { can_create_schema: true },
   { can_read_authority: true },
   { can_read_repo: true },
   { can_prove: false },
   { can_select_accounts: true },
   { can_select_journal: true },
   { can_write_accounts: true },
+  { can_write_journal: true },
 ])('rejects overly broad or incomplete PostgreSQL reader role: %j', async change => {
   const pool = { query: jest.fn(async sql =>
     sql.includes('FROM pg_catalog.pg_roles')

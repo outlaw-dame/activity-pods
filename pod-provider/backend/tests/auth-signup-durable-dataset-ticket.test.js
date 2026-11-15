@@ -14,7 +14,7 @@ function loadSignup(){
   const source=fs.readFileSync(path.join(__dirname,'../services/core/auth.js'),'utf8');
   const out={exports:{}};
   const factory=vm.runInNewContext('(function(require,module){\n'+source+'\n})',
-    {process,Buffer,console});
+    {process,Buffer,console,__dirname:path.join(__dirname,'../services/core')});
   factory(name=>{
     if(name==='path')return require('node:path');
     if(name==='url-join')return(...parts)=>parts.join('/');

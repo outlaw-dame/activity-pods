@@ -79,6 +79,7 @@ function createPgBootstrapReadiness({
       'SELECT r.rolsuper AS is_superuser,r.rolbypassrls AS bypass_rls,'+
       'r.rolcreatedb AS can_create_db,r.rolcreaterole AS can_create_role,'+
       'r.rolreplication AS can_replicate,r.rolcanlogin AS can_login,'+
+      '(session_user=current_user) AS session_matches,'+
       "pg_catalog.pg_has_role(current_user,'paper_account_bootstrap_reader','MEMBER') AS reader_member,"+
       "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_importer','MEMBER') AS importer_member,"+
       "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_revoker','MEMBER') AS revoker_member,"+
@@ -118,6 +119,7 @@ function createPgBootstrapReadiness({
         role.is_superuser !== false || role.bypass_rls !== false ||
         role.can_create_db !== false || role.can_create_role !== false ||
         role.can_replicate !== false || role.can_login !== true ||
+        role.session_matches !== true ||
         role.importer_member !== false || role.revoker_member !== false ||
         role.read_all_member !== false || role.write_all_member !== false ||
         role.exec_program_member !== false || role.read_files_member !== false ||

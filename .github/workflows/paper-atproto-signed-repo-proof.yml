@@ -90,6 +90,8 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/hosted-signup-pds-attestation.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-signup-completion-evidence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/postseal-hosted-signup.test.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/account-reservation-authority.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-v4-bridge-role-admission.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/fixed-origin-pds-https.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-record-write-consent-fence.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/signed-single-record.mjs
@@ -204,6 +206,7 @@ jobs:
           NODE_ENV=test \
           PAPER_ACCOUNTS_DISPOSABLE=confirmed \
           PAPER_ACCOUNT_COMPLETION_DISPOSABLE=confirmed \
+          APODS_ACCOUNT_RESERVATION_DISPOSABLE=confirmed \
           ATPROTO_PDS_ATTESTATION_DISPOSABLE=confirmed \
           ATPROTO_PDS_EGRESS_TEST_DISPOSABLE=confirmed \
           ATPROTO_REPO_PROOF_DISPOSABLE=confirmed \

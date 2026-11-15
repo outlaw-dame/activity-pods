@@ -557,3 +557,77 @@ the generic SemApps Jena admin credential, execute real end-to-end
 multi-cell WebID/ActivityPub/PDS integration and p95/p99/memory/cost
 measurements. The production signup guard and
 `NATIVE_PROTECTED_STORAGE_RELEASED = false` are unchanged.
+
+## P1f — correlate coordinator reservation with attested v4 completion (disposable)
+
+The authenticated coordinator gate in PR #215 can execute each new
+WebID/ActivityPub/ATProto signup **only once**. It intentionally returns
+HTTP 503 pending verification instead of declaring an account complete
+on a successful RPC or the untrusted `repoInitialized` Boolean.
+
+The next acceptance gate adds a **nonactivated PostgreSQL 18 extension**
+`pg-v4-reservation-completion-bridge.sql`. This does not introduce an
+identity table: `paper_account_candidate.accounts` and its v4
+`signup_operations` journal remain authoritative; the earlier
+`paper_account_reservation_proof.reservations` table remains the
+pre-account admission/idempotency fence.
+
+Before any identity side effects, a restricted **binder** records the
+one exact v4 provider/app/account/operation/HMAC scope on the existing
+reservation. PostgreSQL checks the cryptographic approved-app namespace,
+immutable username and expected WebID, and an actual one-row *reserved*
+v4 account and operation. The matching v4 provider must correspond to
+the reservation provider; differing account IDs, apps, HMAC digests,
+or operation IDs fail closed. A pair of partial indexes protects against
+two reservations binding to the same canonical account or signup
+operation. Already claimed or expired reservations cannot be rebound,
+and SQL's one-time `v4_bound_at` column is immutable to restricted users.
+
+Completion is **not** driven by a caller-provided evidence hash, identity
+Boolean, or signed-dataset ticket. The independent restricted
+**finalizer** can only call `reflect_v4_ready`, which locks the exact
+original PG reservation, canonical v4 account and journal, signed
+repository head, applied RDF projection, managed identity and current
+SAI grant, and the signed event outbox. It requires that the v4 journal
+is already `ready` with its non-null sealed evidence and completion
+digest from the existing real signed-CAR / hosted-PDS / Solid / SAI
+acceptance. Its only write copies the canonical DID/AP actor/PDS URL
+and **the existing v4 completion digest** into the original admission
+ledger. It cannot issue tokens or transition an account to ready.
+Once the bridge extension is installed, the previous 32-byte
+shape-only `complete` routine is **disabled for every reservation**,
+including unbound ones. This closes a downgrade path in which a caller
+might otherwise fabricate a digest without having passed v4 attestation.
+
+In the live PostgreSQL 18 hosted-PDS test, three separate SQL logins
+have independent, exact roles: worker (reserve/claim), binder
+(only original v4 mapping), and finalizer (only ready reflection).
+Direct table selection or mutation fails for every role. A separate
+exact PostgreSQL 18 startup check now rejects unexpected login/role-switch
+rights, inherited role membership, extra schema or SQL function grants, and
+table-level or column-level DML against **both** coordinator and canonical
+v4/SAI/repository tables. The live acceptance injects and revokes a
+fence-token column read, a DID column update, inherited worker mutation
+authority and `pg_monitor` privileges; each must fail closed before
+servicing any request. The test
+proves mismatched app/account mapping, a replayed original bind, duplicate
+signup execution, and refusal of the old shape-only completion method.
+It runs the existing DNS-pinned TLS/XRPC signed CAR, current Solid
+identity, independent PostgreSQL/RDF projection, and current SAI grant
+evidence first; a temporary *fixture-superuser* consent block must
+prevent reflection. After a test-only restore of the fixture grant,
+one finalizer wins; a second cannot promote the admission row. No
+bearer tokens, signing keys or raw request passwords are stored in the
+reflected result.
+
+**Source-controlled production NO-GO remains unchanged.** This acceptance
+does not install the extension on production, expose binder/finalizer
+SQL credentials to the HTTP API, implement the actual trusted provider
+handoff to the older v4 journal, or enable a reply of HTTP 201.
+A v4 `ready` result is historical; a suspended user, revoked consent,
+or changed hosted PDS must still be checked at **use time**. Failures or
+lost COMMIT acknowledgments must go to explicit reconciliation, never
+to blind identity re-provisioning. The tests use a disposable local
+PDS and fixture Solid callbacks, not a live production account.
+Physical Jena and SQL credential separation, the real Solid-OIDC/SAI
+enforcement path, and load/cost acceptance are still required.

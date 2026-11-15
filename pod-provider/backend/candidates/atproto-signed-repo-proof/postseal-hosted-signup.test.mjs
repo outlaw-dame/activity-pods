@@ -14,6 +14,9 @@ import {test} from 'node:test';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {Pool} from 'pg';
+import {makeAccountReservationAuthority,assertRestrictedAccountProofLogin}
+  from './account-reservation-authority.mjs';
+import {assertRestrictedV4BridgeLogin} from './pg-v4-bridge-role-admission.mjs';
 import {base58btc} from 'multiformats/bases/base58';
 import {createSignedRepoProofStore} from './store.mjs';
 import {createProviderManagedRepoAuthority} from './provider-authority.mjs';
@@ -45,7 +48,7 @@ const appClientId='https://app.paper.example.org/client';
 const appUri='https://app.paper.example.org/app';
 const uuid=()=>crypto.randomUUID();
 const opId=uuid(),accountId=uuid();
-const webId=providerId+'/users/probed-new-user';
+const webId=providerId+'/users/probed_new_user';
 const did='did:plc:'+'u'.repeat(24);
 const handle='probed-new-user.paper.example.org';
 let pds;
@@ -68,8 +71,95 @@ async function close(server){
   if(server)await new Promise((ok,no)=>server.close(e=>e?no(e):ok()));
 }
 
+// These are three real, separately authenticated PostgreSQL 18 principals:
+// worker can reserve/claim but not bind/reflect; binder can ONLY bind a
+// matching unstarted v4 journal; finalizer can ONLY mirror the attested ready
+// state. None can enumerate canonical tables or invent PDS evidence.
+async function createBridgePrincipals(pool,retainedPools){
+  const roles=[
+    ['paper_bridge_worker_login','paper_account_proof_worker'],
+    ['paper_bridge_binder_login','paper_account_bridge_binder'],
+    ['paper_bridge_finalizer_login','paper_account_bridge_finalizer']
+  ];
+  const result={};
+  for(const [name,role] of roles){
+    const password=crypto.randomBytes(24).toString('hex');
+    await pool.query('CREATE ROLE '+name+
+      " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '"+
+      password+"'");
+    await pool.query('GRANT '+role+' TO '+name+
+      ' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
+    const u=new URL(DSN);u.username=name;u.password=password;
+    const restricted=new Pool({
+      connectionString:u.toString(),max:2,
+      connectionTimeoutMillis:3000,query_timeout:6000,
+      idleTimeoutMillis:1500,allowExitOnIdle:true
+    });
+    retainedPools.push(restricted);
+    result[name.split('_')[2]]=restricted;
+    await assert.rejects(restricted.query(
+      'SELECT * FROM paper_account_reservation_proof.reservations'),
+      e=>e?.code==='42501',
+      'No restricted client may enumerate reservation fence tokens');
+  }
+  const worker=result.worker,binder=result.binder,finalizer=result.finalizer;
+  assert.equal(await assertRestrictedAccountProofLogin(worker,'worker'),true);
+  const inventory=async login=>{
+    const role=(await login.query(
+      "SELECT has_function_privilege(current_user,"+
+      " 'paper_account_reservation_proof.bind_v4_signup(uuid,text,text,bytea,bytea,text,text,uuid,uuid,smallint,bytea,bytea)',"+
+      " 'EXECUTE') AS can_bind,"+
+      " has_function_privilege(current_user,"+
+      " 'paper_account_reservation_proof.reflect_v4_ready(uuid,text,text,bytea,bytea)',"+
+      " 'EXECUTE') AS can_reflect")).rows[0];
+    return role;
+  };
+  assert.deepEqual(await inventory(worker),{can_bind:false,can_reflect:false});
+  assert.deepEqual(await inventory(binder),{can_bind:true,can_reflect:false});
+  assert.deepEqual(await inventory(finalizer),{can_bind:false,can_reflect:true});
+  assert.equal(await assertRestrictedV4BridgeLogin(binder,'binder'),true);
+  assert.equal(await assertRestrictedV4BridgeLogin(finalizer,'finalizer'),true);
+  const drift=[
+    ['paper_bridge_binder_login',
+      'SELECT (fence_token) ON paper_account_reservation_proof.reservations',
+      'binder'],
+    ['paper_bridge_finalizer_login',
+      'UPDATE (atproto_did) ON paper_account_reservation_proof.reservations',
+      'finalizer'],
+    ['paper_bridge_binder_login','paper_account_proof_worker','binder'],
+    ['paper_bridge_finalizer_login','pg_monitor','finalizer']
+  ];
+  for(const [login,grant,kind] of drift){
+    const isRole=!grant.includes(' ON ');
+    const grantSql=isRole ? 'GRANT '+grant+' TO '+login+
+      ' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE' :
+      'GRANT '+grant+' TO '+login;
+    const revokeSql=isRole ? 'REVOKE '+grant+' FROM '+login :
+      'REVOKE '+grant+' FROM '+login;
+    await pool.query(grantSql);
+    try{
+      await assert.rejects(
+        assertRestrictedV4BridgeLogin(kind==='binder'?binder:finalizer,kind),
+        e=>e?.code==='V4_BRIDGE_SQL_PRIVILEGES_UNSAFE',
+        'Unexpected SQL grant must prevent entry: '+grant);
+    }finally{
+      await pool.query(revokeSql);
+    }
+    assert.equal(await assertRestrictedV4BridgeLogin(
+      kind==='binder'?binder:finalizer,kind),true);
+  }
+  return {worker,binder,finalizer};
+}
+const scopedKeyHash=(provider,app,key)=>crypto.createHash('sha256')
+  .update('activitypods:account-reservation:key:v1\0')
+  .update(provider).update('\0').update(app).update('\0')
+  .update(key).digest();
+const scopedApp=app=>crypto.createHash('sha256')
+  .update('activitypods:approved-app:v1\0').update(app).digest('hex');
+
 test('one sealed new signup gets independently signed hosted PDS proof before PG18 atomic ready',async t=>{
   let server=null,cleanupError=null,tlsDir=null;
+  const bridgePools=[];
   const oldEnv=process.env.NODE_ENV;
   try{
     const pre=await pool.query(
@@ -83,7 +173,9 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       '../../sql/paper-account-postgres-candidate-v3-evidence-seal.sql',
       '../../sql/paper-account-postgres-candidate-v4-atomic-completion.sql',
       './schema.sql',
-      '../../sql/paper-atproto-canonical-authority-v1.sql'
+      '../../sql/paper-atproto-canonical-authority-v1.sql',
+      './pg-preaccount-reservations.sql',
+      './pg-v4-reservation-completion-bridge.sql'
     ]){
       await pool.query(await fs.readFile(fileURLToPath(new URL(sql,import.meta.url)),'utf8'));
     }
@@ -130,6 +222,108 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
 
     const model=createCandidate({pool,fixtureOnly:true});
     assert.equal((await model.reserveSignup(scope)).state,'reserved');
+    const bridgeRoles=await createBridgePrincipals(pool,bridgePools);
+    const pgAuthority=makeAccountReservationAuthority({
+      workerPool:bridgeRoles.worker
+    });
+    const bridgeScope={
+      provider:providerId+'/provider',
+      appScope:scopedApp(appClientId),
+      key:'postseal-'+crypto.randomBytes(10).toString('hex'),
+      requestFingerprint:crypto.createHash('sha256')
+        .update('postseal-v4-original-request:'+scope.username).digest('hex'),
+      username:scope.username
+    };
+    const reserved=await pgAuthority.reserve({
+      appClientId:bridgeScope.appScope,
+      username:bridgeScope.username,
+      idempotencyKey:bridgeScope.key,
+      requestFingerprint:bridgeScope.requestFingerprint,
+      dailyLimit:3
+    });
+    assert.equal(reserved.outcome,'reserved');
+    const fence={
+      appClientId:bridgeScope.appScope,
+      idempotencyKey:bridgeScope.key,
+      reservationId:reserved.reservationId,
+      fenceToken:reserved.fenceToken
+    };
+    assert.equal(await pgAuthority.startSideEffects(fence),true);
+    const linkParams=[
+      reserved.reservationId,bridgeScope.provider,bridgeScope.appScope,
+      scopedKeyHash(bridgeScope.provider,bridgeScope.appScope,bridgeScope.key),
+      Buffer.from(bridgeScope.requestFingerprint,'hex'),
+      providerId,appClientId,accountId,opId,1,
+      scope.idempotencyHmac,scope.requestHmac
+    ];
+    const bind=async vars=>{
+      const r=await bridgeRoles.binder.query(
+        'SELECT paper_account_reservation_proof.bind_v4_signup('+
+        '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10::smallint,$11,$12) AS bound',vars);
+      return r.rows[0].bound;
+    };
+    assert.equal(await bind([...linkParams.slice(0,6),
+      'https://unapproved.example.org/client',...linkParams.slice(7)]),false,
+      'A different v4 app cannot bind another application’s PG identity');
+    assert.equal(await bind([...linkParams.slice(0,7),
+      crypto.randomUUID(),...linkParams.slice(8)]),false,
+      'A different v4 account may not inherit the coordinator reservation');
+    assert.equal(await bind(linkParams),true,
+      'A matching, still-reserved v4 journal can be bound once');
+    assert.equal(await bind(linkParams),false,
+      'A v4 account mapping cannot be silently replaced on retries');
+    const invocation={
+      appClientId:bridgeScope.appScope,
+      idempotencyKey:bridgeScope.key,
+      requestFingerprint:bridgeScope.requestFingerprint,
+      username:bridgeScope.username,
+      reservationId:reserved.reservationId
+    };
+    assert.equal(await pgAuthority.claimSignup(invocation),true,
+      'The one-time PG execution CAS is consumed before WebID/DID mutation');
+    assert.equal(await pgAuthority.claimSignup(invocation),false,
+      'A second worker cannot recreate the same identity');
+    const synthetic={
+      username:scope.username,webId,
+      activityPubActorId:webId,
+      atprotoDid:did,atprotoPdsUrl:'https://pds.paper.example.org',
+      evidenceSha256:crypto.randomBytes(32).toString('hex')
+    };
+    assert.equal(await pgAuthority.complete(fence,synthetic),false,
+      'A v4-bound reservation must reject old shape-only completion proof');
+    const unboundName='probed_unbound';
+    const unboundInput={
+      appClientId:bridgeScope.appScope,username:unboundName,
+      idempotencyKey:'unbound-'+crypto.randomBytes(12).toString('hex'),
+      requestFingerprint:crypto.randomBytes(32).toString('hex'),dailyLimit:3
+    };
+    const unbound=await pgAuthority.reserve(unboundInput);
+    assert.equal(unbound.outcome,'reserved');
+    const unboundFence={
+      appClientId:unboundInput.appClientId,
+      idempotencyKey:unboundInput.idempotencyKey,
+      reservationId:unbound.reservationId,fenceToken:unbound.fenceToken
+    };
+    assert.equal(await pgAuthority.startSideEffects(unboundFence),true);
+    assert.equal(await pgAuthority.claimSignup({
+      appClientId:unboundInput.appClientId,
+      idempotencyKey:unboundInput.idempotencyKey,
+      requestFingerprint:unboundInput.requestFingerprint,
+      username:unboundName,reservationId:unbound.reservationId
+    }),true);
+    assert.equal(await pgAuthority.complete(unboundFence,{
+      ...synthetic,username:unboundName,
+      webId:providerId+'/users/'+unboundName,
+      activityPubActorId:providerId+'/users/'+unboundName
+    }),false,'Unbound identities cannot downgrade to an unverified digest');
+
+    const reflect=async()=>(
+      await bridgeRoles.finalizer.query(
+        'SELECT paper_account_reservation_proof.reflect_v4_ready('+
+        '$1,$2,$3,$4,$5) AS reflected',linkParams.slice(0,5))
+    ).rows[0].reflected;
+    assert.equal(await reflect(),false,
+      'No unsigned or unsealed v4 account can complete the coordinator');
     assert.equal((await model.markSignupMayHaveSideEffects(scope)).state,
       'reconciliation_required');
     assert.equal((await model.change({
@@ -368,6 +562,52 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     assert.equal(ready.state,'ready');
     assert.equal(ready.releaseAuthorized,false);
     assert.equal(ready.canAuthenticate,false);
+    // The v4 journal is ready only after live TLS/DNS-pinned signed CAR,
+    // current Solid/SAI, consent and one-transaction repo/projection seals.
+    // Test that the separate admission ledger cannot mirror a revoked grant.
+    await pool.query(
+      "UPDATE paper_atproto_authority.consents SET state='blocked',"+
+      "revision=revision+1 WHERE owner_webid=$1 AND app_uri=$2",
+      [webId,appUri]
+    );
+    assert.equal(await reflect(),false,
+      'Even a previously attested ready journal cannot bypass current consent revocation');
+    // Fixture-only superuser restore lets the same proof assert the positive
+    // attested transition; never implement grant revival this way in a provider.
+    await pool.query(
+      "UPDATE paper_atproto_authority.consents SET state='active',"+
+      "revision=revision-1 WHERE owner_webid=$1 AND app_uri=$2",
+      [webId,appUri]
+    );
+    assert.equal(await reflect(),true,
+      'Only one current v4-ready signed PDS/SAI operation may complete the admission ledger');
+    assert.equal(await reflect(),false,
+      'No other PG replica may promote an already reflected account again');
+    const linked=await pool.query(
+      'SELECT state,v4_provider_id,v4_account_id,v4_operation_id,'+
+      'activitypub_actor_id,atproto_did,atproto_pds_url,evidence_hash '+
+      'FROM paper_account_reservation_proof.reservations WHERE reservation_id=$1',
+      [reserved.reservationId]
+    );
+    assert.equal(linked.rowCount,1);
+    assert.equal(linked.rows[0].state,'completed');
+    assert.equal(linked.rows[0].v4_provider_id,providerId);
+    assert.equal(linked.rows[0].v4_account_id,accountId);
+    assert.equal(linked.rows[0].v4_operation_id,opId);
+    assert.equal(linked.rows[0].activitypub_actor_id,webId);
+    assert.equal(linked.rows[0].atproto_did,did);
+    assert.equal(linked.rows[0].atproto_pds_url,pds);
+    const journal=await pool.query(
+      'SELECT completion_proof_digest FROM paper_account_candidate.signup_operations '+
+      'WHERE operation_id=$1',[opId]
+    );
+    assert(journal.rows[0].completion_proof_digest.equals(
+      linked.rows[0].evidence_hash),
+      'Finalizer may only mirror the verified v4 completion digest');
+    await assert.rejects(bridgeRoles.finalizer.query(
+      'UPDATE paper_account_reservation_proof.reservations SET state=\'reserved\''),
+      e=>e?.code==='42501',
+      'Restricted finalizer must have no raw table writes');
     const rows=await pool.query(
       'SELECT a.state AS account_state,s.state AS signup_state,'+
       's.completion_consent_revision FROM paper_account_candidate.accounts a '+
@@ -392,6 +632,8 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       dnsPinned:true,noRedirect:true,
       currentSolidAndPgConsent:true,corruptCarRejected:true,
       hostedPdsMoveRejected:true,atomicCompletionReady:true,
+      coordinatorV4Binding:true,postSealReservationReflection:true,
+      revokedConsentDeniedBeforeMirror:true,
       accountGeneration:ready.generation,
       productionAuthorization:false
     }));
@@ -399,12 +641,16 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     process.env.NODE_ENV=oldEnv;
     await close(server);
     if(tlsDir)await fs.rm(tlsDir,{recursive:true,force:true});
-    for(const schema of ['paper_account_candidate','paper_atproto_repo_proof',
+    await Promise.all(bridgePools.map(client=>client.end()));
+    for(const schema of ['paper_account_reservation_proof','paper_account_candidate','paper_atproto_repo_proof',
       'paper_atproto_authority']){
       try{await pool.query('DROP SCHEMA IF EXISTS '+schema+' CASCADE');}
       catch(e){cleanupError=e;}
     }
-    for(const role of ['paper_atproto_authority_reader',
+    for(const role of ['paper_bridge_worker_login','paper_bridge_binder_login','paper_bridge_finalizer_login',
+      'paper_account_bridge_binder','paper_account_bridge_finalizer',
+      'paper_account_proof_worker','paper_account_proof_issuer',
+      'paper_atproto_authority_reader',
       'paper_atproto_authority_revoker','paper_atproto_authority_importer']){
       try{await pool.query('DROP ROLE IF EXISTS '+role);}
       catch(e){cleanupError=e;}

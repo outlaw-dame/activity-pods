@@ -78,3 +78,31 @@ The implementation has been reviewed with the same constraints that motivated mo
 **What this does not prove:** static review and CI regressions cannot establish leak-free behavior at every workload, cost per million requests, or maximum throughput on deployed hardware. The installed provider still needs repeated startup/shutdown and load/heap profiling with the native enforcement flags enabled. A privileged triplestore/Fuseki actor still bypasses these LDP hooks. The existing permissive OIDC client-origin CORS behavior requires an independent protocol-aware review before DPoP production enforcement. Neither that policy nor production provisioning has been changed in this hardening pass.
 
 The completed verification belongs to the exact commit reported in GitHub Actions, not merely the pull request's draft or mergeability state.
+
+## New-account SAI authorization page: explicit optional rights
+
+The existing ActivityPods frontend `/authorize?client_id=...` uses the
+authenticated native `auth-agent.registerApp` / `upgradeApp` flow. It is
+distinct from provider app allowlisting and from the Entryway internal
+app-bootstrap endpoint, which is strictly **read-only** with respect to
+grant creation.
+
+The owner-consent UI now selects **required rights only** for fresh app
+registration. Optional rights are not automatically granted just because
+an app advertises them in its remote manifest. An application upgrade
+that requests only *new optional* permissions shows the decision screen,
+instead of calling `upgradeApp` automatically with all newly requested
+rights. The owner may choose individual rights or continue with the
+previously granted rights without an upgrade call. Required rights
+remain non-toggleable. Invalid or unexpected selected-right IDs refuse
+the upgrade, and existing grants are preserved if selected additions
+are empty.
+
+A dedicated, dependency-light workflow executes selection-policy
+regressions and parses the changed JSX and EN/FR translation modules.
+This proof does not replace a browser-level authenticated consent test,
+nor does it authorize a new signup. Before the production release,
+complete and validate the authenticated OIDC/SAI browser continuation,
+explicit redirect URI restrictions, delegated app registration,
+cross-store PostgreSQL revision fencing, revocation races, and actual
+signed PDS readiness. The new account release fuse remains closed.

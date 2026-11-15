@@ -23,7 +23,7 @@ const ALLOWED_PARAMS = new Set([
   'username','email','password','profile','solid','activitypub','atproto'
 ]);
 const RESERVED_INPUT = Object.freeze([
-  'datasetAdminTicket','accountCoordinatorTicket','accountCoordinatorProof',
+  'datasetAdminTicket','accountCoordinatorTicket','accountCoordinatorAdmission','accountCoordinatorProof',
   'accountProvisioning','reservationId','fenceToken','dailyLimit',
   'requestFingerprint','issuer','signedTicket'
 ]);
@@ -86,12 +86,13 @@ async function coordinatedDisposableSignup({
   // After this RPC is submitted, a lost acknowledgment could mean a
   // PostgreSQL reservation and signing fence have already committed.
   // Fail closed: NEVER repeat it with a new key or mint a second identity.
-  let ticket;
+  let ticket,admission;
   try{
     const receipt=await reserveImpl({
       grant,username:accountParams.username,appClientId,env
     });
     ticket=receipt.ticket;
+    admission=receipt.admission;
   }catch(error){
     if(error?.code==='ACCOUNT_COORDINATOR_CONFLICT') {
       deny('ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED',409);
@@ -104,7 +105,8 @@ async function coordinatedDisposableSignup({
     // Grant is non-secret policy evidence and is separately checked by the
     // unified-account service as in the existing internal integration.
     await ctx.broker.call('unified-account.create',{
-      ...accountParams,datasetAdminTicket:ticket
+      ...accountParams,datasetAdminTicket:ticket,
+      accountCoordinatorAdmission:admission
     },{
       meta:{accountProvisioning:grant},timeout:120000
     });

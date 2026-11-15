@@ -77,9 +77,12 @@ function createPgBootstrapReadiness({
     // changed grant cannot leave a long-running service overprivileged.
     const sql =
       'SELECT r.rolsuper AS is_superuser,r.rolbypassrls AS bypass_rls,'+
+      'r.rolcreatedb AS can_create_db,r.rolcreaterole AS can_create_role,'+
+      'r.rolreplication AS can_replicate,'+
       "pg_has_role(current_user,'paper_account_bootstrap_reader','member') AS reader_member,"+
       "has_schema_privilege(current_user,'paper_account_candidate','USAGE') AS account_schema,"+
       "has_schema_privilege(current_user,'paper_account_candidate','CREATE') AS can_create,"+
+      "has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema,"+
       "has_schema_privilege(current_user,'paper_atproto_authority','USAGE') AS can_read_authority,"+
       "has_schema_privilege(current_user,'paper_atproto_repo_proof','USAGE') AS can_read_repo,"+
       "has_function_privilege(current_user,'paper_account_candidate.current_bootstrap_proof("+
@@ -87,7 +90,9 @@ function createPgBootstrapReadiness({
       "has_table_privilege(current_user,'paper_account_candidate.accounts','SELECT') AS can_select_accounts,"+
       "has_table_privilege(current_user,'paper_account_candidate.signup_operations','SELECT') AS can_select_journal,"+
       "has_table_privilege(current_user,'paper_account_candidate.accounts',"+
-      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_accounts "+
+      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_accounts,"+
+      "has_table_privilege(current_user,'paper_account_candidate.signup_operations',"+
+      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_journal "+
       'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user LIMIT 2';
     let result;
     try {
@@ -98,12 +103,16 @@ function createPgBootstrapReadiness({
     const role = result?.rows?.[0];
     if (result?.rowCount !== 1 || !role ||
         role.is_superuser !== false || role.bypass_rls !== false ||
+        role.can_create_db !== false || role.can_create_role !== false ||
+        role.can_replicate !== false ||
         role.reader_member !== true || role.account_schema !== true ||
-        role.can_create !== false || role.can_read_authority !== false ||
+        role.can_create !== false || role.can_create_schema !== false ||
+        role.can_read_authority !== false ||
         role.can_read_repo !== false || role.can_prove !== true ||
         role.can_select_accounts !== false ||
         role.can_select_journal !== false ||
-        role.can_write_accounts !== false) {
+        role.can_write_accounts !== false ||
+        role.can_write_journal !== false) {
       deny('BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
     }
     return true;

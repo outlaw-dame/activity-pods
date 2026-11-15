@@ -71,7 +71,7 @@ function issueSignedChallenge(params){
   const data=Buffer.from(JSON.stringify(payload),'utf8').toString('base64url');
   const signature=crypto.createHmac('sha256',
     Buffer.from(process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY,'base64url'))
-    .update('activitypods:durable-user-verification:v1\\0')
+    .update('activitypods:durable-user-verification:v1\0')
     .update(data).digest('base64url');
   return data+'.'+signature;
 }

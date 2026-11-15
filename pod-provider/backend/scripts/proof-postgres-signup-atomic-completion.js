@@ -267,6 +267,45 @@ async function main(){
     assert.equal(live.consentRevision,'1');
     assert.equal(live.canAuthenticate,false,'read path never issues auth');
     assert.equal(live.releaseAuthorized,false,'read path never releases signup');
+    // Post-completion replay is an online authority check. A historically
+    // ready journal must fail when the current repo/projection/outbox drifts.
+    const assertReplayBlocked=async()=>{
+      await error(allowed.readCurrentReady(ok.scope),'SIGNUP_COMPLETION_CURRENT_AUTHORITY_DENIED');
+      await error(allowed.complete(ok.scope),'SIGNUP_COMPLETION_CURRENT_AUTHORITY_DENIED');
+      await error(pgBootstrap.assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_NOT_READY');
+    };
+    await pool.query('UPDATE paper_atproto_repo_proof.repos SET head_cid=$2 WHERE did=$1',
+      [ok.did,cidB]);
+    await assertReplayBlocked();
+    await pool.query('UPDATE paper_atproto_repo_proof.repos SET head_cid=$2 WHERE did=$1',
+      [ok.did,cidA]);
+    assert.equal((await allowed.readCurrentReady(ok.scope)).state,'ready');
+
+    await pool.query("UPDATE paper_atproto_repo_proof.rdf_projection_jobs "+
+      "SET state='blocked',applied_at=NULL WHERE did=$1",[ok.did]);
+    await assertReplayBlocked();
+    await pool.query("UPDATE paper_atproto_repo_proof.rdf_projection_jobs "+
+      "SET state='applied',applied_at=clock_timestamp() WHERE did=$1",[ok.did]);
+    assert.equal((await allowed.readCurrentReady(ok.scope)).state,'ready');
+
+    await pool.query('UPDATE paper_atproto_repo_proof.native_event_outbox '+
+      'SET blocked_at=clock_timestamp() WHERE did=$1 AND commit_cid=$2',[ok.did,cidA]);
+    await assertReplayBlocked();
+    await pool.query('UPDATE paper_atproto_repo_proof.native_event_outbox '+
+      'SET blocked_at=NULL WHERE did=$1 AND commit_cid=$2',[ok.did,cidA]);
+    assert.equal((await allowed.readCurrentReady(ok.scope)).state,'ready');
+
+    // An older terminally blocked pending event is an authority fence
+    // even if the latest signed head and projection are otherwise valid.
+    await pool.query('INSERT INTO paper_atproto_repo_proof.native_event_outbox '+
+      '(did,commit_cid,rev,kind,blocked_at) '+
+      "VALUES ($1,$2,$3,'at.commit.v1',clock_timestamp())",[ok.did,cidB,rev]);
+    await assertReplayBlocked();
+    await pool.query('DELETE FROM paper_atproto_repo_proof.native_event_outbox '+
+      'WHERE did=$1 AND commit_cid=$2',[ok.did,cidB]);
+    assert.equal((await allowed.readCurrentReady(ok.scope)).state,'ready');
+    assert.equal((await pgBootstrap.assertCurrent(identityClaim(ok))).verified,true);
+
     await error(allowed.readCurrentReady({
       ...ok.scope,appClientId:'https://foreign-app.example.org'
     }),'SIGNUP_COMPLETION_CURRENT_NOT_READY');
@@ -435,6 +474,8 @@ async function main(){
     console.log(JSON.stringify({success:true,scope:'disposable-pg18-atomic-new-signup',
       completedAccounts:stats.rows[0].n,missingHostedPdsDenied:true,
       staleSignedHeadDenied:true,revokedConsentDenied:true,
+       completedReplayRepoProjectionOutboxFenced:true,
+       blockedHistoricalOutboxDenied:true,
       serializedConcurrentCompletion:true,transactionRollback:true,
       uncertainCommitRecovered:true,revocationLockSerialized:true,
       productionReleaseClosed:true,idleTransactions:idle.rows[0].n}));

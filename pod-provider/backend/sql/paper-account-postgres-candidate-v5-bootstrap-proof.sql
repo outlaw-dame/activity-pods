@@ -94,6 +94,16 @@ AS $proof$
     AND o.rev = r.rev
     AND o.blocked_at IS NULL
     AND o.status IN ('pending', 'delivered')
+    -- A later valid head must not hide an earlier, terminally blocked
+    -- per-DID pending event. The repository schema has a partial index on
+    -- (did) WHERE pending AND blocked, keeping this lookup bounded.
+    AND NOT EXISTS (
+      SELECT 1
+      FROM paper_atproto_repo_proof.native_event_outbox AS blocked
+      WHERE blocked.did = r.did
+        AND blocked.status = 'pending'
+        AND blocked.blocked_at IS NOT NULL
+    )
   LIMIT 2;
 $proof$;
 

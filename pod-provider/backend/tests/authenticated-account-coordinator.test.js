@@ -378,6 +378,7 @@ test('one-time invocation verifies bound ticket and MAC response, and refuses co
     APODS_ACCOUNT_COORDINATOR_SHARED_KEY:
       process.env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY};
   const calls=[];
+  let previouslySigned;
   const fetchImpl=async(url,options)=>{
     calls.push({url,options});
     expect(url).toBe('http://127.0.0.1:3043/v1/consume');
@@ -390,18 +391,56 @@ test('one-time invocation verifies bound ticket and MAC response, and refuses co
     expect(msg.reservationId).toBe(admission.reservationId);
     expect(msg).not.toHaveProperty('password');
     expect(msg).not.toHaveProperty('appBearer');
-    const raw=JSON.stringify({admitted:true});
-    return new Response(raw,{status:200,headers:{
-      'x-paper-auth':wire.computeMac(
-        env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
-        'consume-response',raw)
-    }});
+    const raw=JSON.stringify({
+      admitted:true,
+      requestSha256:crypto.createHash('sha256')
+        .update(options.body,'utf8').digest('hex'),
+      reservationId:msg.reservationId,
+      nonce:msg.nonce
+    });
+    const mac=wire.computeMac(env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
+      'consume-response',raw);
+    previouslySigned={raw,mac,request:options.body};
+    return new Response(raw,{status:200,headers:{'x-paper-auth':mac}});
   };
   const admitted=await wire.consumeCoordinatedSignup({
     ticket:signed,admission,dataset:USER,env,fetchImpl
   });
   expect(admitted).toEqual({admitted:true});
   expect(calls).toHaveLength(1);
+  // Replay a cryptographically valid, prior HTTP 200 response. A previous
+  // request cannot be used to acknowledge a different nonce or scope.
+  const captured=previouslySigned;
+  let replayRequest=null;
+  await expect(wire.consumeCoordinatedSignup({
+    ticket:signed,admission,dataset:USER,env,
+    fetchImpl:async(_url,options)=>{
+      replayRequest=options.body;
+      return new Response(captured.raw,{status:200,headers:{
+        'x-paper-auth':captured.mac
+      }});
+    }
+  })).rejects.toMatchObject({
+    code:'ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED'
+  });
+  expect(replayRequest).not.toBe(captured.request);
+  const forgedButSigned=JSON.stringify({
+    admitted:true,
+    requestSha256:crypto.createHash('sha256')
+      .update(captured.request).digest('hex'),
+    reservationId:crypto.randomUUID(),
+    nonce:JSON.parse(captured.request).nonce
+  });
+  await expect(wire.consumeCoordinatedSignup({
+    ticket:signed,admission,dataset:USER,env,
+    fetchImpl:async()=>new Response(forgedButSigned,{
+      status:200,headers:{'x-paper-auth':wire.computeMac(
+        env.APODS_ACCOUNT_COORDINATOR_SHARED_KEY,
+        'consume-response',forgedButSigned)}
+    })
+  })).rejects.toMatchObject({
+    code:'ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED'
+  });
   for(const bad of [
     {...admission,reservationId:crypto.randomUUID()},
     {...admission,username:'claimtest-other000000'},

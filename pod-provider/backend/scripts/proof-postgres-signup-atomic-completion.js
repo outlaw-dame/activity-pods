@@ -221,13 +221,22 @@ async function main(){
 
     // The deployable reader role is limited to EXECUTE on the exact lookup.
     // It cannot enumerate accounts or read raw operation HMACs.
+    // A PostgreSQL superuser can execute the SECURITY DEFINER function
+    // but must never qualify as the provider-owned runtime reader login.
+    await error(createPgBootstrapReadiness({
+      ...bootstrapConfig,requireRestrictedReader:true
+    }).assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
+
     const roleClient=await pool.connect();
     try {
       await roleClient.query('BEGIN');
       await roleClient.query('SET LOCAL ROLE paper_account_bootstrap_reader');
       const narrow=createPgBootstrapReadiness({
-        ...bootstrapConfig,pool:{query:(...args)=>roleClient.query(...args)}
+        ...bootstrapConfig,
+        pool:{query:(...args)=>roleClient.query(...args)},
+        requireRestrictedReader:true
       });
+      assert.equal(await narrow.assertReaderRole(),true);
       assert.equal((await narrow.assertCurrent(identityClaim(ok))).verified,true);
       for(const table of [
         'paper_account_candidate.accounts',
@@ -475,6 +484,7 @@ async function main(){
       completedAccounts:stats.rows[0].n,missingHostedPdsDenied:true,
       staleSignedHeadDenied:true,revokedConsentDenied:true,
        completedReplayRepoProjectionOutboxFenced:true,
+       restrictedProviderReaderProven:true,
        blockedHistoricalOutboxDenied:true,
       serializedConcurrentCompletion:true,transactionRollback:true,
       uncertainCommitRecovered:true,revocationLockSerialized:true,

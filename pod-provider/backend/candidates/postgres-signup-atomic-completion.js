@@ -139,23 +139,47 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
   async function readCurrentReady(scope) {
     if (fixtureOnly !== true || !allowed()) deny('SIGNUP_COMPLETION_NOT_RELEASED');
     checkScope(scope);
+    // One indexed PostgreSQL MVCC snapshot must still prove the exact
+    // signed head, applied RDF projection, live account and SAI consent.
+    // A sealed journal alone is historical evidence, not current readiness.
     const sql =
       'SELECT s.operation_id,s.account_id,s.state AS signup_state,'+
       's.completion_at,s.completion_app_uri,s.completion_grant_uri,'+
       's.completion_consent_revision::text AS completed_revision,'+
       's.completion_account_generation::text AS completed_generation,'+
-      's.completion_proof_digest,s.evidence_digest,'+
+      's.completion_proof_digest,s.evidence_digest,s.evidence_sealed_at,'+
+      's.evidence_commit_cid,s.evidence_root_cid,s.evidence_rev,'+
+      's.evidence_fence::text AS evidence_fence,'+
+      's.evidence_account_generation::text AS evidence_generation,'+
       'a.state AS account_state,a.generation::text AS account_generation,'+
       'a.webid,a.activitypub_actor_uri,a.atproto_did,'+
       'a.atproto_repo_initialized,'+
       'i.did AS identity_did,i.state AS identity_state,i.managed,'+
       'c.state AS consent_state,c.grant_uri AS current_grant_uri,'+
-      'c.revision::text AS current_revision '+
+      'c.revision::text AS current_revision,'+
+      'r.account_id AS repo_owner,r.did AS repo_did,'+
+      'r.head_cid AS repo_head,r.root_cid AS repo_root,'+
+      'r.rev AS repo_rev,r.generation::text AS repo_generation,'+
+      'j.account_id AS projected_owner,j.did AS projected_did,'+
+      'j.head_cid AS projected_head,j.root_cid AS projected_root,'+
+      'j.rev AS projected_rev,j.generation::text AS projected_generation,'+
+      'j.lease_epoch::text AS projected_fence,'+
+      'j.state AS projected_state,j.applied_at AS projected_at,'+
+      'o.did AS outbox_did,o.commit_cid AS outbox_commit,'+
+      'o.rev AS outbox_rev,o.status AS outbox_status,'+
+      'o.blocked_at AS outbox_blocked,'+
+      'EXISTS (SELECT 1 FROM '+OUTBOX+' b '+
+      "WHERE b.did=a.atproto_did AND b.status='pending' "+
+      'AND b.blocked_at IS NOT NULL) AS blocked_outbox_history '+
       'FROM '+SIGNUP+' s JOIN '+ACCOUNT+' a '+
       'ON a.account_id=s.account_id AND a.provider_id=s.provider_id '+
       'LEFT JOIN '+IDENTITY+' i ON i.owner_webid=a.webid '+
       'LEFT JOIN '+CONSENT+' c ON c.owner_webid=a.webid '+
       'AND c.app_uri=s.completion_app_uri '+
+      'LEFT JOIN '+REPOS+' r ON r.account_id=a.webid AND r.did=a.atproto_did '+
+      'LEFT JOIN '+PROJECTION+' j ON j.account_id=r.account_id AND j.did=r.did '+
+      'LEFT JOIN '+OUTBOX+' o ON o.did=r.did '+
+      'AND o.commit_cid=s.evidence_commit_cid '+
       'WHERE s.provider_id=$1 AND s.app_client_id=$2 '+
       'AND s.hmac_key_version=$3 AND s.idempotency_hmac=$4 LIMIT 2';
     let result;
@@ -186,7 +210,32 @@ function createDisposableSignupCompletion({ pool, verifyCurrent, fixtureOnly = f
         r.consent_state!=='active' ||
         !r.completion_app_uri || !r.completion_grant_uri ||
         r.completion_grant_uri!==r.current_grant_uri ||
-        r.completed_revision!==r.current_revision) {
+        r.completed_revision!==r.current_revision ||
+        !r.evidence_sealed_at || !r.evidence_commit_cid ||
+        !r.evidence_root_cid || !r.evidence_rev ||
+        !/^[1-9][0-9]*$/.test(r.evidence_generation || '') ||
+        !/^[1-9][0-9]*$/.test(r.account_generation || '') ||
+        BigInt(r.evidence_generation)+1n!==BigInt(r.account_generation) ||
+        !/^[1-9][0-9]*$/.test(r.evidence_fence || '') ||
+        r.repo_owner!==r.webid || r.repo_did!==r.atproto_did ||
+        r.repo_head!==r.evidence_commit_cid ||
+        r.repo_root!==r.evidence_root_cid ||
+        r.repo_rev!==r.evidence_rev ||
+        r.projected_owner!==r.repo_owner ||
+        r.projected_did!==r.repo_did ||
+        r.projected_head!==r.repo_head ||
+        r.projected_root!==r.repo_root ||
+        r.projected_rev!==r.repo_rev ||
+        !/^[1-9][0-9]*$/.test(r.repo_generation || '') ||
+        r.projected_generation!==r.repo_generation ||
+        r.projected_state!=='applied' || !r.projected_at ||
+        r.projected_fence!==r.evidence_fence ||
+        r.outbox_did!==r.atproto_did ||
+        r.outbox_commit!==r.evidence_commit_cid ||
+        r.outbox_rev!==r.repo_rev ||
+        !['pending','delivered'].includes(r.outbox_status) ||
+        r.outbox_blocked!==null ||
+        r.blocked_outbox_history!==false) {
       deny('SIGNUP_COMPLETION_CURRENT_AUTHORITY_DENIED');
     }
 

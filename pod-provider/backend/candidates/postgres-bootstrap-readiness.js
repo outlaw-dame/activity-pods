@@ -35,6 +35,17 @@ function canonicalHttps(value) {
   }
 }
 
+function canonicalOrigin(value) {
+  if (typeof value !== 'string' || value.length < 8 || value.length > MAX) return false;
+  try {
+    const uri = new URL(value);
+    return uri.protocol === 'https:' && uri.hostname &&
+      !uri.username && !uri.password && uri.origin === value;
+  } catch {
+    return false;
+  }
+}
+
 function newAccountProofEnabled() {
   return process.env.NODE_ENV === 'test' &&
     process.env.PAPER_ACCOUNTS_DISPOSABLE === 'confirmed' &&
@@ -47,7 +58,7 @@ function createPgBootstrapReadiness({
   fixtureOnly = false
 } = {}) {
   if (!pool || typeof pool.query !== 'function' ||
-      !canonicalHttps(providerId) || !canonicalHttps(appClientId) ||
+      !canonicalOrigin(providerId) || !canonicalHttps(appClientId) ||
       !canonicalHttps(appUri) ||
       !Buffer.isBuffer(hmacKey) || hmacKey.length < 32 ||
       !Number.isSafeInteger(hmacKeyVersion) ||

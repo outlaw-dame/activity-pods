@@ -259,6 +259,32 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     };
     assert.equal(await pgAuthority.complete(fence,synthetic),false,
       'A v4-bound reservation must reject old shape-only completion proof');
+    const unboundName='probed_unbound';
+    const unboundInput={
+      appClientId:bridgeScope.appScope,username:unboundName,
+      idempotencyKey:'unbound-'+crypto.randomBytes(12).toString('hex'),
+      requestFingerprint:crypto.randomBytes(32).toString('hex'),dailyLimit:3
+    };
+    const unbound=await pgAuthority.reserve(unboundInput);
+    assert.equal(unbound.outcome,'reserved');
+    const unboundFence={
+      appClientId:unboundInput.appClientId,
+      idempotencyKey:unboundInput.idempotencyKey,
+      reservationId:unbound.reservationId,fenceToken:unbound.fenceToken
+    };
+    assert.equal(await pgAuthority.startSideEffects(unboundFence),true);
+    assert.equal(await pgAuthority.claimSignup({
+      appClientId:unboundInput.appClientId,
+      idempotencyKey:unboundInput.idempotencyKey,
+      requestFingerprint:unboundInput.requestFingerprint,
+      username:unboundName,reservationId:unbound.reservationId
+    }),true);
+    assert.equal(await pgAuthority.complete(unboundFence,{
+      ...synthetic,username:unboundName,
+      webId:providerId+'/users/'+unboundName,
+      activityPubActorId:providerId+'/users/'+unboundName
+    }),false,'Unbound identities cannot downgrade to an unverified digest');
+
     const reflect=async()=>(
       await bridgeRoles.finalizer.query(
         'SELECT paper_account_reservation_proof.reflect_v4_ready('+

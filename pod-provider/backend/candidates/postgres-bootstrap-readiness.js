@@ -115,7 +115,6 @@ function createPgBootstrapReadiness({
     if (fixtureOnly !== true || !newAccountProofEnabled()) {
       deny('BOOTSTRAP_PG_NOT_RELEASED');
     }
-    if (requireRestrictedReader) await assertReaderRole();
     if (typeof idempotencyKey !== 'string' || !KEY.test(idempotencyKey) ||
         typeof username !== 'string' ||
         !/^[a-z0-9][a-z0-9_-]{1,63}$/u.test(username) ||
@@ -125,6 +124,7 @@ function createPgBootstrapReadiness({
         !HANDLE.test(atprotoHandle)) {
       deny('BOOTSTRAP_PG_SCOPE_INVALID');
     }
+    if (requireRestrictedReader) await assertReaderRole();
 
     // Domain separation means an offline hash of the request password is
     // never stored, and the raw Entryway key is never sent to PostgreSQL.

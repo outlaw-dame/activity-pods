@@ -68,6 +68,11 @@ test('raw signup input cannot hide an existing identity behind protocol override
   factory(name => {
     if (name === 'crypto') return crypto;
     if (name === 'moleculer') return { Errors: { MoleculerError } };
+    if (name === './utils/atproto-account-coordinated-signup') {
+      return { coordinatedDisposableSignup: async () => {
+        throw Error('Coordinator must not execute in normalization-only test');
+      } };
+    }
     if (name === '../utils/unified-identity-policy') {
       return require('../utils/unified-identity-policy');
     }

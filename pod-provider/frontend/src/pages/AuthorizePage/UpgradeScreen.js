@@ -12,7 +12,7 @@ import { arrayOf } from '../../utils';
 import useRemoveApp from '../../hooks/useRemoveApp';
 import useUpgradeApp from '../../hooks/useUpgradeApp';
 import {
-  acceptedUpgradeNeeds, hasMissingRequirements, initialConsentSelection
+  hasMissingRequirements, initialConsentSelection, persistApprovedUpgrade
 } from './consentPolicy.mjs';
 
 const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
@@ -38,16 +38,18 @@ const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
 
           // The app may have added optional rights since its last install.
           // Unchecked optional rights are not silently granted on upgrade.
-          const approved = acceptedUpgradeNeeds(
-            grantedAccessNeeds, missingAccessNeeds.required,
-            allowedAccessNeeds, missingAccessNeeds.optional
-          );
-          if (approved.changed) {
-            await upgradeApp({
-              appUri: application.id,
-              grantedAccessNeeds: approved.grants
-            });
-          }
+          // Even an explicit refusal of all *new* optional permissions
+          // must acknowledge the updated app manifest. Otherwise
+          // app-status keeps reporting upgradeNeeded and loops back here.
+          // Only already-granted + explicitly checked rights are persisted.
+          await persistApprovedUpgrade({
+            appUri: application.id,
+            existingGrants: grantedAccessNeeds,
+            requiredMissing: missingAccessNeeds.required,
+            selectedMissing: allowedAccessNeeds,
+            optionalMissing: missingAccessNeeds.optional,
+            upgradeApp
+          });
 
           await accessApp();
         } catch (e) {
@@ -159,7 +161,17 @@ const UpgradeScreen = ({ application, accessApp, isTrustedApp }) => {
           {translate('app.action.accept')}
         </Button>
         {missingAccessNeeds.required.length === 0 ? (
-          <Button variant="contained" onClick={accessApp} sx={{ ml: 1 }}>
+          <Button
+            variant="contained"
+            onClick={() => {
+              // Ignore any optional toggles the owner previously changed;
+              // persist *only* existing grants + new required rights.
+              // For this action there are no missing required rights.
+              setAllowedAccessNeeds([]);
+              setStep('upgrade');
+            }}
+            sx={{ ml: 1 }}
+          >
             {translate('app.action.skip_optional_permissions')}
           </Button>
         ) : (

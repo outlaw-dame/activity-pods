@@ -363,6 +363,12 @@ module.exports = {
         atprotoHandle: { type: 'string', optional: true }
       },
       async handler(ctx) {
+        // This is a disposable integration, not a production cutover.
+        // Even an erroneously injected reader cannot bypass the existing
+        // production signup / bootstrap release fuses.
+        if (process.env.NODE_ENV === 'production') {
+          this.assertCompletedAccountBootstrap(ctx.params);
+        }
         if (this.pgBootstrapReadiness) {
           // The reader is scoped to the configured provider/app/HMAC and
           // checks current account + signed PDS + SAI state. Never fall back

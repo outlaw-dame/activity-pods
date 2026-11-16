@@ -28,7 +28,8 @@ const matchTemplateObj = (obj, template) => {
  *
  * Matching means that the object needs to have all fields the template has as well, i.e. is a superset.
  */
-const hasActivityGrant = (capabilityPresentation, templateActivity) => {
+const hasActivityGrant = (capabilityPresentation, templateActivity, activity) => {
+  if (!activity || typeof activity !== 'object') return false;
   const vcs = arrayOf(capabilityPresentation?.verifiableCredential);
   if (vcs.length === 0) return false;
 

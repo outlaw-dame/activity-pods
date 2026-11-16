@@ -32,6 +32,7 @@ function problem(code, status = 403) {
 }
 
 function exactHttps(value, { allowFragment = false } = {}) {
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   if (typeof value !== 'string' || value.length > 2048 || /[\u0000-\u0020\u007f\\]/u.test(value)) {
     throw problem('COLLECTIVE_INVALID_URI', 400);
   }
@@ -140,6 +141,7 @@ function validateInput(params, baseUrl, identityKey) {
   // Provider origin is a bare HTTPS origin; WHATWG serializes it with a
   // trailing slash. Do not apply resource-URL exactness rules to an origin.
   if (typeof baseUrl !== 'string' || baseUrl.length > 256 ||
+      // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
       /[\u0000-\u0020\u007f\\]/u.test(baseUrl)) {
     throw problem('COLLECTIVE_INVALID_PROVIDER', 503);
   }
@@ -151,6 +153,7 @@ function validateInput(params, baseUrl, identityKey) {
     throw problem('COLLECTIVE_INVALID_PROVIDER', 503);
   }
   const idempotencyKey = requireString(params.idempotencyKey, /^[a-zA-Z0-9_-]{24,128}$/u, 'COLLECTIVE_INVALID_IDEMPOTENCY');
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   const displayName = requireString(params.displayName, /^[^\u0000-\u001f\u007f]{1,160}$/u, 'COLLECTIVE_INVALID_DISPLAY_NAME');
   const requestHash = reserveFingerprint(principal, app, idempotencyKey, displayName);
   const groupId = 'cg_' + hmac(identityKey, JSON.stringify([principal, app, idempotencyKey])).slice(0, 32);

@@ -21,21 +21,21 @@ function extractDomain(req) {
   if (keyIdMatch) {
     try {
       return new URL(keyIdMatch[1]).hostname;
-    } catch {}
+    } catch  { /* Best-effort cleanup or optional parsing; caller handles the fallback. */ }
   }
 
   const origin = req.headers['origin'];
   if (origin) {
     try {
       return new URL(origin).hostname;
-    } catch {}
+    } catch  { /* Best-effort cleanup or optional parsing; caller handles the fallback. */ }
   }
 
   const referer = req.headers['referer'];
   if (referer) {
     try {
       return new URL(referer).hostname;
-    } catch {}
+    } catch  { /* Best-effort cleanup or optional parsing; caller handles the fallback. */ }
   }
 
   return null;

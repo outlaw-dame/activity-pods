@@ -225,6 +225,7 @@ async function runWindow({
     let cursor = 0;
     const startedPerfMs = performance.now();
 
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function worker(workerIndex) {
       for (;;) {
         const index = cursor;

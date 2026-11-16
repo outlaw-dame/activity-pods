@@ -392,6 +392,6 @@ test('OAuth-gated hosted write XRPC creates signed records with canonical PG rev
       try{await pool.query('DROP ROLE IF EXISTS '+role);}catch(e){cleanupFailed=e;}
     }
     await pool.end();
-    if(cleanupFailed)throw cleanupFailed;
   }
+  if(cleanupFailed)throw cleanupFailed;
 });

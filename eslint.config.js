@@ -11,11 +11,11 @@ const globals = require('globals');
 module.exports = tsEslint.config(
   // Ignore
   {
-    ignores: ['**/dist/*', 'pod-provider/data/**']
+    ignores: ['**/dist/**', '**/build/**', 'pod-provider/data/**']
   },
   // Globals
   {
-    languageOptions: { globals: { ...globals.commonjs, CONFIG: true, process: false } },
+    languageOptions: { globals: { ...globals.es2021, ...globals.commonjs, CONFIG: true, process: false } },
     rules: {
       'array-callback-return': 'warn',
       'arrow-body-style': 'off',
@@ -85,6 +85,7 @@ module.exports = tsEslint.config(
     files: [
       'app-framework/app/**',
       'pod-provider/backend/**',
+      'pod-provider/docker/**',
       'tests/**',
       'pod-provider/backend/tests/**',
       'conf/*',
@@ -102,9 +103,26 @@ module.exports = tsEslint.config(
   {
     files: ['pod-provider/frontend/**']
   },
+  // These SemApps runtime exports are absent from upstream TypeScript declarations.
+  // Keep this exception here: CRA's separate ESLint configuration lacks import-x.
+  {
+    files: [
+      'pod-provider/frontend/src/common/inputs/QuickCreateLocationInput/AddLocationButton.js',
+      'pod-provider/frontend/src/resources/Location/LocationForm.js',
+      'pod-provider/frontend/src/config/i18nProvider.js'
+    ],
+    rules: { 'import-x/named': 'off' }
+  },
   // Tests
   {
-    files: ['tests/**', 'pod-provider/backend/tests/**'],
+    files: ['docs/src/content/config.ts'],
+    rules: {
+      // Astro provides this exact virtual module during its build.
+      'import-x/no-unresolved': ['error', { ignore: ['^astro:content$'] }]
+    }
+  },
+  {
+    files: ['tests/**', 'pod-provider/backend/tests/**', '**/*.test.js'],
     languageOptions: { globals: { ...globals.jest } },
     // plugins: { jest: eslintJest },
     rules: {

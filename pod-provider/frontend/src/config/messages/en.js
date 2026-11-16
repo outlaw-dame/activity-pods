@@ -10,7 +10,6 @@ module.exports = {
       add_location: 'Add an address',
       copy: 'Copy to clipboard',
       create_invite_link: 'Create Invite Link',
-      edit_profile: 'Edit my profile',
       edit_public_profile: 'Edit public profile',
       edit_private_profile: 'Edit private profile',
       ignore: 'Ignore',

@@ -16,6 +16,7 @@ const MAX_PAGES = 100000;
 function fail(message) { throw new TypeError('Invalid Group membership snapshot: ' + message); }
 function actorUri(raw) {
   if (typeof raw !== 'string' || raw.length > 2048 ||
+      // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
       /[\u0000-\u0020\u007f\\]/u.test(raw)) fail('invalid actor URI');
   let parsed;
   try { parsed = new URL(raw); } catch { fail('invalid actor URI'); }

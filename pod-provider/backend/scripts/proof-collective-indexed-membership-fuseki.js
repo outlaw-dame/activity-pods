@@ -187,6 +187,7 @@ async function main() {
         }
       }
     }
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     function record(variant) {
       const samples = durations[variant];
       return { phase: name, queryCount: samples.length,

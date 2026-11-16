@@ -359,6 +359,6 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
       catch(e){cleanErr=e;}
     }
     await admin.end();
-    if(cleanErr)throw cleanErr;
   }
+  if(cleanErr)throw cleanErr;
 });

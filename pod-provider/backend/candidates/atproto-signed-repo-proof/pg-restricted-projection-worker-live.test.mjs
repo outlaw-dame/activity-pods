@@ -340,6 +340,6 @@ test('PG18 separately credentialed projection worker refuses stale ACK and forbi
       catch(e){cleanupError=e;}
     }
     await admin.end();
-    if(cleanupError)throw cleanupError;
   }
+  if(cleanupError)throw cleanupError;
 });

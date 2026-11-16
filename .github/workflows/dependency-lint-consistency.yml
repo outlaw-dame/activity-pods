@@ -1,0 +1,45 @@
+name: Dependency and lint consistency
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked application dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix pod-provider/backend --no-audit --no-fund
+          npm ci --prefix pod-provider/frontend --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests --ignore-scripts --no-audit --no-fund
+          npm ci --prefix pod-provider/backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
+      - name: Install Yarn workspaces and documentation
+        run: |
+          npx --yes yarn@1.22.22 --cwd app-framework install --frozen-lockfile --ignore-scripts --non-interactive
+          npx --yes yarn@1.22.22 --cwd docs install --frozen-lockfile --ignore-scripts --non-interactive
+          npm install --prefix pod-provider/docker/domain-guard --ignore-scripts --package-lock=false --no-audit --no-fund
+      - name: Lint repository
+        run: npm run lint -- --quiet
+      - name: Test repaired runtime paths and owner authorization
+        run: >-
+          tests/node_modules/.bin/jest --runInBand --silent --testEnvironment=node
+          --roots=pod-provider/backend/tests --runTestsByPath
+          pod-provider/backend/tests/activity-grant-utils.test.js
+          pod-provider/backend/tests/pod-container-actor-context.test.js
+          pod-provider/backend/tests/user-settings-delegated-moderation.test.js
+          pod-provider/backend/tests/entryway-owner-session-api.test.js
+          pod-provider/backend/tests/solid-dpop-verifier.test.js

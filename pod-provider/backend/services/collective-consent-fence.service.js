@@ -24,6 +24,7 @@ function invalid() {
 }
 
 function httpsUri(raw, fragment) {
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   if (typeof raw !== 'string' || raw.length > 2048 || /[\u0000-\u0020\u007f\\]/u.test(raw)) throw invalid();
   let uri;
   try { uri = new URL(raw); } catch { throw invalid(); }

@@ -74,6 +74,7 @@ test('historical signed native #commit is invertible from bounded proof CAR afte
     let head=await genesis.bootstrap({accountId,did,...credentials});
     const genesisHead=head;
     const journal=[{head,action:null,path:null,prev:null,newCid:null}];
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function project(){
       const response=await pool.query(
         "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET state='applied',"+
@@ -84,6 +85,7 @@ test('historical signed native #commit is invertible from bounded proof CAR afte
       assert.equal(response.rowCount,1);
     }
     await project();
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function mutate(action,index,text){
       const former=head,path=pathFor(index);
       const record=action==='delete'?null:post(index,text);
@@ -110,12 +112,14 @@ test('historical signed native #commit is invertible from bounded proof CAR afte
       );
       assert.equal(all.rows[0].n,21);
     });
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function eventFor(h){
       return native.materialize({
         accountId,did,commitCid:h.commitCid,rev:h.rev,
         publicKeyPem:credentials.publicKeyPem
       });
     }
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function assertEnvelope(h,result){
       assert.equal(result.verified,true);
       assert.equal(result.did,did);

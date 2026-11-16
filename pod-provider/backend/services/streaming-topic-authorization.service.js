@@ -197,6 +197,7 @@ function isValidExactTopicSegment(segment) {
 }
 
 function containsControlOrWhitespace(value) {
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   return /[\u0000-\u001f\u007f\s]/u.test(value);
 }
 

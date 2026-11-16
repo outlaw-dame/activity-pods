@@ -13,7 +13,7 @@
  */
 const DID=/^did:plc:[a-z2-7]{24}$/u;
 const COLLECTION=/^[a-z][a-z0-9]*(?:\.[a-z0-9][a-z0-9-]*){2,}$/u;
-const TOKEN=/^DPoP ([A-Za-z0-9._~+\/-]{20,8192}={0,2})$/u;
+const TOKEN=/^DPoP ([A-Za-z0-9._~+/-]{20,8192}={0,2})$/u;
 const PROOF=/^[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}$/u;
 const EPOCH=/^[1-9][0-9]{0,18}$/u;
 function deny(code='PDS_OAUTH_NOT_AUTHORIZED'){

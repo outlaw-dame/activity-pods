@@ -1,33 +1,33 @@
-export type WebhookChannel = {
+export interface WebhookChannel {
   id: string;
   topic: string;
   sendTo: string;
   webId: string;
-};
+}
 
-export type AppStatus = {
+export interface AppStatus {
   onlineBackend: boolean;
   installed?: boolean;
   upgradeNeeded?: boolean;
   webhookChannels: WebhookChannel[];
-};
+}
 
-export type Ontology = {
+export interface Ontology {
   prefix: string;
   owl?: string;
   url: string;
-};
+}
 
-export type PodProvider = {
+export interface PodProvider {
   id?: string;
   type?: string;
   'apods:baseUrl': string;
   'apods:area'?: string;
   'apods:locales'?: string;
   'apods:providedBy'?: string;
-};
+}
 
-export type SolidOIDCToken = {
+export interface SolidOIDCToken {
   azp: string;
   sub: string;
   webid: string;
@@ -36,4 +36,4 @@ export type SolidOIDCToken = {
   exp: number;
   iat: number;
   iss: string;
-};
+}

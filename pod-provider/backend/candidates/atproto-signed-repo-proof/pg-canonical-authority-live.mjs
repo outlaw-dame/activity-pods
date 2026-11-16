@@ -369,6 +369,7 @@ async function run() {
       }
     }
     try{await admin.end()}catch(e){cleanupErrors.push(e)}
+    // eslint-disable-next-line no-unsafe-finally -- Preserve the original failure; reject cleanup failure only after a successful run.
     if(cleanupErrors.length && !originalError)throw Error('Disposable PG proof fixture cleanup failed');
   }
 }

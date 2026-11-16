@@ -142,6 +142,7 @@ function normalizeUnicode(raw) {
   // Strip Unicode control characters, default-ignorable code points, zero-width chars
   // eslint-disable-next-line no-control-regex
   s = s.replace(
+    // eslint-disable-next-line no-control-regex, no-misleading-character-class -- Deliberately match individual control or ignorable code points at this input boundary.
     /[\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180D\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\uFE00-\uFE0F\uFEFF\uFFF0-\uFFFB]/g,
     ''
   );
@@ -165,7 +166,8 @@ function analyzeUnicodeSecurity(normalized) {
  * and non-Latin non-ASCII characters (Cyrillic, Greek, etc.), flag it.
  */
 function detectMixedScript(s) {
-  const hasLatin = /[a-z0-9._\-]/.test(s);
+  const hasLatin = /[a-z0-9._-]/.test(s);
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   const hasNonLatin = /[^\x00-\x7F]/.test(s);
   return hasLatin && hasNonLatin;
 }
@@ -355,6 +357,7 @@ function checkUsername(rawUsername) {
   const canonical = canonicalize(normalized);
   // Only compute skeleton-based canonical when input actually has non-ASCII chars
   // (unicode-confusables over-maps ASCII chars like 'm'→'rn' which corrupts results)
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   const hasNonAscii = /[^\x00-\x7F]/.test(normalized);
   const canonicalFromSkeleton = hasNonAscii ? canonicalize(skeleton) : canonical;
 

@@ -108,6 +108,7 @@ test('reference MST immutable multi-record PG18 signing and durability gates',as
     assert.equal((await official.getPointer()).toString(),current.rootCid);
     const expected=new Map();
 
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function mutate({action,index,record=null,expectedHead=current}) {
       const path=pathFor(index);
       const next=await writer.write({

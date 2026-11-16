@@ -83,6 +83,7 @@ test('bounded full signed multi-record export with exact PG/Jena head + complete
     };
     await project();
     const records=new Map();
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function write(action,i){
       const path=pathFor(i);
       const record=action==='delete'?null:

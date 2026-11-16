@@ -596,6 +596,7 @@ async function main(){
       try{await pool.query('DROP ROLE IF EXISTS '+role);}catch(e){cleanup=e;}
     }
     await pool.end();
+    // eslint-disable-next-line no-unsafe-finally -- Preserve the original failure; reject cleanup failure only after a successful run.
     if(cleanup&&!errorInRun)throw cleanup;
   }
 }

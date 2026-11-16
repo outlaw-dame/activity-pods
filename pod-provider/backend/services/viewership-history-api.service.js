@@ -35,6 +35,7 @@ function sanitizeActorId(value) {
   if (!trimmed || trimmed.length > MAX_ACTOR_LENGTH) return null;
 
   if (trimmed.startsWith('did:')) {
+    // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
     return /[\u0000-\u001F\u007F]/.test(trimmed) ? null : trimmed;
   }
 
@@ -55,6 +56,7 @@ function sanitizeObjectId(value) {
   if (!trimmed || trimmed.length > MAX_OBJECT_ID_LENGTH) return null;
 
   if (trimmed.startsWith('at://') || trimmed.startsWith('did:')) {
+    // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
     return /[\u0000-\u001F\u007F]/.test(trimmed) ? null : trimmed;
   }
 

@@ -1,6 +1,6 @@
 /// <reference types="react-scripts" />
 
-type LangString = {
+interface LangString {
   '@language': string;
   '@value': string;
-};
+}

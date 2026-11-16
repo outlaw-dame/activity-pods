@@ -426,7 +426,7 @@ async function verify(){
 }
 async function cleanup(){
  let config=null;
- try{config=await load();}catch{}
+ try{config=await load();}catch  { /* Best-effort cleanup or optional parsing; caller handles the fallback. */ }
  await admin.query('DROP SCHEMA IF EXISTS paper_dataset_admin_proof CASCADE');
  await admin.query('DROP ROLE IF EXISTS paper_dataset_admin_login');
  await admin.query('DROP ROLE IF EXISTS paper_dataset_admin_agent');

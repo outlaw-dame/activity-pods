@@ -21,6 +21,7 @@ import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import Header from '../common/Header';
 import { signInWithPasskey } from '../utils/passkeys';
+import { resolveLoginReturn } from './loginNavigationPolicy.mjs';
 
 const BlueskyGlyph = () => (
   <Box component="img" src="/bluesky-logo.svg" alt="" aria-hidden sx={{ width: 16, height: 16 }} />
@@ -138,30 +139,10 @@ function getLocalUsernameError(u) {
 }
 
 function resolvePostLoginTarget(value) {
-  const fallback = { mode: 'internal', url: '/network' };
-  const raw = String(value || '').trim();
-
-  if (!raw) return fallback;
-
-  if (raw.startsWith('/') && !raw.startsWith('//') && !raw.includes('://')) {
-    return { mode: 'internal', url: raw };
-  }
-
-  try {
-    const parsed = new URL(raw);
-
-    if (CONFIG.BACKEND_URL && raw.startsWith(CONFIG.BACKEND_URL)) {
-      return { mode: 'external', url: raw };
-    }
-
-    if (typeof window !== 'undefined' && parsed.origin === window.location.origin) {
-      return { mode: 'internal', url: `${parsed.pathname}${parsed.search}${parsed.hash}` || '/network' };
-    }
-  } catch (_error) {
-    return fallback;
-  }
-
-  return fallback;
+  return resolveLoginReturn(value, {
+    backendUrl: CONFIG.BACKEND_URL,
+    frontendOrigin: window.location.origin
+  });
 }
 
 // ─── Sign-Up form ─────────────────────────────────────────────────────────────

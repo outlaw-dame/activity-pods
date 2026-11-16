@@ -31,8 +31,9 @@ function canonicalHttpsOrigin(value) {
   if (typeof value !== 'string' || value.length > 2048) return null;
   try {
     const url = new URL(value);
+    const canonical = value === url.origin || value === `${url.origin}/`;
     return url.protocol === 'https:' && url.hostname && !url.username && !url.password &&
-      !url.search && !url.hash && url.origin === value ? value : null;
+      url.pathname === '/' && !url.search && !url.hash && canonical ? value : null;
   } catch {
     return null;
   }

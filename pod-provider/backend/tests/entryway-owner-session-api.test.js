@@ -122,6 +122,14 @@ describe('Entryway Solid-OIDC owner-session proof', () => {
     expect(runtime.broker.call).not.toHaveBeenCalledWith('api.addRoute', expect.anything());
   });
 
+  test('accepts only canonical HTTPS issuer origins, preserving an existing root slash', () => {
+    expect(service._test.canonicalHttpsOrigin('https://pods.example.org')).toBe('https://pods.example.org');
+    expect(service._test.canonicalHttpsOrigin('https://pods.example.org/')).toBe('https://pods.example.org/');
+    expect(service._test.canonicalHttpsOrigin('https://pods.example.org//')).toBeNull();
+    expect(service._test.canonicalHttpsOrigin('https://pods.example.org/path')).toBeNull();
+    expect(service._test.canonicalHttpsOrigin('http://pods.example.org')).toBeNull();
+  });
+
   test.each([
     { claims: { webid: 'https://pods.example.org/bob/profile/card#me' } },
     { claims: { azp: 'https://evil.example/app' } },

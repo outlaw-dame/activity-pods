@@ -2005,7 +2005,7 @@ capture-exit@^2.0.0:
 
 "cas@git+https://github.com/joshchan/node-cas.git":
   version "0.0.5"
-  resolved "git+ssh://git@github.com/joshchan/node-cas.git"
+  resolved "git+ssh://git@github.com/joshchan/node-cas.git#ea512be2afd7d0b63de512a974705883b7d7070a"
   integrity sha512-I6UW3tq7Yc7CsV/0sj/mwGDGzysuNr3QtHm8QFEiERiv2mPJQddvmZyYCYfkm+/Ums8wzu+hGiy2Vz3Z1u0QMw==
   dependencies:
     cheerio "1.2.0"

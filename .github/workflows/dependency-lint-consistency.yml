@@ -37,9 +37,9 @@ jobs:
       - name: Test repaired runtime paths and owner authorization
         run: >-
           tests/node_modules/.bin/jest --runInBand --silent --testEnvironment=node
-          --roots=pod-provider/backend/tests --runTestsByPath
+          --roots pod-provider/backend/tests app-framework/app/tests --runTestsByPath
           pod-provider/backend/tests/activity-grant-utils.test.js
-          pod-provider/backend/tests/pod-container-actor-context.test.js
+          app-framework/app/tests/pod-container-actor-context.test.js
           pod-provider/backend/tests/user-settings-delegated-moderation.test.js
           pod-provider/backend/tests/entryway-owner-session-api.test.js
           pod-provider/backend/tests/solid-dpop-verifier.test.js

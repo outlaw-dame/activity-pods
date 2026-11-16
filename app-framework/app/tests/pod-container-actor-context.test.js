@@ -1,9 +1,9 @@
-jest.mock('../../../app-framework/app/mixins/fetch-pod-or-proxy', () => ({}));
-jest.mock('../../../app-framework/node_modules/@semapps/ldp', () => ({
+jest.mock('../mixins/fetch-pod-or-proxy', () => ({}));
+jest.mock('@semapps/ldp', () => ({
   arrayOf: value => value == null ? [] : Array.isArray(value) ? value : [value],
   isURL: value => typeof value === 'string' && /^https?:/.test(value)
 }));
-const service = require('../../../app-framework/app/services/pod-handling/pod-containers');
+const service = require('../services/pod-handling/pod-containers');
 
 describe('pod container actor context', () => {
   test.each(['alice', 'bob'])('preserves %s authority through type-index lookup', async name => {

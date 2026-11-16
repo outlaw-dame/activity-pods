@@ -1,5 +1,6 @@
 const dns = require('node:dns').promises;
 const fetch = require('node-fetch');
+const { resolvePlcDirectory } = require('../../utils/atproto-plc-directory-policy');
 const { MoleculerError } = require('moleculer').Errors;
 
 const TRANSIENT_NETWORK_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'ENOTFOUND', 'ETIMEDOUT']);
@@ -8,7 +9,7 @@ module.exports = {
   name: 'atproto-verification',
 
   settings: {
-    plcDirectoryUrl: process.env.ATPROTO_PLC_DIRECTORY_URL || 'https://plc.directory',
+    plcDirectoryUrl: resolvePlcDirectory(),
     requestTimeoutMs: Math.max(1_000, Math.min(Number(process.env.ATPROTO_VERIFICATION_TIMEOUT_MS) || 5_000, 15_000)),
     maxAttempts: Math.max(1, Math.min(Number(process.env.ATPROTO_VERIFICATION_MAX_ATTEMPTS) || 5, 5)),
     baseRetryDelayMs: Math.max(100, Math.min(Number(process.env.ATPROTO_VERIFICATION_BASE_DELAY_MS) || 250, 2_000)),

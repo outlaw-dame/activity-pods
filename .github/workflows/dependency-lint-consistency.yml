@@ -34,6 +34,8 @@ jobs:
           npm install --prefix pod-provider/docker/domain-guard --ignore-scripts --package-lock=false --no-audit --no-fund
       - name: Lint repository
         run: npm run lint -- --quiet
+      - name: Test PLC submission readback and local directory consistency
+        run: node --test pod-provider/backend/tests/atproto-plc-submission-node.test.cjs
       - name: Test repaired runtime paths and owner authorization
         run: >-
           tests/node_modules/.bin/jest --runInBand --silent --testEnvironment=node

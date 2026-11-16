@@ -1,0 +1,63 @@
+name: Local signed PLC registration
+
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/services/core/atproto-plc-*.js'
+      - 'pod-provider/backend/utils/atproto-plc-*.js'
+      - 'pod-provider/backend/scripts/proof-local-plc-signup.mjs'
+      - 'pod-provider/backend/tests/atproto-plc-submission-node.test.cjs'
+      - '.github/workflows/local-plc-signup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference-directory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+        env:
+          POSTGRES_USER: paper_local_plc
+          POSTGRES_PASSWORD: disposable_ci_only
+          POSTGRES_DB: paper_local_plc
+        ports:
+          - 5549:5432
+        options: >-
+          --health-cmd "pg_isready -U paper_local_plc -d paper_local_plc"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked provider dependencies without lifecycle scripts
+        run: npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Test network failure and configuration cases
+        run: node --test pod-provider/backend/tests/atproto-plc-submission-node.test.cjs
+      - name: Checkout pinned reference directory
+        uses: actions/checkout@v4
+        with:
+          repository: did-method-plc/did-method-plc
+          ref: 29f1a70ee9f6f80a25946cac103b2f745e371334
+          path: .local-plc-reference
+          persist-credentials: false
+      - name: Build integrity-locked reference directory
+        working-directory: .local-plc-reference
+        run: |
+          npx --yes pnpm@11.11.0 install --frozen-lockfile --ignore-scripts --filter @did-plc/server...
+          npx --yes pnpm@11.11.0 exec tsc --build packages/server/tsconfig.build.json
+      - name: Verify real signed genesis, duplicate prevention and directory restart
+        env:
+          NODE_ENV: test
+          PAPER_LOCAL_PLC_DISPOSABLE: confirmed
+          PAPER_LOCAL_PLC_REFERENCE: ${{ github.workspace }}/.local-plc-reference
+          PAPER_LOCAL_PLC_CONFIG: ${{ runner.temp }}/local-plc.json
+        run: |
+          node -e 'require("fs").writeFileSync(process.env.PAPER_LOCAL_PLC_CONFIG, JSON.stringify({databaseUrl:"postgres://paper_local_plc:disposable_ci_only@127.0.0.1:5549/paper_local_plc"}), {mode:0o600})'
+          node pod-provider/backend/scripts/proof-local-plc-signup.mjs

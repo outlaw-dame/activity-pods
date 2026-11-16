@@ -16,7 +16,8 @@
 const Redis = require('ioredis');
 const { MoleculerError } = require('moleculer').Errors;
 
-const DEFAULT_PLC_DIRECTORY_URL = 'https://plc.directory';
+const { resolvePlcDirectory } = require('../../utils/atproto-plc-directory-policy');
+const { submitPlcGenesis } = require('../../utils/atproto-plc-submission');
 const DEFAULT_REDIS_URL = process.env.SEMAPPS_REDIS_CACHE_URL || process.env.REDIS_URL || 'redis://localhost:6379';
 const TRUNCATED_ERROR_BODY_BYTES = 256;
 
@@ -28,7 +29,7 @@ module.exports = {
   settings: {
     enabled: process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION === 'true',
     redisUrl: DEFAULT_REDIS_URL,
-    plcDirectoryUrl: normalizeBaseUrl(process.env.APODS_ATPROTO_PLC_DIRECTORY_URL || DEFAULT_PLC_DIRECTORY_URL),
+    plcDirectoryUrl: resolvePlcDirectory(),
     httpTimeoutMs: clampInt(process.env.APODS_ATPROTO_PLC_HTTP_TIMEOUT_MS, 10000, 1000, 120000),
     maxAttempts: clampInt(process.env.APODS_ATPROTO_PLC_MAX_ATTEMPTS, 12, 1, 50),
     baseDelayMs: clampInt(process.env.APODS_ATPROTO_PLC_BASE_DELAY_MS, 1000, 100, 60000),
@@ -256,12 +257,19 @@ module.exports = {
 
     async _loadJson(key) {
       const raw = await this.redis.get(key);
-      if (!raw) return null;
+      if (raw === null) return null;
       try {
-        return JSON.parse(raw);
+        const state = JSON.parse(raw);
+        if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error();
+        return state;
       } catch (_) {
-        await this.redis.del(key).catch(() => {});
-        return null;
+        // Corrupt state is an uncertain identity outcome, not an absent
+        // reservation. Keep it for reconciliation instead of allowing another
+        // operation to be enqueued under the same account.
+        throw new MoleculerError(
+          'PLC submission state requires reconciliation',
+          503, 'ATPROTO_PLC_STATE_CORRUPT', { retryable: false }
+        );
       }
     },
 
@@ -353,39 +361,12 @@ module.exports = {
     },
 
     async _attemptSubmission(state) {
-      const url = `${this.settings.plcDirectoryUrl}/${state.did}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.settings.httpTimeoutMs);
-      timeout.unref?.();
-
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify(state.signedOp),
-          signal: controller.signal
-        });
-
-        if (res.status >= 200 && res.status < 300) {
-          return { kind: 'confirmed' };
-        }
-        if (res.status === 409) {
-          return { kind: 'confirmed' };
-        }
-        const body = await safeResponseBody(res);
-        const error = `HTTP ${res.status}: ${body}`;
-        if (res.status === 429 || res.status >= 500) {
-          return { kind: 'retry', error };
-        }
-        return { kind: 'failed', error };
-      } catch (err) {
-        return { kind: 'retry', error: sanitizeError(err) };
-      } finally {
-        clearTimeout(timeout);
-      }
+      return submitPlcGenesis({
+        directory: this.settings.plcDirectoryUrl,
+        did: state.did,
+        signedOp: state.signedOp,
+        timeoutMs: this.settings.httpTimeoutMs
+      });
     },
 
     _decorrelatedJitter(previousDelayMs) {
@@ -428,14 +409,6 @@ module.exports = {
   }
 };
 
-async function safeResponseBody(res) {
-  try {
-    return redactSensitiveText(await res.text()).slice(0, TRUNCATED_ERROR_BODY_BYTES);
-  } catch (_) {
-    return '<unreadable response body>';
-  }
-}
-
 function sanitizeError(err) {
   if (!err) return 'unknown error';
   if (err.name === 'AbortError') return 'request timed out';
@@ -457,16 +430,6 @@ function redactState(state) {
     ...rest,
     signedOpPresent: Boolean(signedOp)
   };
-}
-
-function normalizeBaseUrl(rawUrl) {
-  if (!rawUrl) return DEFAULT_PLC_DIRECTORY_URL;
-  try {
-    const url = new URL(rawUrl);
-    return url.toString().replace(/\/+$/, '');
-  } catch (_) {
-    throw new Error(`Invalid APODS_ATPROTO_PLC_DIRECTORY_URL: ${rawUrl}`);
-  }
 }
 
 function clampInt(value, fallback, min, max) {

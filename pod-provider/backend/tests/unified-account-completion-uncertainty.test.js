@@ -19,6 +19,46 @@ describe('unified account completion is fail-closed after side effects', () => {
       else process.env.NODE_ENV=oldNodeEnv;
     }
   });
+  it('does not inherit untrusted HTTP metadata in the internal signup RPC and acknowledges only after completion', async () => {
+    const create = jest.fn(async () => ({ canonicalAccountId: 'https://pods.example/alice' }));
+    const complete = jest.fn(async () => ({ ok: true, stored: true }));
+    const broker = new ServiceBroker({ logger: false });
+    broker.createService({ name: 'api', actions: { addRoute: () => true } });
+    broker.createService({ name: 'provider-capabilities', actions: {
+      reserveAccountProvisioning: () => ({
+        allowed: true, capabilityId: 'provider.account.provisioning',
+        idempotencyKey: 'durable-key',
+        idempotency: { key: 'durable-key', state: 'reserved', replay: false }
+      }),
+      completeAccountProvisioning: complete
+    } });
+    broker.createService({ name: 'unified-account', actions: { create } });
+    broker.createService(api);
+    await broker.start();
+    try {
+      const requestMeta = {
+        $headers: { authorization: 'Bearer should-not-propagate' },
+        forgedAccountOwner: 'https://attacker.example/owner',
+        accountProvisioning: { allowed: true, forged: true }
+      };
+      const result = await broker.call('unified-account-api.create', {
+        appClientId: 'https://client.example', username: 'alice',
+        password: 'example-password'
+      }, { meta: requestMeta });
+      expect(result).toEqual({ canonicalAccountId: 'https://pods.example/alice' });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create.mock.calls[0][0].meta).toEqual({
+        accountProvisioning: expect.objectContaining({
+          allowed: true, idempotencyKey: 'durable-key'
+        })
+      });
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(complete.mock.calls[0][0].params.statusCode).toBe(201);
+    } finally {
+      await broker.stop();
+    }
+  });
+
   it('never returns HTTP 201 or releases an idempotency reservation when completion storage fails', async () => {
     const failProvisioning = jest.fn(async () => ({ ok: true }));
     const begin = jest.fn(async () => ({ canonicalAccountId: 'https://pods.example/alice' }));

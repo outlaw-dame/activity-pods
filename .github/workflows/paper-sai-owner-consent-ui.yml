@@ -3,6 +3,8 @@ name: ActivityPods native SAI owner-consent UI
 on:
   pull_request:
     paths:
+      - 'pod-provider/frontend/src/pages/LoginPage.js'
+      - 'pod-provider/frontend/src/pages/loginNavigationPolicy*'
       - 'pod-provider/frontend/src/pages/AuthorizePage/**'
       - 'pod-provider/frontend/src/hooks/useGetAppStatus.js'
       - 'pod-provider/frontend/src/config/messages/en.js'
@@ -11,6 +13,8 @@ on:
   push:
     branches: [master]
     paths:
+      - 'pod-provider/frontend/src/pages/LoginPage.js'
+      - 'pod-provider/frontend/src/pages/loginNavigationPolicy*'
       - 'pod-provider/frontend/src/pages/AuthorizePage/**'
       - 'pod-provider/frontend/src/config/messages/en.js'
       - 'pod-provider/frontend/src/config/messages/fr.js'
@@ -41,6 +45,7 @@ jobs:
           node --check pod-provider/frontend/src/pages/AuthorizePage/consentPolicy.mjs
           node --test pod-provider/frontend/src/pages/AuthorizePage/consentPolicy.test.mjs
           node --test pod-provider/frontend/src/pages/AuthorizePage/authorizationNavigationPolicy.test.mjs
+          node --test pod-provider/frontend/src/pages/loginNavigationPolicy.test.mjs
 
       - name: Install pinned lightweight JSX syntax parser
         run: |

@@ -188,6 +188,7 @@ function installFusekiHttpProbe({ storage, fusekiUrls = [] }) {
     if (transport[PATCH_MARKER]) continue;
     const originalRequest = transport.request;
 
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     function instrumentedRequest(...args) {
       const trace = storage.getStore();
       const target = getRequestTarget(args, transport === https ? 'https' : 'http');

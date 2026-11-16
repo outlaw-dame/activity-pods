@@ -30,6 +30,7 @@ function allowedOrigin(origin, client, { allowLocalhost = false } = {}) {
     // never contain whitespace, controls or backslashes that URL() would
     // silently normalize into a different security-relevant input.
     if (typeof raw !== 'string' || raw.length > 2048 ||
+        // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
         /[\u0000-\u0020\u007f\\]/u.test(raw)) return false;
     let redirect;
     try { redirect = new URL(raw); } catch { return false; }

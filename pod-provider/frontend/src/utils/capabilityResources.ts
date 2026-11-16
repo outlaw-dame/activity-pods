@@ -1,15 +1,15 @@
 type JsonLdResourceRef = string | { id?: unknown; '@id'?: unknown } | null | undefined;
 
-type CapabilityAuthorization = {
+interface CapabilityAuthorization {
   'acl:accessTo'?: JsonLdResourceRef | JsonLdResourceRef[];
   [key: string]: unknown;
-};
+}
 
-type CapabilityWithAuthorizations = {
+interface CapabilityWithAuthorizations {
   credentialSubject?: {
     'apods:hasAuthorization'?: CapabilityAuthorization | CapabilityAuthorization[];
   };
-};
+}
 
 const arrayOf = <T>(value: T | T[] | null | undefined): T[] => {
   if (value === null || value === undefined) return [];

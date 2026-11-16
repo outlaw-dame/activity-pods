@@ -8,7 +8,7 @@ const HASHTAG_REQUIRES_LETTER_RE = /[\p{L}\p{M}]/u;
 
 const PUBLIC_HASHTAG_TYPE = 'Hashtag';
 const HASHTAG_LINK_SCAN_RE =
-  /(^|[^\p{L}\p{M}\p{N}\p{Pc}\u00B7\u30FB\u200C&;\/])[#＃]([\p{L}\p{M}\p{N}\p{Pc}\u00B7\u30FB\u200C]+)/gu;
+  /(^|[^\p{L}\p{M}\p{N}\p{Pc}\u00B7\u30FB\u200C&;/])[#＃]([\p{L}\p{M}\p{N}\p{Pc}\u00B7\u30FB\u200C]+)/gu;
 
 const toArray = value => (Array.isArray(value) ? value : value ? [value] : []);
 

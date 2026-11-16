@@ -106,7 +106,7 @@ async function main() {
       await held.query('COMMIT');
       assert.deepEqual(await revokePromise,{consentRevision:2,replay:false,granted:false});
     } finally {
-      try { await held.query('ROLLBACK'); } catch (_) {}
+      try { await held.query('ROLLBACK'); } catch (_) { /* Best-effort cleanup or optional parsing; caller handles the fallback. */ }
       held.release();
     }
     assert.deepEqual(await execute('revokeConsent',{

@@ -8,6 +8,7 @@ const { normalizePollActivity, getActivityObject, isQuestion, isVoteNote } = req
 const AUDIENCE_MEMBERSHIP_MAX_ITEMS = 500;
 const AUDIENCE_MEMBERSHIP_VALUES_MAX_CHARS = 64 * 1024;
 const MAX_HTTP_URI_LENGTH = 4096;
+// eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
 const INVALID_SPARQL_IRIREF_CHARS = /[\u0000-\u0020<>"{}|^`\\]/u;
 
 const asArray = value => (Array.isArray(value) ? value : value == null ? [] : [value]);

@@ -132,6 +132,7 @@ async function main() {
           'Alternative changed actors, roles, order or epoch at ' + name);
       }
     }
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     function record(variant) {
       const samples = durations[variant];
       return {

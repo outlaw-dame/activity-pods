@@ -469,6 +469,7 @@ module.exports = {
       }
 
       const normalized = value
+        // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
         .replace(/[\u0000-\u001F\u007F]/g, '')
         .trim()
         .toLowerCase();

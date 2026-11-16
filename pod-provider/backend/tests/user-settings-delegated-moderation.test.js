@@ -870,7 +870,6 @@ describe('delegated-moderation-api', () => {
     test('removeAppModerationPreference uses resourceUri from query params as fallback', async () => {
       const service = createService();
       const ctx = createCtx({
-        meta: { webId: 'https://pod.example/users/alice#me', impersonatedUser: undefined },
         params: { resourceUri: undefined },
         meta: {
           webId: 'https://pod.example/users/alice#me',

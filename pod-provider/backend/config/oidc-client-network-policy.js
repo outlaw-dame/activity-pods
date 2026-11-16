@@ -40,6 +40,7 @@ function isAllowedAddress(address, family, hostname) {
   return !blocked.check(address, family === 6 ? 'ipv6' : 'ipv4');
 }
 function safeUri(raw) {
+  // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
   if (typeof raw !== 'string' || raw.length > 2048 || /[\u0000-\u0020\u007f\\]/u.test(raw)) {
     throw new Error('Invalid Solid-OIDC Client ID URL');
   }

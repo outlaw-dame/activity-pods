@@ -147,7 +147,6 @@ class RedisAdapter {
         }
 
         // `token_endpoint_auth_method: 'none'` prevents oidc-provider from requiring a client_secret
-        // eslint-disable-next-line ts/naming-convention
         return { ...json, token_endpoint_auth_method: 'none' };
       } else {
         return undefined;

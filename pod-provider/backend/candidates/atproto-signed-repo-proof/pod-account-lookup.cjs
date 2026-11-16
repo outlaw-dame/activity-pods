@@ -17,6 +17,7 @@ function reject() {
 }
 function webId(value) {
   if (typeof value !== 'string' || value.length > 2048 ||
+      // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
       /[\u0000-\u0020\u007f\\<>"{}]/u.test(value)) reject();
   let url;
   try { url = new URL(value); } catch { reject(); }

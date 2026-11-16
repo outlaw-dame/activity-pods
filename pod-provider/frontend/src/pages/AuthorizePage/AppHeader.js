@@ -1,5 +1,6 @@
 import React from 'react';
-import { useLocaleState } from 'react-admin';
+import { useLocaleState, useTranslate } from 'react-admin';
+import DoneIcon from '@mui/icons-material/Done';
 import { Typography, Box, Chip } from '@mui/material';
 import makeStyles from '@mui/styles/makeStyles';
 import { getLangString } from '../../utils';
@@ -38,6 +39,7 @@ const useStyles = makeStyles(() => ({
 
 const AppHeader = ({ application, isTrustedApp }) => {
   const classes = useStyles();
+  const translate = useTranslate();
   const [locale] = useLocaleState();
 
   return (

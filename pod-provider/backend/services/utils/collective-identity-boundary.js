@@ -33,6 +33,7 @@ function fail(code) {
  */
 function publicUrl(value, code) {
   if (typeof value !== 'string' || value.length < 9 || value.length > 2048 ||
+      // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
       /[\u0000-\u0020\u007f\\]/.test(value)) fail(code);
   let url;
   try {
@@ -52,6 +53,7 @@ function assertSameProvider(url, provider) {
 
 function nonEmpty(value, code, max = 256) {
   if (typeof value !== 'string' || value.length === 0 || value.length > max ||
+      // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
       value !== value.trim() || /[\u0000-\u001f\u007f]/.test(value)) fail(code);
   return value;
 }
@@ -65,6 +67,7 @@ function nonEmpty(value, code, max = 256) {
 function validatePublicCollectiveActor(record, { providerOrigin, expectedActorUri } = {}) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) fail('GROUP_NOT_FOUND');
   if (typeof providerOrigin !== 'string' || providerOrigin.length > 256 ||
+      // eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
       /[\u0000-\u0020\u007f\\]/.test(providerOrigin)) fail('GROUP_INVALID_PROVIDER');
   let provider;
   try {

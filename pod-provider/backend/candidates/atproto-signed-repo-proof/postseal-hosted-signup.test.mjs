@@ -656,6 +656,6 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
       catch(e){cleanupError=e;}
     }
     await pool.end();
-    if(cleanupError)throw cleanupError;
   }
+  if(cleanupError)throw cleanupError;
 });

@@ -76,7 +76,7 @@ module.exports = {
           'Referrer-Policy': 'strict-origin-when-cross-origin',
           'X-Content-Type-Options': 'nosniff',
           'X-Frame-Options': 'DENY',
-          Link: `<${objectUri}>; rel=\"alternate\"; type=\"application/activity+json\"`
+          Link: `<${objectUri}>; rel="alternate"; type="application/activity+json"`
         };
 
         return html;

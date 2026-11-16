@@ -64,6 +64,7 @@ test('native signed-event outbox claims are fenced, ordered and at least once',a
       pool,fixtureOnly:true,authorize:async()=>true
     });
     const keys=new Map();
+    // eslint-disable-next-line no-inner-declarations -- Block-scoped functions are supported by the required modern Node runtime.
     async function newAccount(name) {
       const details=keypair();
       keys.set(did(name),details.publicKeyPem);

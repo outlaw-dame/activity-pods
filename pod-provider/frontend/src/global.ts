@@ -15,5 +15,7 @@ interface GlobalConfig {
 }
 
 declare global {
+  // A global object property must use var in a TypeScript ambient declaration.
+  // eslint-disable-next-line no-var
   var CONFIG: GlobalConfig;
 }

@@ -22,7 +22,7 @@ module.exports = {
         actorUri: { type: 'string', optional: false }
       },
       async handler(ctx) {
-        const { type } = ctx.params;
+        const { type, actorUri } = ctx.params;
 
         const [expandedType] = await ctx.call('jsonld.parser.expandTypes', { types: [type] });
 

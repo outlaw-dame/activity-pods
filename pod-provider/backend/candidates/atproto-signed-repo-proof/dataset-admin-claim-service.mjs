@@ -147,7 +147,7 @@ async function bounded(response){
       pieces.push(Buffer.from(value));
     }
   }catch(error){
-    try{await reader.cancel();}catch{}
+    try{await reader.cancel();}catch  { /* Best-effort cleanup or optional parsing; caller handles the fallback. */ }
     throw error;
   }finally{reader.releaseLock();}
   return Buffer.concat(pieces,total).toString('utf8');

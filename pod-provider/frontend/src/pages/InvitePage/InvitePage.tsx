@@ -1,6 +1,6 @@
-import React, { useDataProvider, useGetIdentity, useNotify, useTranslate } from 'react-admin';
+import { useDataProvider, useGetIdentity, useNotify, useTranslate } from 'react-admin';
 import { useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ACTIVITY_TYPES, OBJECT_TYPES, useOutbox } from '@semapps/activitypub-components';
 import { Box, CircularProgress } from '@mui/material';
 import InvitePageViewLoggedOut from './InvitePageViewLoggedOut';

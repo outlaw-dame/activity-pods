@@ -80,8 +80,6 @@ describe('Test app upgrade', () => {
       });
       if (accessNeedGroup['interop:accessNecessity'] === 'interop:AccessRequired') {
         requiredAccessNeedGroup = accessNeedGroup;
-      } else {
-        optionalAccessNeedGroup = accessNeedGroup;
       }
     }
     expect(requiredAccessNeedGroup).toMatchObject({

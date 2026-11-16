@@ -14,6 +14,7 @@ const APDM_INTENT_ID_PATTERN = /^apdm-v1-[a-f0-9]{64}$/u;
 const ACTIVITYSTREAMS_NAMESPACE = 'https://www.w3.org/ns/activitystreams#';
 const ADDRESSING_TERMS = new Set(['to', 'bto', 'cc', 'bcc', 'audience']);
 const PUBLIC_ADDRESSES = new Set([`${ACTIVITYSTREAMS_NAMESPACE}Public`, 'as:Public', 'Public']);
+// eslint-disable-next-line no-control-regex -- Deliberately match individual control or ignorable code points at this input boundary.
 const UNSAFE_TOKEN_PATTERN = /[\s\u0000-\u001f\u007f]/u;
 
 function isNonEmptyString(value) {

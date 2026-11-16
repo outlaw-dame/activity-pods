@@ -131,16 +131,18 @@ const ApplicationCard = ({ app, isTrustedApp, isRegistered }) => {
           />
         )
       )}
-      <a
+      <Button
+        component={isOffline ? 'button' : 'a'}
+        variant="contained"
+        color="secondary"
+        disabled={isOffline}
         href={isOffline ? undefined : app['oidc:client_uri']}
         target="_blank"
         rel="noopener noreferrer"
         className={classes.link}
       >
-        <Button variant="contained" color="secondary" disabled={isOffline}>
-          {translate('app.action.open_app')}
-        </Button>
-      </a>
+        {translate('app.action.open_app')}
+      </Button>
       {isRegistered && (
         <IconButton onClick={() => setOpenSettings(true)} aria-label={translate('app.action.app_settings')}>
           <SettingsIcon />

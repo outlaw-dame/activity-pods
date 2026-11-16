@@ -134,7 +134,7 @@ export function createAuthenticatedRecordWriteXrpc({
     const header=req.headers.authorization;
     const dpopProof=req.headers.dpop;
     if(typeof header!=='string'||
-       !/^DPoP [A-Za-z0-9._~+\/-]{20,8192}={0,2}$/u.test(header)||
+       !/^DPoP [A-Za-z0-9._~+/-]{20,8192}={0,2}$/u.test(header)||
        typeof dpopProof!=='string'||
        !/^[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}$/u.test(dpopProof)){
       deny('AuthRequired',401);

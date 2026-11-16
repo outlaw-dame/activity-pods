@@ -404,3 +404,21 @@ privileges on both tables and verifies that startup/preflight and request-time
 proofs reject each unauthorized grant, then recover without restarting after
 the grant is removed. No production signup, PDS, Solid-OIDC/SAI, or native
 storage release fuse is changed by this narrower credential gate.
+
+## November 15 — Entryway consent metadata versus browser authentication
+
+The internal Entryway app-bootstrap endpoint is a **read-only observation** of
+the already-persisted owner registration and SAI grants. It checks current
+provider signup authority and owner scope; it does not execute an OpenID
+Connect authorization code flow or establish a Solid-OIDC browser session.
+
+The endpoint no longer parses or echoes an application-configured
+`sessionHandoff` redirect, identifier or expiration. Such static metadata
+cannot be an authentic, one-time login result, even when the requested app and
+SAI grants are approved. Responses now contain only registration URI, grant
+URIs and observation timestamp. A dedicated authenticated Solid-OIDC
+authorization request/callback and CSRF/PKCE/state validation must be wired
+and tested independently before an actual session is reported.
+
+This hardening does not create new grants, change the canonical account
+authority, or authorize the production signup release fuse.

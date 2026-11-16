@@ -50,25 +50,9 @@ function parseApprovedApps(value) {
         entry.acceptedSpecialRight,
         ...asArray(entry.acceptedSpecialRights),
         ...asArray(entry.specialRights)
-      ]),
-      sessionHandoff:
-        entry.sessionHandoff && typeof entry.sessionHandoff === 'object'
-          ? normalizeSessionHandoff(entry.sessionHandoff)
-          : null
+      ])
     }))
     .filter(app => app.appClientId && app.appUri);
-}
-
-function normalizeSessionHandoff(value) {
-  const type = value.type === 'redirect' ? 'redirect' : value.type === 'handoff' ? 'handoff' : '';
-  if (!type) return null;
-
-  return {
-    type,
-    url: normalizeString(value.url) || undefined,
-    handoffId: normalizeString(value.handoffId) || undefined,
-    expiresAt: normalizeString(value.expiresAt) || undefined
-  };
 }
 
 function timingSafeEquals(a, b) {
@@ -304,8 +288,10 @@ module.exports = {
         return {
           appRegistrationUri,
           accessGrantUris: grantUris,
-          bootstrappedAt: new Date().toISOString(),
-          ...(appConfig.sessionHandoff ? { sessionHandoff: appConfig.sessionHandoff } : {})
+          // Consent metadata is not an OIDC authentication result. Never
+          // return a configured, reusable redirect/handoff identifier as if
+          // the owner's browser had completed Solid-OIDC.
+          bootstrappedAt: new Date().toISOString()
         };
       }
     }

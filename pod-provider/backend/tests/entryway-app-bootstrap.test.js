@@ -138,6 +138,32 @@ describe('entryway-app-bootstrap-api service', () => {
     expect(createOrUpdateCalls).toEqual([]);
   });
 
+
+  test('does not convert static app configuration into a browser authentication handoff', async () => {
+    const service = broker.getLocalService('entryway-app-bootstrap-api');
+    // A stale deployment setting or direct service configuration must not
+    // imply that the owner has an authenticated Solid-OIDC browser session.
+    service.settings.approvedApps = [{
+      ...approvedApp,
+      sessionHandoff: {
+        type: 'redirect',
+        url: 'https://untrusted.example/claim-session',
+        handoffId: 'static-replayable-session',
+        expiresAt: '2099-01-01T00:00:00Z'
+      }
+    }];
+    const result = await broker.call('entryway-app-bootstrap-api.bootstrap', bootstrapPayload(), {
+      meta: { $headers: { authorization: 'Bearer provider-internal-token' } }
+    });
+    expect(Object.keys(result).sort()).toEqual([
+      'accessGrantUris', 'appRegistrationUri', 'bootstrappedAt'
+    ]);
+    expect(result).not.toHaveProperty('sessionHandoff');
+    expect(result).not.toHaveProperty('accessToken');
+    expect(result).not.toHaveProperty('idToken');
+    expect(createOrUpdateCalls).toEqual([]);
+  });
+
   function installPgProof(results = [{}]) {
     providerService.idempotencyRecords.clear();
     const base = {

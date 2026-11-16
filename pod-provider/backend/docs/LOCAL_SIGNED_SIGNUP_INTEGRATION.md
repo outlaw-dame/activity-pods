@@ -28,20 +28,26 @@ Corrupt persisted JSON is retained and fails closed instead of being deleted and
 mistaken for an available account name.
 
 The local acceptance script uses the actual provider PLC builder and submission
-helper with ephemeral real secp256k1 signing keys and the independently validating
+helper, actual provider signing handlers, ephemeral real secp256k1 keys, and the independently validating
 reference directory pinned at `29f1a70ee9f6f80a25946cac103b2f745e371334`:
 https://github.com/did-method-plc/did-method-plc/tree/29f1a70ee9f6f80a25946cac103b2f745e371334
 
 The reference directory stores operations in real PostgreSQL. Acceptance covers
 invalid signature rejection, signed registration, exact replay without duplicate
 operations, DID document signing-key resolution, and directory-process restart
-against the retained database. It does not test PostgreSQL-server restart.
+against the retained database. The same DID and provider signing handlers also
+create a cryptographically verified PostgreSQL repository with signed CAR and
+outbox; replay retains the original head. Unauthorized key access and signing
+for a different DID are rejected. It does not test PostgreSQL-server restart.
+The key and identity-binding storage used by this harness remains a fixture;
+it does not prove real Pod key custody or complete signup.
 The test HTTP listener binds only to 127.0.0.1; no public PLC writes or email occur.
 
 Run `node --test pod-provider/backend/tests/atproto-plc-submission-node.test.cjs`
 for HTTP failure and configuration coverage. `.github/workflows/local-plc-signup.yml`
 reproduces real reference-directory acceptance. Its script requires explicit local
-disposable markers, a pinned reference checkout, and private JSON containing a
+`NODE_ENV=test`, `PAPER_LOCAL_PLC_DISPOSABLE=confirmed`,
+`ATPROTO_REPO_PROOF_DISPOSABLE=confirmed`, a pinned reference checkout, and private JSON containing a
 `databaseUrl` for `paper_local_plc` on 127.0.0.1:5549. It never clears an existing
 database; each run creates a new ephemeral-key test identity.
 

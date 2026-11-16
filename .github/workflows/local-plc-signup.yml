@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/services/core/atproto-plc-*.js'
+      - 'pod-provider/backend/services/signing.service.js'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
       - 'pod-provider/backend/utils/atproto-plc-*.js'
       - 'pod-provider/backend/scripts/proof-local-plc-signup.mjs'
       - 'pod-provider/backend/tests/atproto-plc-submission-node.test.cjs'
@@ -37,7 +39,9 @@ jobs:
         with:
           node-version: '22'
       - name: Install locked provider dependencies without lifecycle scripts
-        run: npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+        run: |
+          npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+          npm ci --prefix pod-provider/backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
       - name: Test network failure and configuration cases
         run: node --test pod-provider/backend/tests/atproto-plc-submission-node.test.cjs
       - name: Checkout pinned reference directory
@@ -58,6 +62,7 @@ jobs:
         env:
           NODE_ENV: test
           PAPER_LOCAL_PLC_DISPOSABLE: confirmed
+          ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
           PAPER_LOCAL_PLC_REFERENCE: ${{ github.workspace }}/.local-plc-reference
           PAPER_LOCAL_PLC_CONFIG: ${{ runner.temp }}/local-plc.json
         run: |

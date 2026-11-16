@@ -16,7 +16,8 @@
 const Redis = require('ioredis');
 const { MoleculerError } = require('moleculer').Errors;
 
-const DEFAULT_PLC_DIRECTORY_URL = 'https://plc.directory';
+const { resolvePlcDirectory } = require('../../utils/atproto-plc-directory-policy');
+const { submitPlcGenesis } = require('../../utils/atproto-plc-submission');
 const DEFAULT_REDIS_URL = process.env.SEMAPPS_REDIS_CACHE_URL || process.env.REDIS_URL || 'redis://localhost:6379';
 const TRUNCATED_ERROR_BODY_BYTES = 256;
 
@@ -28,7 +29,7 @@ module.exports = {
   settings: {
     enabled: process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION === 'true',
     redisUrl: DEFAULT_REDIS_URL,
-    plcDirectoryUrl: normalizeBaseUrl(process.env.APODS_ATPROTO_PLC_DIRECTORY_URL || DEFAULT_PLC_DIRECTORY_URL),
+    plcDirectoryUrl: resolvePlcDirectory(),
     httpTimeoutMs: clampInt(process.env.APODS_ATPROTO_PLC_HTTP_TIMEOUT_MS, 10000, 1000, 120000),
     maxAttempts: clampInt(process.env.APODS_ATPROTO_PLC_MAX_ATTEMPTS, 12, 1, 50),
     baseDelayMs: clampInt(process.env.APODS_ATPROTO_PLC_BASE_DELAY_MS, 1000, 100, 60000),
@@ -90,11 +91,17 @@ module.exports = {
         this._assertEnabled();
         const { canonicalAccountId, did, signedOp } = ctx.params;
 
-        if (
-          (await this.redis.exists(this._confirmedKey(did))) ||
-          (await this.redis.exists(this._confirmedAccountKey(canonicalAccountId)))
-        ) {
+        const confirmed = await this._loadJson(this._confirmedAccountKey(canonicalAccountId));
+        if (confirmed) {
+          if (confirmed.did !== did || confirmed.canonicalAccountId !== canonicalAccountId) {
+            throw new MoleculerError('Confirmed PLC identity differs from requested operation',
+              409, 'ATPROTO_PLC_CONFIRMED_IDENTITY_MISMATCH', { retryable: false });
+          }
           return { enqueued: false, alreadyConfirmed: true, alreadyPending: false, did };
+        }
+        if (await this.redis.exists(this._confirmedKey(did))) {
+          throw new MoleculerError('PLC identity confirmation requires account reconciliation',
+            409, 'ATPROTO_PLC_CONFIRMED_IDENTITY_MISMATCH', { retryable: false });
         }
 
         const existingFailed = await this._loadJson(this._failedKey(canonicalAccountId));
@@ -176,6 +183,30 @@ module.exports = {
       },
       async handler(ctx) {
         this._assertEnabled();
+        // ECDSA signing may produce different genesis bytes on each call.
+        // Preserve the queued operation/DID before attempting another signing
+        // RPC, including after a lost submission acknowledgment.
+        const pending = await this._loadJson(this._pendingKey(ctx.params.canonicalAccountId));
+        if (pending) {
+          const op = pending.signedOp;
+          if (pending.canonicalAccountId !== ctx.params.canonicalAccountId ||
+              op?.type !== 'plc_operation' || op.prev !== null ||
+              typeof op.sig !== 'string' || !op.sig ||
+              !/^did:plc:[a-z2-7]{24}$/.test(pending.did || '') ||
+              op.alsoKnownAs?.length !== 1 || op.alsoKnownAs[0] !== `at://${ctx.params.handle}` ||
+              op.services?.atproto_pds?.endpoint !== ctx.params.pdsEndpoint.replace(/\/+$/, '')) {
+            throw new MoleculerError('Pending PLC identity differs from requested operation',
+              409, 'ATPROTO_PLC_PENDING_INTENT_MISMATCH', { retryable: false });
+          }
+          const encoded = await ctx.call('atproto-plc-builder.encodeCanonicalCbor', { value: op });
+          return { enqueued: false, alreadyConfirmed: false, alreadyPending: true,
+            did: pending.did, signedOpCborBase64: encoded };
+        }
+        if (await this._loadJson(this._confirmedAccountKey(ctx.params.canonicalAccountId)) ||
+            await this._loadJson(this._failedKey(ctx.params.canonicalAccountId))) {
+          throw new MoleculerError('Existing PLC identity requires reconciliation before rebuilding',
+            409, 'ATPROTO_PLC_EXISTING_IDENTITY_REBUILD_REFUSED', { retryable: false });
+        }
         const built = await ctx.call('atproto-plc-builder.buildAndSign', ctx.params);
         const result = await ctx.call('atproto-plc-submitter.enqueue', {
           canonicalAccountId: ctx.params.canonicalAccountId,
@@ -256,12 +287,19 @@ module.exports = {
 
     async _loadJson(key) {
       const raw = await this.redis.get(key);
-      if (!raw) return null;
+      if (raw === null) return null;
       try {
-        return JSON.parse(raw);
+        const state = JSON.parse(raw);
+        if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error();
+        return state;
       } catch (_) {
-        await this.redis.del(key).catch(() => {});
-        return null;
+        // Corrupt state is an uncertain identity outcome, not an absent
+        // reservation. Keep it for reconciliation instead of allowing another
+        // operation to be enqueued under the same account.
+        throw new MoleculerError(
+          'PLC submission state requires reconciliation',
+          503, 'ATPROTO_PLC_STATE_CORRUPT', { retryable: false }
+        );
       }
     },
 
@@ -353,39 +391,12 @@ module.exports = {
     },
 
     async _attemptSubmission(state) {
-      const url = `${this.settings.plcDirectoryUrl}/${state.did}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.settings.httpTimeoutMs);
-      timeout.unref?.();
-
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json'
-          },
-          body: JSON.stringify(state.signedOp),
-          signal: controller.signal
-        });
-
-        if (res.status >= 200 && res.status < 300) {
-          return { kind: 'confirmed' };
-        }
-        if (res.status === 409) {
-          return { kind: 'confirmed' };
-        }
-        const body = await safeResponseBody(res);
-        const error = `HTTP ${res.status}: ${body}`;
-        if (res.status === 429 || res.status >= 500) {
-          return { kind: 'retry', error };
-        }
-        return { kind: 'failed', error };
-      } catch (err) {
-        return { kind: 'retry', error: sanitizeError(err) };
-      } finally {
-        clearTimeout(timeout);
-      }
+      return submitPlcGenesis({
+        directory: this.settings.plcDirectoryUrl,
+        did: state.did,
+        signedOp: state.signedOp,
+        timeoutMs: this.settings.httpTimeoutMs
+      });
     },
 
     _decorrelatedJitter(previousDelayMs) {
@@ -428,14 +439,6 @@ module.exports = {
   }
 };
 
-async function safeResponseBody(res) {
-  try {
-    return redactSensitiveText(await res.text()).slice(0, TRUNCATED_ERROR_BODY_BYTES);
-  } catch (_) {
-    return '<unreadable response body>';
-  }
-}
-
 function sanitizeError(err) {
   if (!err) return 'unknown error';
   if (err.name === 'AbortError') return 'request timed out';
@@ -457,16 +460,6 @@ function redactState(state) {
     ...rest,
     signedOpPresent: Boolean(signedOp)
   };
-}
-
-function normalizeBaseUrl(rawUrl) {
-  if (!rawUrl) return DEFAULT_PLC_DIRECTORY_URL;
-  try {
-    const url = new URL(rawUrl);
-    return url.toString().replace(/\/+$/, '');
-  } catch (_) {
-    throw new Error(`Invalid APODS_ATPROTO_PLC_DIRECTORY_URL: ${rawUrl}`);
-  }
 }
 
 function clampInt(value, fallback, min, max) {

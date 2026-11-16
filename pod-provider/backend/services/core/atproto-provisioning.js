@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { resolvePlcDirectory, allowMockAtprotoIdentity } = require('../../utils/atproto-plc-directory-policy');
 const { MoleculerError } = require('moleculer').Errors;
 const { requireVerifiedManagedRepoProof } = require('../../utils/atproto-managed-repo-proof-policy');
 
@@ -67,12 +68,12 @@ module.exports = {
     // applied uniformly across all locally provisioned accounts.
     localPdsBaseUrl: process.env.APODS_ATPROTO_LOCAL_PDS_BASE_URL || '',
     handleDomain: process.env.APODS_ATPROTO_HANDLE_DOMAIN || '',
-    plcDirectoryUrl: process.env.APODS_ATPROTO_PLC_DIRECTORY_URL || 'https://plc.directory',
+    plcDirectoryUrl: resolvePlcDirectory(),
     // Allow mock-mode DID creation (sha256-derived did:plc, did:web with
     // dev-only TLDs). MUST be false in production environments where DIDs
     // need to be resolvable on plc.directory or via real DNS+HTTPS.
     allowMockAtprotoIdentity:
-      process.env.APODS_ATPROTO_ALLOW_MOCK_IDENTITY === 'true' || process.env.NODE_ENV !== 'production',
+      allowMockAtprotoIdentity(),
     plcSubmissionEnabled: process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION === 'true'
   },
 

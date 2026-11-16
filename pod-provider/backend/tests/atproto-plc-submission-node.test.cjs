@@ -6,6 +6,36 @@ const { test } = require('node:test');
 const { resolvePlcDirectory, allowMockAtprotoIdentity } = require('../utils/atproto-plc-directory-policy');
 const { submitPlcGenesis } = require('../utils/atproto-plc-submission');
 
+test('retry reuses the queued signed genesis without signing again; changed intents are refused', async () => {
+  const schema = require('../services/core/atproto-plc-submitter.service');
+  const account = 'https://provider.example.org/alice';
+  const pending = { canonicalAccountId: account, did: 'did:plc:' + 'a'.repeat(24),
+    signedOp: { type: 'plc_operation', prev: null, sig: 'persisted-signature',
+      alsoKnownAs: ['at://alice.example.org'], services: { atproto_pds: { endpoint: 'https://pds.example.org' } } } };
+  const service = { ...schema.methods, settings: { enabled: true, keyPrefix: 'test:' },
+    redis: { get: async key => key.includes('pending:') ? JSON.stringify(pending) : null } };
+  let calls = 0;
+  const ctx = { params: { canonicalAccountId: account, handle: 'alice.example.org', pdsEndpoint: 'https://pds.example.org/' },
+    call: async (action, params) => {
+      calls++;
+      assert.equal(action, 'atproto-plc-builder.encodeCanonicalCbor');
+      assert.deepEqual(params.value, pending.signedOp);
+      return 'existing-operation-cbor';
+    } };
+  const result = await schema.actions.buildAndEnqueue.handler.call(service, ctx);
+  assert.equal(result.did, pending.did);
+  assert.equal(result.alreadyPending, true);
+  assert.equal(calls, 1);
+  ctx.params.handle = 'mallory.example.org';
+  await assert.rejects(schema.actions.buildAndEnqueue.handler.call(service, ctx),
+    error => error.type === 'ATPROTO_PLC_PENDING_INTENT_MISMATCH');
+  assert.equal(calls, 1);
+  service.redis.get = async () => JSON.stringify({ canonicalAccountId: account, did: pending.did });
+  await assert.rejects(schema.actions.enqueue.handler.call(service, {
+    params: { canonicalAccountId: account, did: 'did:plc:' + 'b'.repeat(24), signedOp: pending.signedOp }
+  }), error => error.type === 'ATPROTO_PLC_CONFIRMED_IDENTITY_MISMATCH');
+});
+
 test('corrupt durable identity records are retained and cannot become a fresh signup', async () => {
   const schema = require('../services/core/atproto-plc-submitter.service');
   for (const raw of ['', '{broken', 'null', '[]', 'false', '"not an object"']) {

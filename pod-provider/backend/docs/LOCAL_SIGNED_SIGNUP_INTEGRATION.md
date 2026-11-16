@@ -20,6 +20,9 @@ matches the queued signed genesis, including its signature. The reference server
 uses HTTP 400 for duplicate genesis; 400/409 alone never mean success. Requests
 reject redirects, cap operation bodies at 16 KiB, and share one attempt deadline.
 The existing durable scheduler owns bounded retries of the same signed operation.
+Re-entering build-and-enqueue reuses matching pending signed bytes without another
+signing RPC. Changed intent, mismatched confirmed DID, and rebuilding a completed
+or failed identity are refused rather than silently creating a different genesis.
 Remote response bodies and network exception details are not persisted in errors.
 Corrupt persisted JSON is retained and fails closed instead of being deleted and
 mistaken for an available account name.

@@ -91,11 +91,17 @@ module.exports = {
         this._assertEnabled();
         const { canonicalAccountId, did, signedOp } = ctx.params;
 
-        if (
-          (await this.redis.exists(this._confirmedKey(did))) ||
-          (await this.redis.exists(this._confirmedAccountKey(canonicalAccountId)))
-        ) {
+        const confirmed = await this._loadJson(this._confirmedAccountKey(canonicalAccountId));
+        if (confirmed) {
+          if (confirmed.did !== did || confirmed.canonicalAccountId !== canonicalAccountId) {
+            throw new MoleculerError('Confirmed PLC identity differs from requested operation',
+              409, 'ATPROTO_PLC_CONFIRMED_IDENTITY_MISMATCH', { retryable: false });
+          }
           return { enqueued: false, alreadyConfirmed: true, alreadyPending: false, did };
+        }
+        if (await this.redis.exists(this._confirmedKey(did))) {
+          throw new MoleculerError('PLC identity confirmation requires account reconciliation',
+            409, 'ATPROTO_PLC_CONFIRMED_IDENTITY_MISMATCH', { retryable: false });
         }
 
         const existingFailed = await this._loadJson(this._failedKey(canonicalAccountId));
@@ -177,6 +183,30 @@ module.exports = {
       },
       async handler(ctx) {
         this._assertEnabled();
+        // ECDSA signing may produce different genesis bytes on each call.
+        // Preserve the queued operation/DID before attempting another signing
+        // RPC, including after a lost submission acknowledgment.
+        const pending = await this._loadJson(this._pendingKey(ctx.params.canonicalAccountId));
+        if (pending) {
+          const op = pending.signedOp;
+          if (pending.canonicalAccountId !== ctx.params.canonicalAccountId ||
+              op?.type !== 'plc_operation' || op.prev !== null ||
+              typeof op.sig !== 'string' || !op.sig ||
+              !/^did:plc:[a-z2-7]{24}$/.test(pending.did || '') ||
+              op.alsoKnownAs?.length !== 1 || op.alsoKnownAs[0] !== `at://${ctx.params.handle}` ||
+              op.services?.atproto_pds?.endpoint !== ctx.params.pdsEndpoint.replace(/\/+$/, '')) {
+            throw new MoleculerError('Pending PLC identity differs from requested operation',
+              409, 'ATPROTO_PLC_PENDING_INTENT_MISMATCH', { retryable: false });
+          }
+          const encoded = await ctx.call('atproto-plc-builder.encodeCanonicalCbor', { value: op });
+          return { enqueued: false, alreadyConfirmed: false, alreadyPending: true,
+            did: pending.did, signedOpCborBase64: encoded };
+        }
+        if (await this._loadJson(this._confirmedAccountKey(ctx.params.canonicalAccountId)) ||
+            await this._loadJson(this._failedKey(ctx.params.canonicalAccountId))) {
+          throw new MoleculerError('Existing PLC identity requires reconciliation before rebuilding',
+            409, 'ATPROTO_PLC_EXISTING_IDENTITY_REBUILD_REFUSED', { retryable: false });
+        }
         const built = await ctx.call('atproto-plc-builder.buildAndSign', ctx.params);
         const result = await ctx.call('atproto-plc-submitter.enqueue', {
           canonicalAccountId: ctx.params.canonicalAccountId,

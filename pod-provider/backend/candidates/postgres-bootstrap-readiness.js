@@ -104,10 +104,16 @@ function createPgBootstrapReadiness({
       "text,text,smallint,bytea,text,text,text,text,text,text)','EXECUTE') AS can_prove,"+
       "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.accounts','SELECT') AS can_select_accounts,"+
       "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.signup_operations','SELECT') AS can_select_journal,"+
+      // Column-only grants are invisible to has_table_privilege. The reader
+      // must have no direct column access, including REFERENCES grants.
+      "pg_catalog.has_any_column_privilege(current_user,'paper_account_candidate.accounts',"+
+      "'SELECT,INSERT,UPDATE,REFERENCES') AS account_column_access,"+
+      "pg_catalog.has_any_column_privilege(current_user,'paper_account_candidate.signup_operations',"+
+      "'SELECT,INSERT,UPDATE,REFERENCES') AS journal_column_access,"+
       "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.accounts',"+
-      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_accounts,"+
+      "'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') AS can_write_accounts,"+
       "pg_catalog.has_table_privilege(current_user,'paper_account_candidate.signup_operations',"+
-      "'INSERT,UPDATE,DELETE,TRUNCATE') AS can_write_journal "+
+      "'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') AS can_write_journal "+
       'FROM pg_catalog.pg_roles r WHERE r.rolname=current_user LIMIT 2';
     let result;
     try {
@@ -134,6 +140,8 @@ function createPgBootstrapReadiness({
         role.can_read_repo !== false || role.can_prove !== true ||
         role.can_select_accounts !== false ||
         role.can_select_journal !== false ||
+        role.account_column_access !== false ||
+        role.journal_column_access !== false ||
         role.can_write_accounts !== false ||
         role.can_write_journal !== false) {
       deny('BOOTSTRAP_PG_ROLE_UNAUTHORIZED');

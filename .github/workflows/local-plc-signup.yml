@@ -47,11 +47,13 @@ jobs:
           ref: 29f1a70ee9f6f80a25946cac103b2f745e371334
           path: .local-plc-reference
           persist-credentials: false
+      - name: Install pinned reference package manager outside upstream workspace
+        run: npm install --prefix "$RUNNER_TEMP/plc-tools" --ignore-scripts --no-audit --no-fund pnpm@11.11.0
       - name: Build integrity-locked reference directory
         working-directory: .local-plc-reference
         run: |
-          npx --yes pnpm@11.11.0 install --frozen-lockfile --ignore-scripts --filter @did-plc/server...
-          npx --yes pnpm@11.11.0 exec tsc --build packages/server/tsconfig.build.json
+          "$RUNNER_TEMP/plc-tools/node_modules/.bin/pnpm" install --frozen-lockfile --ignore-scripts --filter @did-plc/server...
+          "$RUNNER_TEMP/plc-tools/node_modules/.bin/pnpm" exec tsc --build packages/server/tsconfig.build.json
       - name: Verify real signed genesis, duplicate prevention and directory restart
         env:
           NODE_ENV: test

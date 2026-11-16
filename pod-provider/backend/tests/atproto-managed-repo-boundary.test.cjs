@@ -31,6 +31,7 @@ function service() {
     if (name === 'crypto') return crypto;
     if (name === 'moleculer') return { Errors: { MoleculerError } };
     if (name === '../../utils/atproto-managed-repo-proof-policy') return policy;
+    if (name === '../../utils/atproto-plc-directory-policy') return require('../utils/atproto-plc-directory-policy');
     throw Error('Unexpected dependency: ' + name);
   }, m);
   return { ...m.exports.methods, actions: m.exports.actions,

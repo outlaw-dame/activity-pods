@@ -114,6 +114,9 @@ module.exports = {
           if (process.env.APODS_SOLID_OIDC_DPOP_ENFORCE_ENABLED === 'true') {
             try {
               await this.verifyDpopRequest(req, token, payload);
+              // Downstream high-value actions must distinguish a merely
+              // DPoP-shaped claim from proof verified for this HTTP request.
+              ctx.meta.dpopVerified = true;
             } catch (_error) {
               ctx.meta.webId = 'anon';
               return Promise.reject(new E.UnAuthorizedError(E.ERR_INVALID_TOKEN));

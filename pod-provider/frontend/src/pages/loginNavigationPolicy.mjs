@@ -10,7 +10,11 @@ export function resolveLoginReturn(value, { backendUrl, frontendOrigin }) {
     if (parsed.username || parsed.password ||
         (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback))) return fallback;
     if (parsed.origin === frontend.origin) {
-      return { mode: 'internal', url: `${parsed.pathname}${parsed.search}${parsed.hash}` };
+      const internal = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+      // Dot-segment normalization can turn /safe/..//host into //host.
+      // Recheck the exact string passed to location.href or the router.
+      if (new URL(internal, frontend.origin).origin !== frontend.origin) return fallback;
+      return { mode: 'internal', url: internal };
     }
     const backend = new URL(backendUrl);
     if (!backend.username && !backend.password && parsed.origin === backend.origin) {

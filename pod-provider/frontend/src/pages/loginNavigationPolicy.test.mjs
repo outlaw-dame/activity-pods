@@ -13,7 +13,9 @@ test('rejects lookalike hosts, credentials, backslashes and unsafe schemes', () 
   for (const value of ['https://pods.example.attacker.test/path', 'https://pods.example@attacker.test/',
     '//attacker.test', '/\\attacker.test', 'https://pods.example:444/path',
     'javascript:alert(1)', 'data:text/html,test', 'https://user:pass@pods.example/path',
-    '\thttps://pods.example/path', 'https://pods.example/\npath']) {
+    '\thttps://pods.example/path', 'https://pods.example/\npath',
+    '/safe/..//attacker.test/path', '/safe/%2e%2e//attacker.test/path',
+    'https://pods-ui.example//attacker.test/path']) {
     assert.deepEqual(resolveLoginReturn(value, config), { mode: 'internal', url: '/network' }, value);
   }
 });

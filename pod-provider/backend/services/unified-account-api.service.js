@@ -94,12 +94,11 @@ module.exports = {
         // From this point forward, no catch handler may mark the reservation
         // definitively failed or release it for a second identity creation.
         accountCreationStarted = true;
-        ctx.meta.$statusCode = 201;
-        const result = await ctx.call('unified-account.create', accountParams, {
-          meta: {
-            ...(ctx.meta || {}),
-            accountProvisioning: provisioningGrant
-          }
+        // Do not forward HTTP headers, browser identity or arbitrary request
+        // metadata into the privileged account-creation RPC. Pass only the
+        // verified provider grant through a fresh broker call.
+        const result = await ctx.broker.call('unified-account.create', accountParams, {
+          meta: { accountProvisioning: provisioningGrant }
         });
 
         // An account may already be provisioned when this acknowledgment is
@@ -128,6 +127,7 @@ module.exports = {
           );
         }
 
+        ctx.meta.$statusCode = 201;
         return result;
       } catch (e) {
         if (accountCreationStarted) {

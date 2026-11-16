@@ -169,6 +169,7 @@ const restrictedRole = Object.freeze({
   can_read_authority: false,
   can_read_repo: false, can_prove: true,
   can_select_accounts: false, can_select_journal: false,
+  account_column_access: false, journal_column_access: false,
   can_write_accounts: false, can_write_journal: false
 });
 
@@ -201,6 +202,9 @@ test('restricted provider bootstrap mode checks DB role at every current proof r
   const roleSql = pool.query.mock.calls[0][0];
   expect(roleSql).toContain('paper_account_bootstrap_reader');
   expect(roleSql).toContain('has_table_privilege');
+  expect(roleSql).toContain('has_any_column_privilege');
+  expect(roleSql).toContain('SELECT,INSERT,UPDATE,REFERENCES');
+  expect(roleSql).toContain('MAINTAIN');
   expect(roleSql).toContain('has_function_privilege');
   expect(roleSql).not.toContain(scope.idempotencyKey);
 });
@@ -232,6 +236,8 @@ test.each([
   { can_prove: false },
   { can_select_accounts: true },
   { can_select_journal: true },
+  { account_column_access: true },
+  { journal_column_access: true },
   { can_write_accounts: true },
   { can_write_journal: true },
 ])('rejects overly broad or incomplete PostgreSQL reader role: %j', async change => {

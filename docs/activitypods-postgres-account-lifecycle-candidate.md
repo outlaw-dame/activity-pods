@@ -387,3 +387,20 @@ and passwords in the disposable proof must never be reused. These changes
 do not authorize production signup or replace the canonical
 Solid-OIDC/SAI consent, signed hosted PDS, PostgreSQL writer or storage
 isolation acceptance gates.
+
+## November 15 — column-level PostgreSQL privilege isolation follow-up
+
+The restricted provider bootstrap login must hold **no direct privileges** on
+canonical accounts or signup journal columns. PostgreSQL distinguishes
+`has_table_privilege` from `has_any_column_privilege`; a column-specific
+`SELECT`, `INSERT`, `UPDATE` or `REFERENCES` grant is not adequately
+rejected by table-only probes. The runtime now verifies both protected tables'
+effective column privileges, as well as table-level DELETE, TRUNCATE, TRIGGER
+and MAINTAIN rights, using the **same pinned session** as the subsequent
+bootstrap function call.
+
+The disposable PostgreSQL 18 workflow explicitly grants and revokes column
+privileges on both tables and verifies that startup/preflight and request-time
+proofs reject each unauthorized grant, then recover without restarting after
+the grant is removed. No production signup, PDS, Solid-OIDC/SAI, or native
+storage release fuse is changed by this narrower credential gate.

@@ -243,6 +243,60 @@ async function main(){
       ...bootstrapConfig,pool
     }).assertCurrent(identityClaim(ok)),'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
 
+    // A column-only GRANT can expose HMACs or enable mutation even when
+    // has_table_privilege(SELECT) remains false. Exercise real PostgreSQL
+    // effective privilege checks on each protected table and access type.
+    for (const [table,column,privilege] of [
+      ['paper_account_candidate.accounts','webid','SELECT'],
+      ['paper_account_candidate.accounts','webid','INSERT'],
+      ['paper_account_candidate.accounts','webid','UPDATE'],
+      ['paper_account_candidate.accounts','account_id','REFERENCES'],
+      ['paper_account_candidate.signup_operations','idempotency_hmac','SELECT'],
+      ['paper_account_candidate.signup_operations','idempotency_hmac','INSERT'],
+      ['paper_account_candidate.signup_operations','idempotency_hmac','UPDATE'],
+      ['paper_account_candidate.signup_operations','account_id','REFERENCES']
+    ]) {
+      const grant='GRANT '+privilege+' ('+column+') ON '+table+
+        ' TO paper_account_bootstrap_runtime_test';
+      const revoke='REVOKE '+privilege+' ('+column+') ON '+table+
+        ' FROM paper_account_bootstrap_runtime_test';
+      await pool.query(grant);
+      try {
+        const actual=await readerPool.query(
+          'SELECT has_table_privilege(current_user,$1,$2) AS on_table,'+
+          'has_any_column_privilege(current_user,$1,$2) AS on_column',
+          [table,privilege]
+        );
+        assert.equal(actual.rows[0].on_table,false,
+          'column-only grant must not be mistaken for table privilege');
+        assert.equal(actual.rows[0].on_column,true,
+          'real PG18 must detect column-only '+privilege+' on '+table);
+        await error(pgBootstrap.assertReaderRole(),
+          'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
+        await error(pgBootstrap.assertCurrent(identityClaim(ok)),
+          'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
+      } finally {
+        await pool.query(revoke);
+      }
+      assert.equal(await pgBootstrap.assertReaderRole(),true,
+        'valid restricted role must recover after column grant revocation');
+    }
+    // Non-column privileges must be refused as well; the runtime is allowed
+    // to execute the named SECURITY DEFINER function, not manage tables.
+    for (const privilege of ['TRIGGER','MAINTAIN']) {
+      const table='paper_account_candidate.accounts';
+      await pool.query('GRANT '+privilege+' ON '+table+
+        ' TO paper_account_bootstrap_runtime_test');
+      try {
+        await error(pgBootstrap.assertCurrent(identityClaim(ok)),
+          'BOOTSTRAP_PG_ROLE_UNAUTHORIZED');
+      } finally {
+        await pool.query('REVOKE '+privilege+' ON '+table+
+          ' FROM paper_account_bootstrap_runtime_test');
+      }
+      assert.equal(await pgBootstrap.assertReaderRole(),true);
+    }
+
     const roleClient=await pool.connect();
     try {
       await roleClient.query('BEGIN');

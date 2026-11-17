@@ -130,7 +130,16 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
   } finally {
     await Promise.allSettled(pools.map(p => p.end()));
     await owner?.end();
-    if (databaseCreated) await admin.query(`DROP DATABASE ${database} WITH (FORCE)`);
+    if (databaseCreated) {
+      // release(true) removes clients from pg's pool before their sockets have
+      // finished closing. Never force-terminate those sockets during teardown.
+      const deadline = Date.now() + 5000;
+      while ((await admin.query('SELECT 1 FROM pg_stat_activity WHERE datname=$1', [database])).rowCount) {
+        if (Date.now() >= deadline) throw Error('Disposable database still has live connections');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      await admin.query(`DROP DATABASE ${database}`);
+    }
     for (const login of logins.reverse()) await admin.query(`DROP ROLE ${login}`);
     for (const role of [...new Set(createdRoles)].reverse()) await admin.query(`DROP ROLE IF EXISTS ${role}`);
     await admin.end();

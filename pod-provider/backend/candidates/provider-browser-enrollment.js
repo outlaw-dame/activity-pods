@@ -171,13 +171,13 @@ function createProviderBrowserEnrollment({ pool, providerId, appClientId, appUri
     if (!approve) return { state: 'denied' };
     // One call only. A timeout, crash or lost acknowledgment leaves the SQL
     // claim fenced. No replay is allowed to create another native SAI grant.
-    let grant;
+    let registrationUri;
     try {
-      grant = await bounded(() => registerApp({ webId: row.webid, username: row.username, appUri, ...selection }));
-      url(grant);
+      registrationUri = await bounded(() => registerApp({ webId: row.webid, username: row.username, appUri, ...selection }));
+      url(registrationUri);
     } catch { deny('ENROLLMENT_CONSENT_RECONCILIATION_REQUIRED'); }
     const recorded = await query('SELECT paper_account_candidate.record_enrollment_consent($1,$2,$3,$4) AS allowed',
-      [providerId, session.tokenHash, browserOrigin, grant]);
+      [providerId, session.tokenHash, browserOrigin, registrationUri]);
     if (recorded.rows[0]?.allowed !== true) deny('ENROLLMENT_CONSENT_RECONCILIATION_REQUIRED');
     return { state: 'consent_recorded', completionPending: true };
   }

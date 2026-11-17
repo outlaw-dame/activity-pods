@@ -43,7 +43,10 @@ PostgreSQL atomically changes `awaiting_consent` to `consent_claimed` before the
 native mutation. A competing request loses the CAS. Timeout, process loss or an
 unknown native result leaves the claim fenced; there is no automatic reset/retry.
 A successful native result records only a receipt (`consent_recorded`), never a
-completion attestation. Refusal records `denied` without invoking native SAI.
+completion attestation. The recorded URI is the native app-registration receipt,
+not the canonical access-grant URI. A database constraint prevents the existing
+completion CAS from marking an enrolled operation ready until consent is recorded
+for the same application; all independent completion checks still apply. Refusal records `denied` without invoking native SAI.
 Current native grant verification and canonical completion remain separate gates.
 
 The SQL login inherits only `paper_enrollment_runtime`, with INHERIT TRUE,

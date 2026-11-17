@@ -213,6 +213,30 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
     const repeated = await post(body);
     assert.equal(repeated.status, 409); await repeated.arrayBuffer();
     assert.equal(adapterCalls, 1);
+    // Valid-shaped completion fields must still fail for pending, refused,
+    // uncertain or wrong-app enrollment. This tests the SQL constraint only;
+    // these synthetic fields are not actual completion evidence.
+    const tryJournalReady = async (item, completionApp) => {
+      const connection = await owner.connect();
+      try {
+        await connection.query('BEGIN');
+        return await connection.query(`UPDATE paper_account_candidate.signup_operations SET
+          state='ready', evidence_digest=$2, evidence_commit_cid=$3, evidence_root_cid=$3,
+          evidence_rev='2222222222222',evidence_fence=1,evidence_account_generation=1,
+          evidence_sealed_at=clock_timestamp(),completion_at=clock_timestamp(),
+          completion_account_generation=2,completion_app_uri=$4,
+          completion_grant_uri=$5,completion_consent_revision=1,completion_proof_digest=$2
+          WHERE operation_id=$1`, [item.scope.operationId, crypto.randomBytes(32),
+          'bafyre' + 'a'.repeat(53), completionApp, item.webId + '/access-grants/fixture']);
+      } finally { await connection.query('ROLLBACK'); connection.release(); }
+    };
+    for (const item of [expired, refused, lost]) {
+      await assert.rejects(tryJournalReady(item, appUri),
+        { code: '23514', constraint: 'enrollment_completion_requires_consent' });
+    }
+    await assert.rejects(tryJournalReady(first, 'https://other.example/application'),
+      { code: '23514', constraint: 'enrollment_completion_requires_consent' });
+    assert.equal((await tryJournalReady(first, appUri)).rowCount, 1);
     const saved = process.env.NODE_ENV;
     try {
       process.env.NODE_ENV = 'production';

@@ -11,12 +11,12 @@ ALTER TABLE paper_account_candidate.signup_operations
   ADD COLUMN enrollment_expires_at timestamptz,
   ADD COLUMN enrollment_state text,
   ADD COLUMN enrollment_selection jsonb,
-  ADD COLUMN enrollment_grant_uri text,
+  ADD COLUMN enrollment_registration_uri text,
   ADD CONSTRAINT enrollment_atomic CHECK (
     (enrollment_state IS NULL AND num_nonnulls(enrollment_token_hash,
       enrollment_csrf_hash,enrollment_origin,enrollment_app_uri,
       enrollment_return_uri,enrollment_requirements,enrollment_expires_at,
-      enrollment_selection,enrollment_grant_uri)=0)
+      enrollment_selection,enrollment_registration_uri)=0)
     OR
     (enrollment_state IS NOT NULL AND enrollment_state IN ('awaiting_consent','consent_claimed','consent_recorded','denied')
       AND num_nonnulls(enrollment_token_hash,enrollment_csrf_hash,enrollment_origin,
@@ -28,7 +28,15 @@ ALTER TABLE paper_account_candidate.signup_operations
       AND jsonb_typeof(enrollment_requirements)='object'
       AND octet_length(enrollment_requirements::text)<=32768
       AND ((enrollment_state IN ('consent_claimed','consent_recorded')) = (enrollment_selection IS NOT NULL))
-      AND ((enrollment_state='consent_recorded') = (enrollment_grant_uri IS NOT NULL)))
+      AND ((enrollment_state='consent_recorded') = (enrollment_registration_uri IS NOT NULL)))
+  );
+-- The existing completion CAS must not be able to ignore a browser refusal
+-- or an ambiguous native mutation. Its independent current-grant/PDS checks
+-- still apply; this constraint alone never proves canonical completion.
+ALTER TABLE paper_account_candidate.signup_operations
+  ADD CONSTRAINT enrollment_completion_requires_consent CHECK (
+    enrollment_state IS NULL OR state <> 'ready' OR
+      (enrollment_state='consent_recorded' AND completion_app_uri=enrollment_app_uri)
   );
 CREATE UNIQUE INDEX enrollment_token_unique
   ON paper_account_candidate.signup_operations(enrollment_token_hash)
@@ -73,10 +81,10 @@ END $$;
 
 CREATE FUNCTION paper_account_candidate.read_enrollment(p_provider text,p_token bytea,p_origin text)
 RETURNS TABLE(operation_id uuid,app_client_id text,webid text,username text,app_uri text,return_uri text,
-  requirements jsonb,enrollment_state text,selection jsonb,grant_uri text)
+  requirements jsonb,enrollment_state text,selection jsonb,registration_uri text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
   SELECT s.operation_id,s.app_client_id,a.webid,a.username_key,s.enrollment_app_uri,s.enrollment_return_uri,
-    s.enrollment_requirements,s.enrollment_state,s.enrollment_selection,s.enrollment_grant_uri
+    s.enrollment_requirements,s.enrollment_state,s.enrollment_selection,s.enrollment_registration_uri
   FROM paper_account_candidate.signup_operations s
   JOIN paper_account_candidate.accounts a ON a.provider_id=s.provider_id AND a.account_id=s.account_id
   WHERE s.provider_id=p_provider AND s.enrollment_token_hash=p_token
@@ -110,15 +118,15 @@ END $$;
 
 -- Internal receipt only, not an attestation, completion CAS or login permit.
 CREATE FUNCTION paper_account_candidate.record_enrollment_consent(
-  p_provider text,p_token bytea,p_origin text,p_grant text
+  p_provider text,p_token bytea,p_origin text,p_registration text
 ) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
 DECLARE changed integer;
 BEGIN
-  IF p_grant IS NULL OR length(p_grant) NOT BETWEEN 8 AND 2048 OR p_grant NOT LIKE 'https://%'
+  IF p_registration IS NULL OR length(p_registration) NOT BETWEEN 8 AND 2048 OR p_registration NOT LIKE 'https://%'
     THEN RETURN false; END IF;
   UPDATE paper_account_candidate.signup_operations SET
-    enrollment_state='consent_recorded',enrollment_grant_uri=p_grant
+    enrollment_state='consent_recorded',enrollment_registration_uri=p_registration
   WHERE provider_id=p_provider AND enrollment_token_hash=p_token AND enrollment_origin=p_origin
     AND enrollment_state='consent_claimed';
   GET DIAGNOSTICS changed=ROW_COUNT;

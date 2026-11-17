@@ -158,6 +158,10 @@ test('real auth.signup passes ticket only as dataset action param, not account/W
       ticket:claim,admission:ctx.params.accountCoordinatorAdmission,
       dataset:'claimtest-abc123def456'
     });
+    expect(result).not.toHaveProperty('token');
+    expect(ctx.calls.some(c => c.name === 'auth.jwt.generateServerSignedToken')).toBe(false);
+    expect(ctx.calls.find(c => c.name === 'auth.account.create').params.signupReservationId)
+      .toBe(claim.claim.reservationId);
     expect(result.webId).toBe('https://paper.example.org/users/claimtest-abc123def456');
     const delegation=ctx.calls.filter(x=>
       x.name==='dataset-provisioning.ensureSecureDataset');
@@ -215,5 +219,38 @@ test('one-time PG invocation failure stops real signup before dataset/account/We
     expect(second.ctx.call.mock.calls.map(c=>c[0])).toEqual([
       'username-moderation.assertSafe'
     ]);
+  });
+});
+
+
+test('client cannot inject or erase the provider-owned enrollment fence', async () => {
+  const service = loadSignup();
+  await withFlags({NODE_ENV: 'test'}, async () => {
+    for (const marker of [null, '', false, 'ready']) {
+      const {ctx, state} = ctxWithTicket(undefined);
+      ctx.params.signupReservationId = marker;
+      await expect(service.actions.signup.call(state, ctx))
+        .rejects.toMatchObject({type: 'ACCOUNT_ENROLLMENT_INPUT_DENIED'});
+      expect(ctx.call).not.toHaveBeenCalled();
+    }
+  });
+});
+
+
+test('delegated signup requires a username before admission and account side effects', async () => {
+  const service = loadSignup();
+  await withFlags({
+    NODE_ENV: 'test', APODS_ACCOUNT_RESERVATION_DISPOSABLE: 'confirmed',
+    APODS_ACCOUNT_COORDINATOR_DISPOSABLE: 'confirmed',
+    APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE: 'confirmed'
+  }, async () => {
+    for (const username of [undefined, null, '', false]) {
+      const {ctx, state} = ctxWithTicket(ticket());
+      ctx.params.username = username;
+      await expect(service.actions.signup.call(state, ctx))
+        .rejects.toMatchObject({type: 'ACCOUNT_RESERVATION_REQUIRED'});
+      expect(ctx.call).not.toHaveBeenCalled();
+      expect(consumeOnce).not.toHaveBeenCalled();
+    }
   });
 });

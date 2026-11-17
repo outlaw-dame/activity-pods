@@ -1,5 +1,6 @@
 const { WebAclMiddleware, CacherMiddleware } = require('@semapps/webacl');
 const { ObjectsWatcherMiddleware } = require('@semapps/sync');
+const AccountEnrollmentMiddleware = require('./middlewares/account-enrollment');
 const AppControlMiddleware = require('./middlewares/app-control');
 const HashtagNormalizationMiddleware = require('./middlewares/hashtag-normalization');
 const TrustEvaluatorMiddleware = require('./middlewares/trust-evaluator');
@@ -99,6 +100,8 @@ function createPodCellMiddlewares() {
 }
 
 const middlewares = fabric.serviceGroup === GROUP_POD_CELL ? createPodCellMiddlewares() : [];
+// Apply on every broker that may host auth actions, including distributed cells.
+middlewares.push(AccountEnrollmentMiddleware());
 
 // Locality telemetry is fabric-safe and may be enabled for either the real Pod
 // cell or an isolated proof group. It observes routing only; it has no service

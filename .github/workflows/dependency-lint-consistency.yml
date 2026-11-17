@@ -36,10 +36,13 @@ jobs:
         run: npm run lint -- --quiet
       - name: Test PLC submission readback and local directory consistency
         run: node --test pod-provider/backend/tests/atproto-plc-submission-node.test.cjs
+      - name: Test enrollment authentication boundary
+        run: node --test pod-provider/backend/tests/account-enrollment-node.test.cjs
       - name: Test repaired runtime paths and owner authorization
         run: >-
           tests/node_modules/.bin/jest --runInBand --silent --testEnvironment=node
           --roots pod-provider/backend/tests app-framework/app/tests --runTestsByPath
+          pod-provider/backend/tests/auth-signup-durable-dataset-ticket.test.js
           pod-provider/backend/tests/activity-grant-utils.test.js
           app-framework/app/tests/pod-container-actor-context.test.js
           pod-provider/backend/tests/user-settings-delegated-moderation.test.js

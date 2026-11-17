@@ -1,0 +1,50 @@
+name: Durable provider browser enrollment
+on:
+  pull_request:
+    paths:
+      - 'pod-provider/backend/candidates/provider-browser-enrollment*.js'
+      - 'pod-provider/backend/sql/paper-account-postgres-candidate-v6-enrollment.sql'
+      - 'pod-provider/backend/tests/provider-browser-enrollment-node.test.cjs'
+      - '.github/workflows/provider-browser-enrollment.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: browser-enrollment-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  postgres-http-enrollment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+        env:
+          POSTGRES_USER: paper_local_plc
+          POSTGRES_PASSWORD: disposable_ci_only
+          POSTGRES_DB: paper_local_plc
+        ports:
+          - 127.0.0.1:5549:5432
+        options: >-
+          --health-cmd "pg_isready -U paper_local_plc -d paper_local_plc"
+          --health-interval 2s --health-timeout 3s --health-retries 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked backend dependencies
+        run: npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Write disposable connection configuration
+        run: |
+          umask 077
+          printf '%s\n' '{"databaseUrl":"postgres://paper_local_plc:disposable_ci_only@127.0.0.1:5549/paper_local_plc"}' > "$RUNNER_TEMP/enrollment.json"
+      - name: Exercise PostgreSQL state, two-worker consent race and real HTTP boundary
+        env:
+          NODE_ENV: test
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
+          PAPER_BROWSER_ENROLLMENT_DISPOSABLE: confirmed
+          PAPER_ENROLLMENT_TEST_CONFIG: ${{ runner.temp }}/enrollment.json
+        run: node --test pod-provider/backend/tests/provider-browser-enrollment-node.test.cjs

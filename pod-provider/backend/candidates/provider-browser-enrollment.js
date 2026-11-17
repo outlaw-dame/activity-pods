@@ -77,22 +77,23 @@ function createProviderBrowserEnrollment({ pool, providerId, appClientId, appUri
       const role = await client.query({ text: `SELECT
         NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls)
           AND r.rolcanlogin AND current_user=session_user
-          AND pg_has_role(current_user,'paper_enrollment_runtime','USAGE')
-          AND NOT pg_has_role(current_user,(SELECT nspowner FROM pg_namespace WHERE nspname='paper_account_candidate'),'MEMBER')
-          AND NOT has_database_privilege(current_user,current_database(),'CREATE')
-          AND NOT has_schema_privilege(current_user,'paper_account_candidate','CREATE')
-          AND (SELECT count(*) FROM pg_auth_members WHERE member=r.oid)=1
-          AND NOT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles p ON p.oid=m.member
+          AND pg_catalog.pg_has_role(current_user,'paper_enrollment_runtime','USAGE')
+          AND NOT pg_catalog.pg_has_role(current_user,(SELECT nspowner FROM pg_catalog.pg_namespace WHERE nspname='paper_account_candidate'),'MEMBER')
+          AND NOT pg_catalog.has_database_privilege(current_user,current_database(),'CREATE')
+          AND NOT pg_catalog.has_schema_privilege(current_user,'paper_account_candidate','CREATE')
+          AND NOT pg_catalog.has_schema_privilege(current_user,'public','CREATE')
+          AND (SELECT count(*) FROM pg_catalog.pg_auth_members WHERE member=r.oid)=1
+          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles p ON p.oid=m.member
             WHERE p.rolname='paper_enrollment_runtime')
-          AND EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles p ON p.oid=m.roleid
+          AND EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles p ON p.oid=m.roleid
             WHERE m.member=r.oid AND p.rolname='paper_enrollment_runtime'
               AND m.inherit_option AND NOT m.set_option AND NOT m.admin_option
               AND NOT (p.rolcanlogin OR p.rolsuper OR p.rolcreatedb OR p.rolcreaterole OR p.rolreplication OR p.rolbypassrls))
-          AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='paper_account_candidate' AND c.relkind IN ('r','p') AND
-              (has_table_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
-               OR has_any_column_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,REFERENCES')))
-          AS allowed FROM pg_roles r WHERE r.rolname=current_user`, query_timeout: 5000 });
+              (pg_catalog.has_table_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+               OR pg_catalog.has_any_column_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,REFERENCES')))
+          AS allowed FROM pg_catalog.pg_roles r WHERE r.rolname=current_user`, query_timeout: 5000 });
       if (role.rowCount !== 1 || role.rows[0].allowed !== true) deny();
       return await client.query({ text, values, query_timeout: 5000 });
     } catch { discard = true; deny(); }

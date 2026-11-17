@@ -37,7 +37,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       }
       await owner.query(sql);
     }
-    async function runtime(role) {
+    const runtime = async role => {
       const login = 'paper_test_' + logins.length + '_' + suffix;
       const password = crypto.randomBytes(32).toString('hex');
       await admin.query(`CREATE ROLE ${login} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
@@ -45,7 +45,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       await admin.query(`GRANT ${role} TO ${login} WITH INHERIT TRUE, SET FALSE, ADMIN FALSE`);
       const url = new URL(db); url.username = login; url.password = password;
       const pool = new Pool({ ...options, connectionString: url.href }); pools.push(pool); return pool;
-    }
+    };
     const worker = await runtime('paper_account_proof_worker');
     const issuer = await runtime('paper_account_proof_issuer');
     const reserver = await runtime('paper_account_signup_reserver');
@@ -55,7 +55,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const appScope = crypto.createHash('sha256').update('activitypods:approved-app:v1\0').update(appClientId).digest('hex');
     const settings = { reserverPool: reserver, binderPool: binder, appClientId, hmacKey: crypto.randomBytes(32) };
     const admission = createCanonicalCoordinatorAdmission(settings);
-    async function reserve() {
+    const reserve = async () => {
       const input = { appClientId: appScope, username: 'local-' + crypto.randomBytes(5).toString('hex'),
         idempotencyKey: crypto.randomUUID(), requestFingerprint: crypto.randomBytes(32).toString('hex'), dailyLimit: 100 };
       const result = await authority.reserve(input);
@@ -63,12 +63,12 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       const fence = { ...input, ...result };
       assert.equal(await authority.startSideEffects(fence), true);
       return { input, fence, request: { ...input, appScope, reservationId: result.reservationId } };
-    }
-    async function lease(f) {
+    };
+    const lease = async f => {
       return (await issuer.query('SELECT paper_account_reservation_proof.dataset_claim_lease($1,$2,$3,$4,$5,$6) AS lease',
         ['https://paper.example.org/provider', appScope, f.fence.reservationId, f.fence.fenceToken,
           f.input.username, 'https://paper.example.org/users/' + f.input.username])).rows[0].lease;
-    }
+    };
     const first = await reserve();
     assert.equal(await authority.claimSignup(first.fence), false, 'unbound execution denied');
     assert.equal(await lease(first), null, 'unbound ticket denied');

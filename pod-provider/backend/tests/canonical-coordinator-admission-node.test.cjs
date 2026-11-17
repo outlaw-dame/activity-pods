@@ -6,6 +6,14 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Pool } = require('pg');
 
+async function drainDatabaseConnections(admin, database) {
+  const deadline = Date.now() + 5000;
+  while ((await admin.query('SELECT 1 FROM pg_stat_activity WHERE datname=$1', [database])).rowCount) {
+    if (Date.now() >= deadline) throw Error('Disposable database still has live connections');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+}
+
 test('canonical coordinator: actual restricted SQL, durable fence and no duplicate execution', async () => {
   assert.equal(process.env.NODE_ENV, 'test');
   for (const name of ['PAPER_ACCOUNTS_DISPOSABLE','APODS_ACCOUNT_RESERVATION_DISPOSABLE','ATPROTO_REPO_PROOF_DISPOSABLE']) assert.equal(process.env[name], 'confirmed');
@@ -133,11 +141,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     if (databaseCreated) {
       // release(true) removes clients from pg's pool before their sockets have
       // finished closing. Never force-terminate those sockets during teardown.
-      const deadline = Date.now() + 5000;
-      while ((await admin.query('SELECT 1 FROM pg_stat_activity WHERE datname=$1', [database])).rowCount) {
-        if (Date.now() >= deadline) throw Error('Disposable database still has live connections');
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
+      await drainDatabaseConnections(admin, database);
       await admin.query(`DROP DATABASE ${database}`);
     }
     for (const login of logins.reverse()) await admin.query(`DROP ROLE ${login}`);

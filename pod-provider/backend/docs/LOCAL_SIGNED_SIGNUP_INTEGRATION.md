@@ -70,3 +70,32 @@ fixture callbacks/booleans are not production evidence.
 Unknown cross-store outcomes must retain their original identity and operation.
 Do not create a second writer, bypass the coordinator admission, retry with a new
 identity, or treat a passing PLC test as permission to open the production fuse.
+
+## Enrollment authentication boundary
+
+Delegated signup now records `signupReservationId` in the private auth account
+in the same create operation that stores the password. Client profile input
+cannot supply this field. A username is required before the coordinator's
+one-time admission; email-only fallback must not bypass that admission.
+The delegated action returns provisioning facts without generating a login JWT.
+
+The broker middleware rejects password verification and JWT minting for any
+account containing the enrollment marker, including malformed markers. JWT
+verification also re-reads the private account and rejects a previously signed
+token for an incomplete account. Missing/mismatched accounts and lookup failures
+fail closed. Each token lookup is bounded to five seconds, without retries or
+inherited HTTP routing metadata; no readiness result is cached.
+
+This is a holding fence, not a completion implementation. No route clears the
+marker and no environment flag authorizes activation. Do not manually remove it
+to make browser acceptance pass. The next integration must provide restricted
+owner enrollment/consent, the existing canonical PostgreSQL completion CAS, and
+a reviewed single activation path tied to that committed operation. The existing
+bootstrap proof cannot simply become a permanent login predicate: it compares
+the bootstrap repository head, which legitimately changes after later writes.
+
+Validation: `node --test pod-provider/backend/tests/account-enrollment-node.test.cjs`
+uses a real Moleculer broker and SemApps RS256 JWT service with ephemeral keys;
+account storage is a fixture. The signup regression suite verifies that delegated
+signup makes no JWT call and persists the fence before identity creation. Neither
+test substitutes for a successful real browser signup.

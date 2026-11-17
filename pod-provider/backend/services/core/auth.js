@@ -60,6 +60,11 @@ module.exports = {
       // WebID attributes and the auth.registered event payload.
       const { username, email, password, datasetAdminTicket,
         accountCoordinatorAdmission, ...rest } = ctx.params;
+      // This is provider-owned enrollment state, never a profile input.
+      if (Object.prototype.hasOwnProperty.call(rest, 'signupReservationId')) {
+        throw new MoleculerError('Enrollment state is provider-owned',
+          400, 'ACCOUNT_ENROLLMENT_INPUT_DENIED', { retryable: false });
+      }
       const delegatedDatasetProof =
         process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed';
       if ((datasetAdminTicket !== undefined ||
@@ -73,6 +78,7 @@ module.exports = {
           (process.env.NODE_ENV !== 'test' ||
            process.env.APODS_ACCOUNT_RESERVATION_DISPOSABLE !== 'confirmed' ||
            process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
+           typeof username !== 'string' || !username ||
            !datasetAdminTicket || typeof datasetAdminTicket !== 'object' ||
            !accountCoordinatorAdmission || typeof accountCoordinatorAdmission !== 'object')) {
         throw new MoleculerError(
@@ -132,7 +138,11 @@ module.exports = {
         username,
         email,
         password,
-        ...this.pickAccountData(rest)
+        ...this.pickAccountData(rest),
+        // Persist the fence with the password, before a WebID or any external
+        // identity effect exists. A failed signup must not become login-ready.
+        ...(delegatedDatasetProof
+          ? { signupReservationId: accountCoordinatorAdmission.reservationId } : {})
       });
 
       let webId = null;
@@ -201,10 +211,13 @@ module.exports = {
           );
         }
 
-        const token = await ctx.call('auth.jwt.generateServerSignedToken', { payload: { webId } });
+        // Canonical completion and explicit owner consent occur later. Even an
+        // internal caller must not receive (or transiently mint) a full JWT.
+        const token = delegatedDatasetProof ? undefined
+          : await ctx.call('auth.jwt.generateServerSignedToken', { payload: { webId } });
 
         return {
-          token,
+          ...(token === undefined ? {} : { token }),
           webId,
           newUser: true,
           ...(activityPubProvisioning

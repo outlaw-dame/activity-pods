@@ -95,6 +95,16 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
         request: { cookie, origin: browserOrigin, csrfToken: issued.csrfToken, approve: true, selected: [required] } };
     };
     const first = await fixture();
+    let deliverLateConnection, discardedLateConnection = 0;
+    const stalled = createProviderBrowserEnrollment({ ...settings, pool: {
+      connect: () => new Promise(resolve => { deliverLateConnection = resolve; })
+    } });
+    await assert.rejects(stalled.view({ cookie: first.cookie, origin: browserOrigin }));
+    deliverLateConnection({ release(discard) {
+      assert.equal(discard, true); discardedLateConnection++;
+    }, query() { assert.fail('timed-out acquisition must never execute SQL'); } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(discardedLateConnection, 1);
     const differentClient = createProviderBrowserEnrollment({ ...settings, pool: runtime,
       appClientId: 'https://app.paper.example.org/another-client' });
     await assert.rejects(differentClient.view({ cookie: first.cookie, origin: browserOrigin }));

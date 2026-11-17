@@ -67,11 +67,23 @@ function createProviderBrowserEnrollment({ pool, providerId, appClientId, appUri
   };
   const csrf = token => crypto.createHmac('sha256', key)
     .update('paper:enrollment:csrf:v1\0').update(browserOrigin).update('\0').update(token).digest('base64url');
+  async function borrow() {
+    let expired = false, timer;
+    const pending = Promise.resolve().then(() => pool.connect()).then(client => {
+      if (expired) { client.release(true); deny(); }
+      return client;
+    });
+    try {
+      return await Promise.race([pending, new Promise((_, reject) => {
+        timer = setTimeout(() => { expired = true; reject(new Error('Enrollment connection timeout')); }, 5000);
+      })]);
+    } finally { clearTimeout(timer); }
+  }
   async function query(text, values) {
     gate();
     let client, discard = false;
     try {
-      client = await pool.connect();
+      client = await borrow();
       // Check and execute on the same SQL connection. This login must have
       // only the enrollment role and no direct account/journal access.
       const role = await client.query({ text: `SELECT

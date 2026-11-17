@@ -64,9 +64,11 @@ function makeBrowserEnrollmentService({ broker, ...options } = {}) {
     },
     actions: {
       view: {
+        bulkhead: { enabled: true, concurrency: 8, maxQueueSize: 16 },
         handler(ctx) { return run(ctx, 'view', {}); }
       },
       consent: {
+        bulkhead: { enabled: true, concurrency: 4, maxQueueSize: 8 },
         params: {
           $$strict: true,
           csrfToken: { type: 'string', length: 43 },

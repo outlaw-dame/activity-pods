@@ -51,7 +51,8 @@ SET FALSE and ADMIN FALSE. It has function execution but no direct account or
 journal table/column access, schema creation, role administration or owner access.
 Admission is rechecked on the same borrowed connection as each operation. The
 caller must construct a bounded pool (connection and statement timeouts, small
-maximum). Query and external dependency waits are bounded; no mutation retry is
+maximum). Connection acquisition, query and external dependency waits are bounded; late
+connections are discarded. HTTP actions cap in-flight calls and queue lengths; no mutation retry is
 performed. Unknown SQL outcomes discard the connection.
 
 ## Local runtime integration

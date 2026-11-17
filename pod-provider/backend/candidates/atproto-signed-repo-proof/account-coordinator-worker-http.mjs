@@ -5,6 +5,7 @@
  * This process cannot sign Ed25519 tickets or administer Jena.
  */
 import assert from 'node:assert/strict';
+import {loadCanonicalCoordinator} from './canonical-coordinator-config.mjs';
 import crypto from 'node:crypto';
 import {Pool} from 'pg';
 import wire from '../../services/utils/atproto-account-coordinator-client.js';
@@ -22,7 +23,10 @@ const KEYS=[
  'ACCOUNT_COORDINATOR_ISSUER_KEY','ACCOUNT_ISSUER_PUBLIC_PEM_B64',
  'ACCOUNT_COORDINATOR_PORT'
 ];
+if(process.env.ACCOUNT_COORDINATOR_CANONICAL_CONFIG) KEYS.push('ACCOUNT_COORDINATOR_CANONICAL_CONFIG','PAPER_ACCOUNTS_DISPOSABLE');
 checkFixtureEnv('worker',KEYS);
+const canonical=process.env.ACCOUNT_COORDINATOR_CANONICAL_CONFIG
+  ? await loadCanonicalCoordinator(process.env.ACCOUNT_COORDINATOR_CANONICAL_CONFIG) : null;
 const url=new URL(process.env.ACCOUNT_COORDINATOR_WORKER_DSN);
 assert.equal(url.hostname,'127.0.0.1');
 assert.equal(url.port,'5548');
@@ -155,7 +159,6 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
   if(!(await authority.startSideEffects(fence)))refuse();
   // A crash or request timeout here does NOT release the fence; retry
   // returns 409 pending reconciliation rather than minting a second DID.
-  const ticket=await requestIssuer(fence,input.username);
   const admission={
     appScope:input.appScope,
     username:input.username,
@@ -163,6 +166,9 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
     requestFingerprint:input.requestFingerprint,
     reservationId:first.reservationId
   };
+  if(canonical) await canonical.admit(admission);
+  if(res.destroyed) return;
+  const ticket=await requestIssuer(fence,input.username);
   respond(res,200,{
     ticket,admission,
     requestSha256:crypto.createHash('sha256')
@@ -174,5 +180,5 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
 }});
 process.stdout.write('ACCOUNT_COORDINATOR_READY\n');
 for(const signal of ['SIGTERM','SIGINT']){
-  process.once(signal,()=>listener.close(()=>pool.end().finally(()=>process.exit(0))));
+  process.once(signal,()=>listener.close(()=>Promise.allSettled([pool.end(),canonical?.close()]).finally(()=>process.exit(0))));
 }

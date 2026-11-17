@@ -303,8 +303,9 @@ test('provider-authorized bridge: actual PG18 signed repo, identity drift and du
         loader(name => {
           if (name === 'crypto') return crypto;
           if (name === 'moleculer') return { Errors: { MoleculerError: LocalError } };
-          if (name === '../../utils/atproto-managed-repo-proof-policy') {
-            return requireLocal('../../utils/atproto-managed-repo-proof-policy.js');
+          if (['../../utils/atproto-managed-repo-proof-policy',
+            '../../utils/atproto-plc-directory-policy'].includes(name)) {
+            return requireLocal(name + '.js');
           }
           throw Error('Unexpected production service dependency: ' + name);
         }, moduleMock);

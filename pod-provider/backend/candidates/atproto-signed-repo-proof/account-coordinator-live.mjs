@@ -247,7 +247,7 @@ async function prepare(){
     assert.equal(before.state,'side_effects_started');
     assert.equal(before.username,state.primary.username);
     assert.equal(before.expected_webid,
-      'https://paper.example.org/users/'+state.primary.username);
+      'https://paper.example.org/'+state.primary.username);
     assert.equal(before.signup_claimed_at,null,
       'Dataset claim issuance is not itself identity-execution admission');
     // The actual auth.signup calls the same scoped ordinary-provider client

@@ -19,7 +19,7 @@ function loadSignup(){
     {process,Buffer,console,__dirname:path.join(__dirname,'../services/core')});
   factory(name=>{
     if(name==='path')return require('node:path');
-    if(name==='url-join')return(...parts)=>parts.join('/');
+    if(name==='url-join')return require('url-join');
     if(name==='moleculer')return{Errors:{MoleculerError}};
     if(name==='@semapps/auth')return{AuthLocalService:{}};
     if(name==='../../config/config')return{
@@ -58,7 +58,7 @@ async function withFlags(values,fn){
 }
 const ticket=()=>({
   claim:{version:1,dataset:'claimtest-abc123def456',
-    ownerWebid:'https://paper.example.org/users/claimtest-abc123def456',
+    ownerWebid:'https://paper.example.org/claimtest-abc123def456',
     reservationId:crypto.randomUUID()},
   signature:'A'.repeat(86)
 });
@@ -84,12 +84,12 @@ function ctxWithTicket(datasetAdminTicket){
       if(name==='auth.account.create')return{
         '@id':'urn:test:canonical',username:'claimtest-abc123def456',email:'person@example.org'
       };
-      if(name==='webid.createWebId')return'https://paper.example.org/users/claimtest-abc123def456';
+      if(name==='webid.createWebId')return'https://paper.example.org/claimtest-abc123def456';
       if(name==='auth.account.attachWebId')return{
         '@id':'urn:test:canonical',username:'claimtest-abc123def456'
       };
       if(name==='activitypub-provisioning.provisionForAccount')return{
-        actorId:'https://paper.example.org/users/claimtest-abc123def456'
+        actorId:'https://paper.example.org/claimtest-abc123def456'
       };
       if(name==='auth.jwt.generateServerSignedToken')return 'session-redacted';
       throw Error('Unexpected action '+name);
@@ -144,6 +144,18 @@ test('no claim is refused before moderation, dataset creation, WebID or DID',asy
     expect(ctx.call).not.toHaveBeenCalled();
   });
 });
+test('provider rejects a ticket for the legacy owner path before consuming admission', async () => {
+  await withFlags({ NODE_ENV:'test', APODS_ACCOUNT_RESERVATION_DISPOSABLE:'confirmed',
+    APODS_ACCOUNT_COORDINATOR_DISPOSABLE:'confirmed',
+    APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE:'confirmed' }, async () => {
+    const claim = ticket();
+    claim.claim.ownerWebid = 'https://paper.example.org/users/' + claim.claim.dataset;
+    const { ctx, state } = ctxWithTicket(claim);
+    await expect(loadSignup().actions.signup.call(state, ctx)).rejects.toMatchObject({ type:'ACCOUNT_DATASET_OWNER_MISMATCH' });
+    expect(consumeOnce).not.toHaveBeenCalled();
+    expect(ctx.call).not.toHaveBeenCalled();
+  });
+});
 test('real auth.signup passes ticket only as dataset action param, not account/WebID/profile/meta/event',async()=>{
   const service=loadSignup();
   await withFlags({
@@ -162,7 +174,7 @@ test('real auth.signup passes ticket only as dataset action param, not account/W
     expect(ctx.calls.some(c => c.name === 'auth.jwt.generateServerSignedToken')).toBe(false);
     expect(ctx.calls.find(c => c.name === 'auth.account.create').params.signupReservationId)
       .toBe(claim.claim.reservationId);
-    expect(result.webId).toBe('https://paper.example.org/users/claimtest-abc123def456');
+    expect(result.webId).toBe('https://paper.example.org/claimtest-abc123def456');
     const delegation=ctx.calls.filter(x=>
       x.name==='dataset-provisioning.ensureSecureDataset');
     expect(delegation).toHaveLength(1);

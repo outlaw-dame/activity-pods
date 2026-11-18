@@ -51,7 +51,7 @@ BEGIN
   END IF;
   IF OLD.state='reserved' AND OLD.generation=1
     AND NEW.state='provisioning' AND NEW.generation=2
-    AND NEW.webid=NEW.provider_id||'/users/'||NEW.username_key
+    AND NEW.webid=NEW.provider_id||'/'||NEW.username_key
     AND EXISTS (
       SELECT 1 FROM paper_account_reservation_proof.reservations r
       CROSS JOIN LATERAL paper_account_reservation_proof.enrollment_handoff(

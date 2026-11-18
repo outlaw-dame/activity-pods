@@ -31,7 +31,7 @@ SET search_path = pg_catalog, pg_temp AS $$
       AND o.state='reconciliation_required' AND o.may_have_side_effects
       AND a.state IN ('reserved','provisioning') AND a.username_key=r.username
       AND r.provider_id=o.provider_id||'/provider'
-      AND r.expected_webid=o.provider_id||'/users/'||a.username_key
+      AND r.expected_webid=o.provider_id||'/'||a.username_key
   );
 $$;
 REVOKE ALL ON FUNCTION paper_account_reservation_proof.canonical_signup_is_fenced(uuid) FROM PUBLIC;

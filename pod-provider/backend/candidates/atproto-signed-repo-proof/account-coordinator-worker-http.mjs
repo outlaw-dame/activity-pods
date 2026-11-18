@@ -4,6 +4,7 @@
  * independently performed by provider-capabilities before this request.
  * This process cannot sign Ed25519 tickets or administer Jena.
  */
+import { ownerWebId } from '../../services/utils/disposable-provider-identity.js';
 import assert from 'node:assert/strict';
 import {loadCanonicalCoordinator} from './canonical-coordinator-config.mjs';
 import crypto from 'node:crypto';
@@ -116,7 +117,7 @@ const listener=await server({port:workerPort,handler:async(req,res)=>{
     try{verified=verifyDisposableDatasetClaim(scope.ticket,publicKey);}
     catch{refuse();}
     if(verified.dataset!==scope.username ||
-       verified.ownerWebid!=='https://paper.example.org/users/'+scope.username ||
+       verified.ownerWebid!==ownerWebId(scope.username) ||
        verified.reservationId!==scope.reservationId)refuse();
     const claimed=await authority.claimSignup({
       appClientId:scope.appScope,

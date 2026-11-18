@@ -6,10 +6,10 @@
  * No automatic lease takeover, failed-state reuse, or response/token replay:
  * a network timeout can follow an irreversible WebID/DID operation.
  */
+import { ownerWebId } from '../../services/utils/disposable-provider-identity.js';
 import crypto from 'node:crypto';
 
 const PROVIDER = 'https://paper.example.org/provider';
-const WEBID_ROOT = 'https://paper.example.org/users/';
 const FP = /^[a-f0-9]{64}$/u;
 const USERNAME = /^[a-z][a-z0-9_-]{1,31}$/u;
 const KEY = /^[a-zA-Z0-9._:-]{8,128}$/u;
@@ -62,7 +62,7 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
         'FROM paper_account_reservation_proof.reserve($1,$2,$3,$4,$5,$6,$7,$8)',
         [PROVIDER, input.appClientId, hashKey(input.appClientId, input.idempotencyKey),
           Buffer.from(input.requestFingerprint, 'hex'), input.username,
-          WEBID_ROOT + input.username, input.dailyLimit, 120]
+          ownerWebId(input.username), input.dailyLimit, 120]
       );
       if (result.rowCount !== 1 ||
           !['reserved', 'already_reserved', 'completed', 'idempotency_conflict',
@@ -103,7 +103,7 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
         [PROVIDER,input.appClientId,
           hashKey(input.appClientId,input.idempotencyKey),
           Buffer.from(input.requestFingerprint,'hex'),
-          input.reservationId,input.username,WEBID_ROOT+input.username]
+          input.reservationId,input.username,ownerWebId(input.username)]
       );
       return result.rowCount===1 && result.rows[0]?.claimed===true;
     },
@@ -111,7 +111,7 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
       assertDisposable();
       assertFence(fence);
       if (!proof || typeof proof !== 'object' ||
-          proof.webId !== WEBID_ROOT + proof.username ||
+          proof.webId !== ownerWebId(proof.username) ||
           !USERNAME.test(proof.username || '') ||
           typeof proof.activityPubActorId !== 'string' ||
           typeof proof.atprotoDid !== 'string' ||
@@ -133,7 +133,7 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
       assertFence(fence);
       if (!issuerPool) throw Error('Restricted issuer PostgreSQL connection required');
       assertPool(issuerPool);
-      if (!USERNAME.test(dataset) || expectedWebId !== WEBID_ROOT + dataset) deny();
+      if (!USERNAME.test(dataset) || expectedWebId !== ownerWebId(dataset)) deny();
       const result = await issuerPool.query(
         'SELECT paper_account_reservation_proof.dataset_claim_lease($1,$2,$3,$4,$5,$6) AS lease_expires_at',
         [PROVIDER, fence.appClientId, fence.reservationId,
@@ -151,7 +151,7 @@ export function makeAccountReservationAuthority({workerPool, issuerPool} = {}) {
       assertFence(fence);
       if (!issuerPool) throw Error('Separate restricted issuer PostgreSQL connection is required');
       assertPool(issuerPool);
-      if (!USERNAME.test(dataset) || expectedWebId !== WEBID_ROOT + dataset) deny();
+      if (!USERNAME.test(dataset) || expectedWebId !== ownerWebId(dataset)) deny();
       const result = await issuerPool.query(
         'SELECT paper_account_reservation_proof.dataset_binding_is_live($1,$2,$3,$4,$5,$6) AS admitted',
         [PROVIDER, fence.appClientId, fence.reservationId,

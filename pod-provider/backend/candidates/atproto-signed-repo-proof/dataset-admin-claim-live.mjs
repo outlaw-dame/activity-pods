@@ -179,7 +179,7 @@ const makeClaim=(dataset,opts={})=>{
  return {
   version:1,issuer:'https://paper.example.org/provider',
   audience:'urn:activitypods:dataset-admin:v1',
-  dataset,ownerWebid:'https://paper.example.org/users/'+dataset,
+  dataset,ownerWebid:'https://paper.example.org/'+dataset,
   reservationId:crypto.randomUUID(),nonce:crypto.randomUUID(),
   issuedAtMs:now,expiresAtMs:now+120000,...opts
  };
@@ -270,7 +270,7 @@ async function issueFromDurablePreAccountReservation(dataset,privateKey){
  // A signed ticket can be delivered to the ordinary provider, but no
  // private key, PostgreSQL credential or root database DSN accompanies it.
  assert.equal(ticket.claim.dataset,dataset);
- assert.equal(ticket.claim.ownerWebid,'https://paper.example.org/users/'+dataset);
+ assert.equal(ticket.claim.ownerWebid,'https://paper.example.org/'+dataset);
  assert.equal(ticket.claim.reservationId,fence.reservationId);
  return {ticket,reservationId:fence.reservationId};
 }
@@ -364,7 +364,7 @@ async function prepare(){
    'Different valid reservation for same dataset must be refused');
   const crossOwner=signUnchecked(
    makeClaim(config.dataset,{
-     ownerWebid:'https://paper.example.org/users/another-user'
+     ownerWebid:'https://paper.example.org/another-user'
    }),privateKey);
   assert.equal((await post(crossOwner)).status,403,
    'Signed cross-owner mismatches must be refused');

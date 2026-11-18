@@ -48,7 +48,7 @@ const appClientId='https://app.paper.example.org/client';
 const appUri='https://app.paper.example.org/app';
 const uuid=()=>crypto.randomUUID();
 const opId=uuid(),accountId=uuid();
-const webId=providerId+'/users/probed_new_user';
+const webId=providerId+'/probed_new_user';
 const did='did:plc:'+'u'.repeat(24);
 const handle='probed-new-user.paper.example.org';
 let pds;
@@ -313,8 +313,8 @@ test('one sealed new signup gets independently signed hosted PDS proof before PG
     }),true);
     assert.equal(await pgAuthority.complete(unboundFence,{
       ...synthetic,username:unboundName,
-      webId:providerId+'/users/'+unboundName,
-      activityPubActorId:providerId+'/users/'+unboundName
+      webId:providerId+'/'+unboundName,
+      activityPubActorId:providerId+'/'+unboundName
     }),false,'Unbound identities cannot downgrade to an unverified digest');
 
     const reflect=async()=>(

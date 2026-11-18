@@ -1,4 +1,5 @@
 'use strict';
+const { ownerWebId } = require('./disposable-provider-identity');
 
 /**
  * Disposable ordinary-provider -> restricted PostgreSQL account coordinator.
@@ -173,7 +174,7 @@ async function reserveCoordinatedDataset({
         ]) ||
         data.ticket.claim.dataset!==username ||
         data.ticket.claim.reservationId!==data.admission.reservationId ||
-        data.ticket.claim.ownerWebid!=='https://paper.example.org/users/'+username ||
+        data.ticket.claim.ownerWebid!==ownerWebId(username) ||
         typeof data.ticket.signature!=='string' ||
         !/^[A-Za-z0-9_-]{86}$/u.test(data.ticket.signature)) {
       reject('ACCOUNT_COORDINATOR_RESPONSE_INVALID');

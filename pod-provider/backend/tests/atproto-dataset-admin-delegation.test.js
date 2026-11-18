@@ -21,7 +21,7 @@ function ticket(opts = {}) {
     claim: {
       version: 1, issuer: 'https://paper.example.org/provider',
       audience: 'urn:activitypods:dataset-admin:v1', dataset,
-      ownerWebid: 'https://paper.example.org/users/' + dataset,
+      ownerWebid: 'https://paper.example.org/' + dataset,
       reservationId: crypto.randomUUID(), nonce: crypto.randomUUID(),
       issuedAtMs: now, expiresAtMs: now + 120000, ...opts
     }, signature: 'A'.repeat(86)
@@ -88,7 +88,7 @@ test('reject malformed and mismatched ticket claims before sending any network r
   for (const bad of [
     undefined, null, {claim: {}, signature: 'A'.repeat(86)},
     {...ticket(), signature: 'invalid'},
-    ticket({ownerWebid: 'https://paper.example.org/users/other'}),
+    ticket({ownerWebid: 'https://paper.example.org/other'}),
     ticket({audience: 'urn:wrong'}),
     ticket({issuer: 'https://evil.example'}),
     ticket({dataset: 'claimtest-aaaaaaaaaaaa'}),

@@ -61,7 +61,7 @@ function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, ...optio
           ctx.meta.enrollmentCookie = req.headers.cookie;
           ctx.meta.enrollmentOrigin = req.headers.origin;
         },
-        aliases: { 'GET /': 'signup-enrollment.view', 'POST /consent': 'signup-enrollment.consent' }
+        aliases: { 'GET /': 'signup-enrollment.view', 'POST /status': 'signup-enrollment.view', 'POST /consent': 'signup-enrollment.consent' }
       }, toBottom: false });
     },
     actions: {

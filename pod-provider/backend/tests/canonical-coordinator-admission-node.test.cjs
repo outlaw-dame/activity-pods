@@ -61,8 +61,10 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const { makeBrowserSignupTransaction } = require('../candidates/browser-signup-transaction');
     const txConfig = { providerId: 'https://provider.example', appClientId: 'https://app.example/id',
       browserOrigin: 'https://login.example', returnUri: 'https://app.example/return', encryptionKey: crypto.randomBytes(32) };
-    const verifier = makeBrowserSignupTransaction({ ...txConfig, pool: await runtime('paper_browser_signup_verifier') });
-    const redeemer = makeBrowserSignupTransaction({ ...txConfig, pool: await runtime('paper_browser_signup_redeemer') });
+    const verifierPool = await runtime('paper_browser_signup_verifier');
+    const verifier = makeBrowserSignupTransaction({ ...txConfig, pool: verifierPool });
+    const redeemerPool = await runtime('paper_browser_signup_redeemer');
+    const redeemer = makeBrowserSignupTransaction({ ...txConfig, pool: redeemerPool });
     const fingerprint = crypto.randomBytes(32).toString('hex'), idempotencyKey = crypto.randomUUID();
     const proof = 'fixture.' + crypto.randomBytes(32).toString('base64url');
     let cookie;
@@ -82,6 +84,40 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.deepEqual(redemptions.filter(item => item.status === 'fulfilled').map(item => item.value),
       [{ idempotencyKey, challengeToken: proof }]);
     assert.equal((await owner.query('SELECT sealed_proof IS NULL AS cleared FROM paper_browser_signup.transactions')).rows[0].cleared,true);
+    const { makeLocalSignupVerifier, issueLocalInvitation } = require('../candidates/local-browser-signup-verifier');
+    const api = require('../services/unified-account-api.service').methods;
+    const policy = require('../services/provider-capabilities.service').methods;
+    const { fingerprint: signupFingerprint } = require('../services/utils/atproto-account-coordinated-signup');
+    const invitationKeys = crypto.generateKeyPairSync('ed25519');
+    const scope = { ...txConfig };
+    const verificationKey = crypto.randomBytes(32).toString('base64url');
+    const env = { ...process.env, APODS_ACCOUNT_REQUEST_FINGERPRINT_KEY: crypto.randomBytes(32).toString('base64url'),
+      APODS_ACCOUNT_VERIFICATION_HMAC_KEY: verificationKey };
+    const verify = makeLocalSignupVerifier({ publicKey: invitationKeys.publicKey, scope, transaction: verifier, env });
+    const account = { username:'invited', email:'invited@example.test', password:'disposable-password',
+      profile:{displayName:'invited'} };
+    const invitation = issueLocalInvitation({ scope, privateKey:invitationKeys.privateKey, username:account.username,email:account.email });
+    // A signed invitation must always fit the downstream verifier's UTF-8 byte budget.
+    assert.throws(() => issueLocalInvitation({ scope: { ...scope, appClientId: 'https://app.example/' + 'x'.repeat(260) },
+      privateKey: invitationKeys.privateKey, username: account.username, email: 'é'.repeat(150) + '@example.test' }));
+    let issuedCookie;
+    const verification = { account, origin:scope.browserOrigin, invitation, setCookie: value => { issuedCookie = value; } };
+    await assert.rejects(verify({ ...verification, account:{...account,email:'another@example.test'} }));
+    await assert.rejects(verify({ ...verification, origin:'https://other.example' }));
+    await verify(verification);
+    await assert.rejects(verify(verification));
+    const fp = signupFingerprint({ api, appClientId:scope.appClientId, redirectUri:scope.returnUri, accountParams:account,
+      protocols:api.requestedProtocolsFromAccountParams.call(api, account),env });
+    const verifiedProof = await redeemer.consume({ cookie:issuedCookie,origin:scope.browserOrigin,fingerprint:fp });
+    const previousKey = process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY;
+    try {
+      process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY = verificationKey;
+      assert(policy.verifyDurableSignupChallenge({ ...account,verification:verifiedProof, idempotencyKey:verifiedProof.idempotencyKey,
+        appClientId:scope.appClientId,redirectUri:scope.returnUri,origin:scope.browserOrigin,requestFingerprint:fp }));
+    } finally {
+      if (previousKey === undefined) delete process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY;
+      else process.env.APODS_ACCOUNT_VERIFICATION_HMAC_KEY = previousKey;
+    }
     const authority = makeAccountReservationAuthority({ workerPool: worker, issuerPool: issuer });
     const appClientId = 'https://paper.example.org/application';
     const appScope = crypto.createHash('sha256').update('activitypods:approved-app:v1\0').update(appClientId).digest('hex');
@@ -172,6 +208,48 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       appUri: appClientId, csrfKey: crypto.randomBytes(32), fixtureOnly: true,
       loadRequirements: async () => ({ required: [appClientId + '#profile'], optional: [], revision: 'b'.repeat(64) })
     });
+    const { ServiceBroker } = require('moleculer');
+    const ApiGateway = require('moleculer-web');
+    const { makeLocalBrowserSignupServices } = require('../candidates/provider-browser-enrollment-service');
+    const httpBroker = new ServiceBroker({ logger:false });
+    const gateway = httpBroker.createService({ mixins:[ApiGateway], settings:{ port:0, ip:'127.0.0.1',
+      routes:[], logRequest:null, logResponse:null, log4XXResponses:false } });
+    const previousEnv = Object.fromEntries(['APODS_ACCOUNT_VERIFICATION_HMAC_KEY','APODS_ACCOUNT_REQUEST_FINGERPRINT_KEY']
+      .map(name => [name,process.env[name]]));
+    try {
+      for (const name of Object.keys(previousEnv)) process.env[name] = env[name];
+      const signedScope = { providerId, appClientId, returnUri, browserOrigin:providerId };
+      const services = makeLocalBrowserSignupServices({ ...signedScope, handoffPool,lifecycle,broker:httpBroker,
+        verifierPool,redeemerPool, transactionKey:txConfig.encryptionKey, invitationPublicKey:invitationKeys.publicKey,
+        appBearer:crypto.randomBytes(32).toString('base64url'), pool:enrollmentPool, csrfKey:crypto.randomBytes(32),
+        fixtureOnly:true, appUri:appClientId, loadRequirements:async()=>({required:[],optional:[],revision:'b'.repeat(64)}) });
+      httpBroker.createService({name:'auth.account'});
+      httpBroker.createService({name:'auth-agent'});
+      httpBroker.createService(services.schema);
+      await httpBroker.start();
+      const endpoint = 'http://127.0.0.1:'+gateway.server.address().port+'/api/signup-enrollment/verify';
+      const invite = issueLocalInvitation({ scope:signedScope, privateKey:invitationKeys.privateKey,
+        username:account.username,email:account.email });
+      const post = origin => fetch(endpoint,{method:'POST',headers:{origin,'content-type':'application/json'},
+        body:JSON.stringify({account,invitation:invite})});
+      assert.equal((await post('https://another.example')).status,403);
+      const response = await post(providerId);
+      assert.equal(response.status,200);
+      assert.deepEqual(await response.json(),{state:'verified'});
+      const sessionCookie = response.headers.get('set-cookie');
+      assert.match(sessionCookie,/^__Host-paper-signup=/u);
+      assert.equal((await post(providerId)).status,403);
+      const received = await makeBrowserSignupTransaction({ ...signedScope,pool:redeemerPool,encryptionKey:txConfig.encryptionKey })
+        .consume({cookie:sessionCookie.split(';')[0],origin:providerId,fingerprint:signupFingerprint({
+          api,appClientId,redirectUri:returnUri,accountParams:account,protocols:api.requestedProtocolsFromAccountParams.call(api, account),env
+        })});
+      assert.equal(received.idempotencyKey,invite.split('.')[0]);
+    } finally {
+      await httpBroker.stop();
+      for(const [name,value] of Object.entries(previousEnv)) {
+        if(value === undefined) delete process.env[name]; else process.env[name]=value;
+      }
+    }
     const handoff = enrollment.signupApi.methods.beginDisposableEnrollment;
     const cookies = [];
     const input = { reservationId: first.fence.reservationId, appClientId, redirectUri: returnUri,

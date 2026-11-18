@@ -164,6 +164,7 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
+  const [invitation, setInvitation] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -276,13 +277,26 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
     setLoading(true);
     setErrors({});
     try {
+      const account = { username, email, password, profile: { displayName: username } };
+      if (verifiedTransaction && invitation) {
+        const verification = await fetch(urlJoin(CONFIG.BACKEND_URL, 'api/signup-enrollment/verify'), {
+          method: 'POST', credentials: 'include', redirect: 'error', cache: 'no-store',
+          signal: AbortSignal.timeout(10000), headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invitation, account })
+        });
+        if (!verification.ok) {
+          notify('Signup verification failed. Check your invitation or request a new one.', { type: 'error' });
+          return;
+        }
+        setInvitation('');
+      }
       const res = await fetch(urlJoin(CONFIG.BACKEND_URL, verifiedTransaction ? 'api/accounts/create' : 'auth/signup'), {
         credentials: verifiedTransaction ? 'include' : 'same-origin',
         redirect: 'error',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(verifiedTransaction
-          ? { browserSignupTransaction: true, username, email, password, profile: { displayName: username } }
+          ? { browserSignupTransaction: true, ...account }
           : { username, email, password, 'schema:knowsLanguage': locale })
       });
 
@@ -429,6 +443,10 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
           }}
         />
 
+        {verifiedTransaction && <TextField label="Local signup invitation" type="password" fullWidth
+          autoComplete="off" size="small" value={invitation} onChange={event => setInvitation(event.target.value)}
+          helperText="Enter the invitation from your local provider, or leave blank if already verified."
+          sx={{ mb: 2 }} />}
         <Button
           type="submit"
           fullWidth

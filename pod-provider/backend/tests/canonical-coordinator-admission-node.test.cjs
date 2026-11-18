@@ -130,7 +130,8 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const returnUri = providerId + '/signup-return';
     const { createCandidate } = require('../candidates/postgres-account-lifecycle');
     const { makeBrowserEnrollmentService } = require('../candidates/provider-browser-enrollment-service');
-    const lifecycle = createCandidate({ pool: owner, fixtureOnly: true });
+    const identityBinder = await runtime('paper_enrollment_identity_binder');
+    const lifecycle = createCandidate({ pool: identityBinder, fixtureOnly: true });
     let pendingReservation = first.fence.reservationId;
     const broker = { async call(action) {
       if (action === 'auth.account.findByWebId') {
@@ -158,6 +159,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.deepEqual(cookies, []);
     pendingReservation = first.fence.reservationId;
     const handoffs = await Promise.allSettled([handoff(input), handoff(input)]);
+    if (handoffs.every(result => result.status === "rejected")) throw handoffs[0].reason;
     assert.equal(handoffs.filter(result => result.status === 'fulfilled').length, 1);
     assert.equal(cookies.length, 1);
     assert.match(cookies[0], /^__Host-paper-enrollment=/u);
@@ -167,7 +169,12 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.deepEqual(session.requirements.required, [appClientId + '#profile']);
     await assert.rejects(view({ meta: { enrollmentCookie: cookies[0].split(';')[0],
       enrollmentOrigin: 'https://other.example.org' } }));
-    assert.equal((await lifecycle.read({ providerId, accountId: admitted.accountId })).state, 'provisioning');
+    assert.equal((await createCandidate({ pool: owner, fixtureOnly: true })
+      .read({ providerId, accountId: admitted.accountId })).state, 'provisioning');
+    await assert.rejects(identityBinder.query("UPDATE paper_account_candidate.accounts SET state='ready' WHERE account_id=$1",
+      [admitted.accountId]), { code: '42501' });
+    await assert.rejects(identityBinder.query("UPDATE paper_account_candidate.signup_operations SET state='ready'"),
+      { code: '42501' });
     await assert.rejects(handoff(input));
     await assert.rejects(handoffPool.query('SELECT * FROM paper_account_candidate.accounts'), { code: '42501' });
 

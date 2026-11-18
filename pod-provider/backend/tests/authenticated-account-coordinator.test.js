@@ -2,6 +2,7 @@
 
 const crypto=require('node:crypto');
 const {ServiceBroker}=require('moleculer');
+const ApiGateway=require('moleculer-web');
 const api=require('../services/unified-account-api.service');
 const provider=require('../services/provider-capabilities.service');
 const accounts=require('../services/accounts.service');
@@ -117,11 +118,15 @@ afterEach(()=>{
   }
 });
 
-async function setup({appConfig=app(), onCreate=()=>({webId:'synthetic'})}={}){
+async function setup({appConfig=app(), onCreate=()=>({webId:'synthetic'}), beginEnrollment}={}){
   const broker=new ServiceBroker({logger:false});
   const addRoute=jest.fn(()=>true);
   const create=jest.fn(onCreate);
-  broker.createService({name:'api',actions:{addRoute}});
+  const gateway = beginEnrollment
+    ? broker.createService({ mixins: [ApiGateway], settings: {
+      port: 0, ip: '127.0.0.1', routes: [], log4XXResponses: false, logRequest: null, logResponse: null
+    } })
+    : broker.createService({name:'api',actions:{addRoute}});
   broker.createService({
     ...provider,
     settings:{
@@ -134,9 +139,9 @@ async function setup({appConfig=app(), onCreate=()=>({webId:'synthetic'})}={}){
     }
   });
   broker.createService({name:'unified-account',actions:{create}});
-  broker.createService(api);
+  broker.createService(beginEnrollment ? { ...api, methods: { ...api.methods, beginDisposableEnrollment: beginEnrollment } } : api);
   await broker.start();
-  return{broker,create};
+  return{broker,create,gateway};
 }
 function makeFetch({status=200, ticketValue=ticket()}={}){
   return jest.fn(async(url,options)=>{
@@ -172,6 +177,49 @@ function makeFetch({status=200, ticketValue=ticket()}={}){
     });
   });
 }
+test('signup HTTP response carries a pending session cookie only for a matching provider result', async () => {
+  const ticketValue = ticket();
+  const webId = ticketValue.claim.ownerWebid;
+  const reserve = makeFetch({ ticketValue });
+  const original = global.fetch;
+  const cookie = '__Host-paper-enrollment=test-session; Path=/; Secure; HttpOnly; SameSite=Strict';
+  let correctActor = true;
+  const beginEnrollment = jest.fn(async ({ setCookie }) => {
+    setCookie(cookie);
+    return { state: 'awaiting_consent', csrfToken: 'private-to-view' };
+  });
+  const { broker, gateway } = await setup({ beginEnrollment, onCreate: () => ({
+    canonicalAccountId: webId, webId, solid: { webId },
+    activitypub: { actorId: correctActor ? webId : webId + '-other' },
+    atproto: { repoInitialized: true }
+  }) });
+  global.fetch = reserve;
+  try {
+    const endpoint = 'http://127.0.0.1:' + gateway.server.address().port + '/api/accounts/create';
+    const submit = () => original(endpoint, {
+      method: 'POST', headers: { ...headers(), 'content-type': 'application/json' },
+      body: JSON.stringify(request())
+    });
+    const pending = await submit();
+    expect(pending.status).toBe(202);
+    expect(pending.headers.get('set-cookie')).toBe(cookie);
+    expect(pending.headers.get('cache-control')).toBe('no-store');
+    expect(await pending.json()).toEqual({ state: 'awaiting_consent' });
+    expect(beginEnrollment).toHaveBeenCalledWith({
+      reservationId: ticketValue.claim.reservationId, appClientId: APP, redirectUri: REDIRECT,
+      username: USER, webId, setCookie: expect.any(Function)
+    });
+    correctActor = false;
+    const mismatched = await submit();
+    expect(mismatched.status).toBe(503);
+    expect(mismatched.headers.get('set-cookie')).toBeNull();
+    expect(beginEnrollment).toHaveBeenCalledTimes(1);
+  } finally {
+    global.fetch = original;
+    await broker.stop();
+  }
+});
+
 test('real API authorizes approved app and user, calls coordinator, forwards only ticket, and refuses 201 without attestation',async()=>{
   const f=makeFetch(),orig=global.fetch;
   global.fetch=f;

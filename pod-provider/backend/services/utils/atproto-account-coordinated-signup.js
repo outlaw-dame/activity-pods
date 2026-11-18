@@ -135,16 +135,18 @@ async function coordinatedDisposableSignup({
           provisioned.atproto?.repoInitialized !== true) {
         deny('ACCOUNT_COORDINATOR_IDENTITY_MISMATCH');
       }
+      let enrollmentCookie;
       const pending = await beginEnrollment({
         reservationId: admission.reservationId, appClientId, redirectUri,
         username: accountParams.username, webId,
-        setCookie(cookie) {
-          ctx.meta.$responseHeaders = {
-            ...ctx.meta.$responseHeaders, 'Set-Cookie': cookie, 'Cache-Control': 'no-store'
-          };
-        }
+        setCookie(cookie) { enrollmentCookie = cookie; }
       });
-      if (pending?.state !== 'awaiting_consent') deny('ACCOUNT_ENROLLMENT_UNAVAILABLE');
+      if (pending?.state !== 'awaiting_consent' || typeof enrollmentCookie !== 'string') {
+        deny('ACCOUNT_ENROLLMENT_UNAVAILABLE');
+      }
+      ctx.meta.$responseHeaders = {
+        ...ctx.meta.$responseHeaders, 'Set-Cookie': enrollmentCookie, 'Cache-Control': 'no-store'
+      };
       ctx.meta.$statusCode = 202;
       return { state: 'awaiting_consent' };
     } catch {

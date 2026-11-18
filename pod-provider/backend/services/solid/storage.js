@@ -25,6 +25,36 @@ module.exports = {
         });
       }
 
+      return this.createStorageRoot(ctx, username);
+    },
+
+    // The auth service already consumed the signed claim and initialized the
+    // dataset before inserting this private account. Never reissue the ticket.
+    createPendingSignupRoot: {
+      visibility: 'protected',
+      params: { $$strict: true, username: { type: 'string', pattern: /^claimtest-[a-z0-9]{8,24}$/u } },
+      async handler(ctx) {
+        if (process.env.NODE_ENV !== 'test' ||
+            process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE !== 'confirmed' ||
+            process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
+            process.env.APODS_ACCOUNT_RESERVATION_DISPOSABLE !== 'confirmed' ||
+            ctx.caller !== 'webid' || this.settings.secureDataset === false) {
+          throw new Error('Pending storage creation unavailable');
+        }
+        const { username } = ctx.params;
+        const account = await ctx.broker.call('auth.account.findByUsername', { username },
+          { meta: {}, timeout: 5000, retries: 0 });
+        if (!account || account.username !== username || account.webId || account.deletedAt ||
+            typeof account.signupReservationId !== 'string' ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(account.signupReservationId)) {
+          throw new Error('Pending storage owner mismatch');
+        }
+        return this.createStorageRoot(ctx, username);
+      }
+    }
+  },
+  methods: {
+    async createStorageRoot(ctx, username) {
       ctx.meta.dataset = username;
 
       const storageRootUri = urlJoin(this.settings.baseUrl, username, this.settings.pathName);

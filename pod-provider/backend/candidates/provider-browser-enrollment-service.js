@@ -2,6 +2,8 @@
 
 const { Errors: { MoleculerError } } = require('moleculer');
 const unifiedAccountApi = require('../services/unified-account-api.service');
+const { makeLocalSignupVerifier } = require('./local-browser-signup-verifier');
+const { makeBrowserSignupTransaction } = require('./browser-signup-transaction');
 const { createProviderEnrollmentHandoff } = require('./provider-enrollment-handoff');
 const { createProviderBrowserEnrollment } = require('./provider-browser-enrollment');
 
@@ -11,7 +13,7 @@ const { createProviderBrowserEnrollment } = require('./provider-browser-enrollme
  * loadRequirements must resolve and hash the approved app's permission semantics,
  * not trust a browser manifest, dc:modified label or a digest of identifiers alone.
  */
-function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, browserTransaction, ...options } = {}) {
+function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, browserTransaction, verifyLocalSignup, ...options } = {}) {
   if (!broker || typeof broker.call !== 'function') throw new Error('Enrollment broker required');
   const enrollment = createProviderBrowserEnrollment({
     ...options,
@@ -54,17 +56,33 @@ function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, browserT
       await this.broker.call('api.addRoute', { route: {
         name: 'signup-enrollment', path: '/api/signup-enrollment',
         authentication: false, authorization: false, mappingPolicy: 'restrict',
-        whitelist: ['signup-enrollment.view', 'signup-enrollment.consent'],
+        whitelist: ['signup-enrollment.view', 'signup-enrollment.consent', ...(verifyLocalSignup ? ['signup-enrollment.verify'] : [])],
         bodyParsers: { json: { strict: true, limit: '16kb' } },
         cors: { origin: options.browserOrigin, credentials: true, methods: ['GET', 'POST', 'OPTIONS'] },
         onBeforeCall(ctx, route, req) {
           ctx.meta.enrollmentCookie = req.headers.cookie;
           ctx.meta.enrollmentOrigin = req.headers.origin;
         },
-        aliases: { 'GET /': 'signup-enrollment.view', 'POST /status': 'signup-enrollment.view', 'POST /consent': 'signup-enrollment.consent' }
+        aliases: { ...(verifyLocalSignup ? { 'POST /verify': 'signup-enrollment.verify' } : {}), 'GET /': 'signup-enrollment.view', 'POST /status': 'signup-enrollment.view', 'POST /consent': 'signup-enrollment.consent' }
       }, toBottom: false });
     },
     actions: {
+      ...(verifyLocalSignup ? { verify: {
+        bulkhead: { enabled: true, concurrency: 4, maxQueueSize: 8 },
+        params: { $$strict: true, invitation: { type: 'string', length: 137 }, account: 'object' },
+        async handler(ctx) {
+          responseHeaders(ctx);
+          let cookie;
+          try {
+            await verifyLocalSignup({ ...ctx.params, origin: ctx.meta.enrollmentOrigin,
+              setCookie: value => { cookie = value; } });
+            if (!cookie) throw Error();
+          } catch { throw new MoleculerError('Signup verification unavailable', 403, 'SIGNUP_VERIFICATION_REFUSED', {retryable:false}); }
+          ctx.meta.$responseHeaders['Set-Cookie'] = cookie;
+          return { state: 'verified' };
+        }
+      } } : {}),
+
       view: {
         bulkhead: { enabled: true, concurrency: 8, maxQueueSize: 16 },
         handler(ctx) { return run(ctx, 'view', {}); }
@@ -97,4 +115,23 @@ function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, browserT
   return Object.freeze({ schema, issue: enrollment.issue, signupApi });
 }
 
-module.exports = { makeBrowserEnrollmentService };
+// Constructs both provider services with separate verifier and redeemer logins.
+// The operator signing key stays outside this process.
+function makeLocalBrowserSignupServices({ verifierPool, redeemerPool, invitationPublicKey,
+  transactionKey, appBearer, ...settings }) {
+  if (!verifierPool || !redeemerPool || verifierPool === redeemerPool ||
+      !settings.handoffPool || !settings.lifecycle || typeof appBearer !== 'string' ||
+      appBearer.length < 16 || appBearer.length > 4096 || /[\r\n]/u.test(appBearer)) {
+    throw new Error('Local browser signup configuration refused');
+  }
+  const scope = { providerId: settings.providerId, appClientId: settings.appClientId,
+    browserOrigin: settings.browserOrigin, returnUri: settings.returnUri };
+  const options = { ...scope, encryptionKey: transactionKey };
+  const verifier = makeBrowserSignupTransaction({ ...options, pool: verifierPool });
+  const redeemer = makeBrowserSignupTransaction({ ...options, pool: redeemerPool });
+  return makeBrowserEnrollmentService({ ...settings, verifyLocalSignup: makeLocalSignupVerifier({
+    publicKey: invitationPublicKey, scope, transaction: verifier
+  }), browserTransaction: { appClientId: scope.appClientId, redirectUri: scope.returnUri,
+    bearer: appBearer, consume: redeemer.consume } });
+}
+module.exports = { makeBrowserEnrollmentService, makeLocalBrowserSignupServices };

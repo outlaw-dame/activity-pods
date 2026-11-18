@@ -22,7 +22,17 @@ const root = path.resolve(__dirname, '../../pod-provider/frontend/build');
           });
         if (url.hostname !== 'login.example.test') return route.abort();
         if (url.pathname === '/v1/usernames/available') return route.fulfill({ json: { available: true } });
+        if (url.pathname === '/api/signup-enrollment/verify') {
+          assert.equal(route.request().postDataJSON().invitation, 'operator-invitation');
+          return route.fulfill({
+            json: { state: 'verified' },
+            headers: {
+              'set-cookie': '__Host-paper-signup=transaction; Secure; HttpOnly; SameSite=Strict; Path=/'
+            }
+          });
+        }
         if (url.pathname === '/api/accounts/create') {
+          assert((await route.request().allHeaders()).cookie.includes('__Host-paper-signup=transaction'));
           signupRequests.push(route.request().postDataJSON());
           return route.fulfill({
             status: 202,
@@ -55,6 +65,7 @@ const root = path.resolve(__dirname, '../../pod-provider/frontend/build');
         await page.getByPlaceholder('username').fill('browsertest');
         await page.getByLabel('E-Mail').fill('browser@example.test');
         await page.getByLabel('Password', { exact: true }).fill('disposable-password');
+        await page.getByLabel('Local signup invitation').fill('operator-invitation');
         await page.locator('button[type="submit"]').click();
         await page.waitForURL('**/login?enrollment=1');
         assert.deepEqual(signupRequests, [

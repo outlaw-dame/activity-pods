@@ -7,6 +7,8 @@ on:
       - 'pod-provider/backend/candidates/provider-*-enrollment*.js'
       - 'pod-provider/backend/candidates/provider-enrollment-handoff.js'
       - 'pod-provider/backend/candidates/browser-signup-transaction.js'
+      - 'pod-provider/backend/candidates/local-browser-signup-verifier.js'
+      - 'pod-provider/backend/scripts/issue-local-signup-invitation.cjs'
       - 'pod-provider/backend/sql/paper-browser-signup-transaction.sql'
       - 'pod-provider/backend/services/unified-account-api.service.js'
       - 'pod-provider/backend/services/utils/atproto-account-coordinated-signup.js'

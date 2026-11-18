@@ -101,3 +101,32 @@ pinned PostgreSQL image. Locally, the test reads a private JSON `databaseUrl` fo
 the disposable `paper_local_plc` database on 127.0.0.1:5549, creates a uniquely named
 test database/login and removes only its own test resources. It never clears or
 migrates the existing PLC database.
+
+### Disposable provider verification
+
+The local provider can verify an operator invitation before account creation.
+Use this mode only for an operator-approved disposable username and email.
+The operator checks who receives the invitation. Possession authorizes one
+signup for that identity at the specified app and provider within two minutes.
+This rehearsal does not verify ownership of a public email mailbox.
+
+Construct the disposable provider services with
+`makeLocalBrowserSignupServices`. Pass the operator's **public** Ed25519 key,
+distinct verifier and redeemer pools, the transaction encryption key, and the
+configured app bearer in addition to the existing enrollment settings.
+Register the returned signup API in place of the ordinary signup API and
+register the enrollment schema once. The operator retains the private key.
+
+To issue an invitation, supply an owner-private regular JSON file containing
+`privateKeyPem`, `username`, `email` and `scope`. The scope contains the exact
+`providerId`, `appClientId`, `browserOrigin` and `returnUri` from the local
+provider configuration. Use an unused output path on the operator workstation:
+
+    NODE_ENV=test PAPER_ACCOUNTS_DISPOSABLE=confirmed APODS_ACCOUNT_COORDINATOR_DISPOSABLE=confirmed node scripts/issue-local-signup-invitation.cjs PRIVATE_INPUT.json PRIVATE_OUTPUT
+
+The command creates a mode-0600 file. Give its contents to the intended local
+tester through a private channel. In the configured provider login form at
+`/login?signup=true&verified_signup=1`, enter the matching account details
+and paste the invitation in the masked field. Verification returns a short-lived
+HttpOnly transaction cookie. Only the coordinated create request redeems it.
+A lost acknowledgment requires reconciliation. Never put the invitation in a URL.

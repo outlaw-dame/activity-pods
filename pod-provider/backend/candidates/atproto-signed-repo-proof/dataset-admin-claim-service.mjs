@@ -13,6 +13,9 @@
 import { ownerWebId } from '../../services/utils/disposable-provider-identity.js';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const ORIGIN='http://127.0.0.1:3041';
 const ISSUER='https://paper.example.org/provider';
@@ -166,12 +169,13 @@ export async function createDisposableDatasetAdmin({
     if(key.asymmetricKeyType!=='ed25519')fail();
   }catch{fail('DATASET_ADMIN_ISSUER_INVALID');}
   const basic='Basic '+Buffer.from(adminUsername+':'+adminPassword).toString('base64');
-  async function fuseki(endpoint,method,body=null,type=null){
+  const template = await readFile(require.resolve('@semapps/triplestore/templates/secure-dataset.ttl'), 'utf8');
+  async function fuseki(endpoint,method,body=null,type=null,principal='system'){
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),6000);
     try{
       const response=await fetch(origin+endpoint,{
-        method,headers:{authorization:basic,
+        method,headers:{authorization:basic,'X-SemappsUser':principal,
           ...(type?{'content-type':type}:{}),
           accept:'application/sparql-results+json'},
         body,redirect:'manual',signal:controller.signal
@@ -211,43 +215,33 @@ export async function createDisposableDatasetAdmin({
       fail('DATASET_ADMIN_SQL_UNAVAILABLE',503);
     }finally{client.release();}
   }
-  async function present(dataset){
-    const q=await fuseki('/'+dataset+'/query','POST','ASK WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }',
-      'application/sparql-query');
-    if(q.status===404)return {exists:false,nonempty:false};
-    if(q.status!==200)fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);
-    let parsed;
-    try{parsed=JSON.parse(q.body);}catch{fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);}
-    if(typeof parsed.boolean!=='boolean')fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);
-    return {exists:true,nonempty:parsed.boolean};
+  async function ask(dataset, pattern, principal = 'system') {
+    const result = await fuseki('/'+dataset+'/query', 'POST', 'ASK WHERE { '+pattern+' }',
+      'application/sparql-query', principal);
+    if (result.status === 404) return null;
+    if (result.status !== 200) fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);
+    let value;
+    try { value = JSON.parse(result.body).boolean; } catch { /* Refuse malformed readback below. */ }
+    if (typeof value !== 'boolean') fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);
+    return value;
   }
-  async function provision(ticket,{now=Date.now()}={}){
-    const p=verifyDisposableDatasetClaim(ticket,key,now);
-    const state=await claimRow(p);
-    // Never hold a PG transaction while reaching Jena. A killed process
-    // may retry the SAME immutable signed claim after either side commits.
-    let before=await present(p.dataset);
-    if(state==='created'&&!before.exists){
-      fail('DATASET_ADMIN_COMMITTED_DATASET_MISSING',503);
-    }
-    if(state==='pending'){
-      if(before.exists&&before.nonempty){
-        fail('DATASET_ADMIN_PREEXISTING_NONEMPTY',409);
-      }
-      if(!before.exists){
-        const body=new URLSearchParams({dbName:p.dataset,dbType:'tdb2'}).toString();
-        const response=await fuseki('/$/datasets','POST',body,
-          'application/x-www-form-urlencoded');
-        if(![200,201,204,409].includes(response.status)){
-          fail('DATASET_ADMIN_CREATE_REJECTED',503);
-        }
-      }
-      // 2xx POST or 409 alone is NOT evidence of success. Verify a
-      // functioning TDB2 SPARQL endpoint before marking durable created.
-      const after=await present(p.dataset);
-      if(!after.exists||after.nonempty){
+  async function provisionOnce(p) {
+    const state = await claimRow(p);
+    // Only the admin writes this private witness, and only following a
+    // successful assembler creation. Never adopt a pre-existing empty Pod.
+    const marker = '<urn:paper:dataset:' + p.sha256.toString('hex') + '> <urn:paper:secured> true';
+    const visible = await ask(p.dataset, marker);
+    if (visible !== true) {
+      if (state !== 'pending' || visible !== null) fail('DATASET_ADMIN_DATASET_UNVERIFIED',503);
+      const created = await fuseki('/$/datasets','POST',template.replaceAll('{dataset}',p.dataset),'text/turtle');
+      if (![200,201,204].includes(created.status)) fail('DATASET_ADMIN_CREATE_REJECTED',503);
+      const written = await fuseki('/'+p.dataset+'/update','POST','INSERT DATA { '+marker+' }','application/sparql-update');
+      if (![200,204].includes(written.status) || await ask(p.dataset,marker) !== true) {
         fail('DATASET_ADMIN_CREATE_UNVERIFIED',503);
       }
+    }
+    if (await ask(p.dataset,marker,'anon') !== false) fail('DATASET_ADMIN_WEBACL_UNVERIFIED',503);
+    if (state === 'pending') {
       const r=await pool.query(
         'UPDATE paper_dataset_admin_proof.claims '+
         "SET state='created',completed_at=clock_timestamp() "+
@@ -271,6 +265,16 @@ export async function createDisposableDatasetAdmin({
     }
     return Object.freeze({created:true,dataset:p.dataset,ownerWebid:p.ownerWebid,
       idempotent:state==='created'});
+  }
+  const running = new Map();
+  function provision(ticket,{now=Date.now()}={}) {
+    const claim = verifyDisposableDatasetClaim(ticket,key,now);
+    const digest = claim.sha256.toString('hex');
+    if (running.has(digest)) return running.get(digest);
+    if (running.size >= 16) fail('DATASET_ADMIN_BUSY',503);
+    const pending = provisionOnce(claim).finally(() => running.delete(digest));
+    running.set(digest,pending);
+    return pending;
   }
   return Object.freeze({provision});
 }

@@ -134,6 +134,7 @@ jobs:
       - name: Install locked signed-PG proof dependencies
         run: |
           set -euo pipefail
+          npm ci --prefix backend --ignore-scripts --no-audit --no-fund
           npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
 
       - name: Prove durable PostgreSQL account reservation and cross-replica identity fencing

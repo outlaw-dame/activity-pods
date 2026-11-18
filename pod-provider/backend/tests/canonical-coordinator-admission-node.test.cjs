@@ -36,7 +36,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const files = [
       ...['v1','v2-signup-ledger','v3-evidence-seal','v4-atomic-completion','v6-enrollment'].map(v => '../sql/paper-account-postgres-candidate-' + v + '.sql'),
       '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
-      ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql')
+      ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql')
     ];
     for (const file of files) {
       const sql = await fs.readFile(path.join(__dirname, file), 'utf8');
@@ -122,6 +122,61 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.equal(await authority.claimSignup(lost.fence), false);
     await assert.rejects(admission.admit(lost.request));
     assert.equal((await owner.query('SELECT count(*)::int AS n FROM paper_account_candidate.accounts')).rows[0].n, 3);
+
+    const handoffPool = await runtime('paper_enrollment_handoff');
+    const enrollmentPool = await runtime('paper_enrollment_runtime');
+    const providerId = 'https://paper.example.org';
+    const webId = providerId + '/users/' + first.input.username;
+    const returnUri = providerId + '/signup-return';
+    const { createCandidate } = require('../candidates/postgres-account-lifecycle');
+    const { makeBrowserEnrollmentService } = require('../candidates/provider-browser-enrollment-service');
+    const identityBinder = await runtime('paper_enrollment_identity_binder');
+    const lifecycle = createCandidate({ pool: identityBinder, fixtureOnly: true });
+    let pendingReservation = first.fence.reservationId;
+    const broker = { async call(action) {
+      if (action === 'auth.account.findByWebId') {
+        return { webId, username: first.input.username, signupReservationId: pendingReservation };
+      }
+      assert.equal(action, 'identitybindings.getByCanonicalAccountId');
+      return { webId, activityPubActorId: webId, atprotoManaged: true, repoInitialized: true,
+        atSigningKeyRef: 'signing-ref', atRotationKeyRef: 'rotation-ref', repoRootCid: 'test-root', repoRev: 'test-rev',
+        atprotoDid: 'did:plc:' + 'a'.repeat(24), atprotoHandle: first.input.username + '.paper.example.org',
+        atprotoPdsUrl: providerId };
+    } };
+    const enrollment = makeBrowserEnrollmentService({ broker, handoffPool, lifecycle,
+      pool: enrollmentPool, providerId, appClientId, returnUri, browserOrigin: providerId,
+      appUri: appClientId, csrfKey: crypto.randomBytes(32), fixtureOnly: true,
+      loadRequirements: async () => ({ required: [appClientId + '#profile'], optional: [], revision: 'b'.repeat(64) })
+    });
+    const handoff = enrollment.signupApi.methods.beginDisposableEnrollment;
+    const cookies = [];
+    const input = { reservationId: first.fence.reservationId, appClientId, redirectUri: returnUri,
+      username: first.input.username, webId, setCookie: value => cookies.push(value) };
+    await assert.rejects(handoff({ ...input, redirectUri: providerId + '/other' }));
+    pendingReservation = failed.fence.reservationId;
+    await assert.rejects(handoff(input));
+    await assert.rejects(handoff({ ...input, reservationId: pendingReservation }));
+    assert.deepEqual(cookies, []);
+    pendingReservation = first.fence.reservationId;
+    const handoffs = await Promise.allSettled([handoff(input), handoff(input)]);
+    if (handoffs.every(result => result.status === "rejected")) throw handoffs[0].reason;
+    assert.equal(handoffs.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(cookies.length, 1);
+    assert.match(cookies[0], /^__Host-paper-enrollment=/u);
+    const view = enrollment.schema.actions.view.handler;
+    const session = await view({ meta: { enrollmentCookie: cookies[0].split(';')[0], enrollmentOrigin: providerId } });
+    assert.equal(session.state, 'awaiting_consent');
+    assert.deepEqual(session.requirements.required, [appClientId + '#profile']);
+    await assert.rejects(view({ meta: { enrollmentCookie: cookies[0].split(';')[0],
+      enrollmentOrigin: 'https://other.example.org' } }));
+    assert.equal((await createCandidate({ pool: owner, fixtureOnly: true })
+      .read({ providerId, accountId: admitted.accountId })).state, 'provisioning');
+    await assert.rejects(identityBinder.query("UPDATE paper_account_candidate.accounts SET state='ready' WHERE account_id=$1",
+      [admitted.accountId]), { code: '42501' });
+    await assert.rejects(identityBinder.query("UPDATE paper_account_candidate.signup_operations SET state='ready'"),
+      { code: '42501' });
+    await assert.rejects(handoff(input));
+    await assert.rejects(handoffPool.query('SELECT * FROM paper_account_candidate.accounts'), { code: '42501' });
 
     const drift = await reserve();
     await owner.query(`GRANT SELECT(webid) ON paper_account_candidate.accounts TO ${logins[2]}`);

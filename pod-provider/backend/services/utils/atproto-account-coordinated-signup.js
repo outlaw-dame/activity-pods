@@ -47,7 +47,7 @@ function fingerprint({api,appClientId,redirectUri,accountParams,protocols,env}){
 }
 async function coordinatedDisposableSignup({
   ctx,api,env=process.env,
-  reserveImpl=reserveCoordinatedDataset
+  reserveImpl=reserveCoordinatedDataset, beginEnrollment
 }={}){
   assertDisposable(env);
   const accountParams=api.normalizeAccountCreateParams(ctx.params || {});
@@ -109,20 +109,49 @@ async function coordinatedDisposableSignup({
     deny('ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED');
   }
 
+  let provisioned;
   try{
     // Ticket is an explicit operation parameter, never Moleculer ctx.meta.
     // Grant is non-secret policy evidence and is separately checked by the
     // unified-account service as in the existing internal integration.
-    await ctx.broker.call('unified-account.create',{
+    provisioned=await ctx.broker.call('unified-account.create',{
       ...accountParams,datasetAdminTicket:ticket,
       accountCoordinatorAdmission:admission
     },{
-      meta:{accountProvisioning:grant},timeout:120000
+      meta:{accountProvisioning:grant},timeout:120000,retries:0
     });
   }catch(error){
     // The actual signup RPC may have created a WebID and a DID before its
     // transport failed. The PostgreSQL fence is intentionally retained.
     deny('ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED');
+  }
+  // An explicit process-local runtime may start enrollment. Browser input
+  // cannot supply this callback or the authenticated coordinator receipt.
+  if (typeof beginEnrollment === 'function') {
+    try {
+      const webId = provisioned?.webId;
+      if (typeof webId !== 'string' || provisioned.canonicalAccountId !== webId ||
+          provisioned.solid?.webId !== webId || provisioned.activitypub?.actorId !== webId ||
+          provisioned.atproto?.repoInitialized !== true) {
+        deny('ACCOUNT_COORDINATOR_IDENTITY_MISMATCH');
+      }
+      let enrollmentCookie;
+      const pending = await beginEnrollment({
+        reservationId: admission.reservationId, appClientId, redirectUri,
+        username: accountParams.username, webId,
+        setCookie(cookie) { enrollmentCookie = cookie; }
+      });
+      if (pending?.state !== 'awaiting_consent' || typeof enrollmentCookie !== 'string') {
+        deny('ACCOUNT_ENROLLMENT_UNAVAILABLE');
+      }
+      ctx.meta.$responseHeaders = {
+        ...ctx.meta.$responseHeaders, 'Set-Cookie': enrollmentCookie, 'Cache-Control': 'no-store'
+      };
+      ctx.meta.$statusCode = 202;
+      return { state: 'awaiting_consent' };
+    } catch {
+      deny('ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED');
+    }
   }
   // The current unified facade returns metadata, NOT the attested signed
   // CAR/hosted-PDS/Solid/SAI completion evidence and atomic PG seal.

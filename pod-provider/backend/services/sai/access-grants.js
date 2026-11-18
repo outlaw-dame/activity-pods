@@ -1,3 +1,4 @@
+const { findScopedRecord } = require('../utils/sai-scoped-lookup');
 const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 
@@ -44,20 +45,7 @@ module.exports = {
     },
     // Get the AccessGrant linked with an AccessNeedGroup
     async getByAccessNeedGroup(ctx) {
-      const { accessNeedGroupUri, podOwner } = ctx.params;
-
-      const filteredContainer = await this.actions.list(
-        {
-          filters: {
-            'http://www.w3.org/ns/solid/interop#grantedBy': podOwner,
-            'http://www.w3.org/ns/solid/interop#hasAccessNeedGroup': accessNeedGroupUri
-          },
-          webId: podOwner
-        },
-        { parentCtx: ctx }
-      );
-
-      return filteredContainer['ldp:contains']?.[0];
+      return findScopedRecord(this, ctx, 'grantedBy', 'hasAccessNeedGroup', ctx.params.accessNeedGroupUri);
     }
   },
   hooks: {

@@ -247,7 +247,8 @@ test('actual AccessGrant and DataGrant hooks use persisted pre-delete identity',
   const stubLdp = { ControlledContainerMixin: {} };
   for (const serviceName of ['access-grants', 'data-grants']) {
     const s = load(path.join(backend, 'services/sai/' + serviceName + '.js'), {
-      '../utils/atproto-sai-native-fence': native,
+      '../utils/sai-scoped-lookup': require('../services/utils/sai-scoped-lookup'),
+    '../utils/atproto-sai-native-fence': native,
       '@semapps/ldp': stubLdp
     });
     const { ctx, calls } = setup();
@@ -269,6 +270,7 @@ test('actual AccessGrant and DataGrant hooks use persisted pre-delete identity',
 test('native AccessAuthorization post honors the ATProto fence even when Group bridge is off', async () => {
   env(true);
   const s = load(path.join(backend, 'services/sai/access-authorizations.js'), {
+    '../utils/sai-scoped-lookup': require('../services/utils/sai-scoped-lookup'),
     '../utils/atproto-sai-native-fence': native,
     '../utils/collective-special-rights': { isGroupRight: () => false, onlyGroupRights: () => false },
     '@semapps/ldp': { ControlledContainerMixin: {}, arrayOf: x => Array.isArray(x) ? x : x ? [x] : [] },
@@ -365,5 +367,41 @@ test('duplicate, unbounded and noncanonical app allowlists fail before any broke
       e => e.type === 'ATPROTO_SAI_FENCE_CONFIG_INVALID'
     );
     assert.equal(calls.length, 0);
+  }
+});
+
+test('native SAI grant and authorization lookups require a unique owner, application and need', async () => {
+  const { findScopedRecord } = require('../services/utils/sai-scoped-lookup');
+  for (const prefix of ['access', 'data']) {
+    const group = prefix === 'access';
+    const needProperty = group ? 'hasAccessNeedGroup' : 'satisfiesAccessNeed';
+    const ownerProperty = group ? 'grantedBy' : 'dataOwner';
+    const need = origin + '/needs/read-profile';
+    for (const kind of ['grants', 'authorizations']) {
+      const schema = load(path.join(backend, 'services/sai/' + prefix + '-' + kind + '.js'), {
+        '../utils/sai-scoped-lookup': { findScopedRecord },
+        '../utils/atproto-sai-native-fence': native,
+        '../utils/collective-special-rights': {},
+        '@semapps/mime-types': { MIME_TYPES: {} },
+        '@semapps/ldp': { ControlledContainerMixin: {} }
+      });
+      const ctx = { params: { podOwner: owner, appUri: app, [group ? 'accessNeedGroupUri' : 'accessNeedUri']: need } };
+      const base = { ['interop:' + needProperty]: need, ['interop:' + ownerProperty]: owner };
+      const rows = ['https://other.example/app', app].map((grantee, i) => ({
+        ...base, 'interop:grantee': grantee, id: owner + '/grant-' + i
+      }));
+      const service = { actions: { list: async ({ filters, webId }) => {
+        assert.equal(webId, owner);
+        const matches = rows.filter(row => Object.entries(filters).every(([key, value]) =>
+          row['interop:' + key.split('#')[1]] === value));
+        return { 'ldp:contains': matches };
+      } } };
+      const lookup = () => schema.actions[group ? 'getByAccessNeedGroup' : 'getByAccessNeed'].call(service, ctx);
+      assert.equal((await lookup()).id, rows[1].id);
+      rows.push({ ...rows[1], id: owner + '/duplicate' });
+      await assert.rejects(lookup);
+      ctx.params.appUri = undefined;
+      await assert.rejects(lookup);
+    }
   }
 });

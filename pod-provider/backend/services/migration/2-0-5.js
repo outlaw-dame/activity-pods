@@ -145,6 +145,7 @@ module.exports = {
 
             const dataAuthorization = await ctx.call('data-authorizations.getByAccessNeed', {
               accessNeedUri: dataGrant['interop:satisfiesAccessNeed'],
+              appUri: dataGrant['interop:grantee'],
               podOwner: webId
             });
 
@@ -175,6 +176,7 @@ module.exports = {
 
           const accessAuthorization = await ctx.call('access-authorizations.getByAccessNeedGroup', {
             accessNeedGroupUri: accessGrant['interop:hasAccessNeedGroup'],
+            appUri: accessGrant['interop:grantee'],
             podOwner: webId
           });
 

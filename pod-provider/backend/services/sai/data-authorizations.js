@@ -1,3 +1,4 @@
+const { findScopedRecord } = require('../utils/sai-scoped-lookup');
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
 const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
@@ -25,7 +26,7 @@ module.exports = {
       const { accessNeedUri, podOwner, appUri } = ctx.params;
 
       // Check if a data authorization already exist for this access need
-      const dataAuthorization = await this.actions.getByAccessNeed({ accessNeedUri, podOwner }, { parentCtx: ctx });
+      const dataAuthorization = await this.actions.getByAccessNeed({ accessNeedUri, podOwner, appUri }, { parentCtx: ctx });
 
       if (dataAuthorization) {
         this.logger.info(`Found data authorization ${dataAuthorization.id} linked with access need ${accessNeedUri}`);
@@ -57,20 +58,7 @@ module.exports = {
     },
     // Get the DataAuthorization linked with an AccessNeed
     async getByAccessNeed(ctx) {
-      const { accessNeedUri, podOwner } = ctx.params;
-
-      const filteredContainer = await this.actions.list(
-        {
-          filters: {
-            'http://www.w3.org/ns/solid/interop#satisfiesAccessNeed': accessNeedUri,
-            'http://www.w3.org/ns/solid/interop#dataOwner': podOwner
-          },
-          webId: podOwner
-        },
-        { parentCtx: ctx }
-      );
-
-      return filteredContainer['ldp:contains']?.[0];
+      return findScopedRecord(this, ctx, 'dataOwner', 'satisfiesAccessNeed', ctx.params.accessNeedUri);
     },
     // Get all the DataAuthorizations granted to an application
     async getForApp(ctx) {
@@ -221,6 +209,7 @@ module.exports = {
         // Delete DataGrant that match the same AccessNeed
         const dataGrant = await ctx.call('data-grants.getByAccessNeed', {
           accessNeedUri: res.oldData['interop:satisfiesAccessNeed'],
+          appUri,
           podOwner: res.oldData['interop:dataOwner']
         });
         if (dataGrant) {

@@ -20,7 +20,14 @@ module.exports = {
     before: {
       async createWebId(ctx) {
         const { nick } = ctx.params;
-        await ctx.call('solid-storage.create', { username: nick });
+        if (process.env.APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE === 'confirmed') {
+          if (process.env.NODE_ENV !== 'test' || ctx.caller !== 'auth' || ctx.meta.isSignup !== true) {
+            throw new Error('Delegated WebID creation requires provider signup');
+          }
+          await ctx.call('solid-storage.createPendingSignupRoot', { username: nick });
+        } else {
+          await ctx.call('solid-storage.create', { username: nick });
+        }
         ctx.params['solid:oidcIssuer'] = CONFIG.BASE_URL.replace(/\/$/, ''); // Remove trailing slash if it exists
       }
     }

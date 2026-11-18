@@ -5,6 +5,9 @@ on:
       - 'pod-provider/backend/candidates/provider-browser-enrollment*.js'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-v6-enrollment.sql'
       - 'pod-provider/backend/tests/provider-browser-enrollment-node.test.cjs'
+      - 'tests/browser-enrollment/**'
+      - 'pod-provider/frontend/src/pages/SignupConsent.js'
+      - 'pod-provider/frontend/src/pages/LoginPage.js'
       - '.github/workflows/provider-browser-enrollment.yml'
   workflow_dispatch:
 permissions:
@@ -37,6 +40,14 @@ jobs:
           node-version: '22'
       - name: Install locked backend dependencies
         run: npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Build provider frontend and install the locked browser test runtime
+        run: |
+          npm ci --prefix pod-provider/frontend --ignore-scripts --no-audit --no-fund
+          CI=false npm run build --prefix pod-provider/frontend
+          npm ci --prefix tests/browser-enrollment --ignore-scripts --no-audit --no-fund
+          tests/browser-enrollment/node_modules/.bin/playwright install --with-deps chromium --only-shell
+          umask 077
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext "subjectAltName=IP:127.0.0.1" -keyout "$RUNNER_TEMP/browser.key" -out "$RUNNER_TEMP/browser.crt"
       - name: Write disposable connection configuration
         run: |
           umask 077
@@ -46,5 +57,8 @@ jobs:
           NODE_ENV: test
           PAPER_ACCOUNTS_DISPOSABLE: confirmed
           PAPER_BROWSER_ENROLLMENT_DISPOSABLE: confirmed
+          PAPER_CHROMIUM_ENROLLMENT: confirmed
+          PAPER_BROWSER_TEST_CERT: ${{ runner.temp }}/browser.crt
+          PAPER_BROWSER_TEST_KEY: ${{ runner.temp }}/browser.key
           PAPER_ENROLLMENT_TEST_CONFIG: ${{ runner.temp }}/enrollment.json
         run: node --test pod-provider/backend/tests/provider-browser-enrollment-node.test.cjs

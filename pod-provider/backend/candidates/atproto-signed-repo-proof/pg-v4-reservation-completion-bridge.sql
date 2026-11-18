@@ -85,7 +85,7 @@ BEGIN
     WHERE provider_id=p_v4_provider AND account_id=p_v4_account FOR SHARE;
   IF NOT FOUND OR a.state<>'reserved' OR a.webid IS NOT NULL OR
      a.username_key<>r.username OR
-     r.expected_webid<>p_v4_provider||'/users/'||a.username_key THEN
+     r.expected_webid<>p_v4_provider||'/'||a.username_key THEN
     RETURN false;
   END IF;
   SELECT * INTO o FROM paper_account_candidate.signup_operations

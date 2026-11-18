@@ -32,7 +32,7 @@ function ticket(){
       version:1,issuer:'https://paper.example.org/provider',
       audience:'urn:activitypods:dataset-admin:v1',
       dataset:USER,
-      ownerWebid:'https://paper.example.org/users/'+USER,
+      ownerWebid:'https://paper.example.org/'+USER,
       reservationId:crypto.randomUUID(),
       nonce:crypto.randomUUID(),
       issuedAtMs:now-1000,expiresAtMs:now+100000
@@ -439,8 +439,8 @@ test('real accounts adapter forwards signed ticket to auth.signup but not accoun
   const broker=new ServiceBroker({logger:false});
   broker.createService({name:'auth',actions:{
     signup:seen.mockImplementation(async()=>({
-      webId:'https://paper.example.org/users/'+USER,
-      activityPubActorId:'https://paper.example.org/users/'+USER,
+      webId:'https://paper.example.org/'+USER,
+      activityPubActorId:'https://paper.example.org/'+USER,
       atprotoDid:'did:plc:'+'a'.repeat(24),
       atprotoRepoInitialized:true
     }))

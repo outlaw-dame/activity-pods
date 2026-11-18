@@ -135,8 +135,14 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const lease = async f => {
       return (await issuer.query('SELECT paper_account_reservation_proof.dataset_claim_lease($1,$2,$3,$4,$5,$6) AS lease',
         ['https://paper.example.org/provider', appScope, f.fence.reservationId, f.fence.fenceToken,
-          f.input.username, 'https://paper.example.org/users/' + f.input.username])).rows[0].lease;
+          f.input.username, 'https://paper.example.org/' + f.input.username])).rows[0].lease;
     };
+    for (const ownerUri of ['https://paper.example.org/users/scopecheck', 'https://other.example/scopecheck']) {
+      await assert.rejects(worker.query(
+        'SELECT * FROM paper_account_reservation_proof.reserve($1,$2,$3,$4,$5,$6,$7,$8)',
+        ['https://paper.example.org/provider', appScope, crypto.randomBytes(32), crypto.randomBytes(32),
+          'scopecheck', ownerUri, 100, 120]), { code: '22023' });
+    }
     const first = await reserve();
     assert.equal(await authority.claimSignup(first.fence), false, 'unbound execution denied');
     assert.equal(await lease(first), null, 'unbound ticket denied');
@@ -186,7 +192,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const handoffPool = await runtime('paper_enrollment_handoff');
     const enrollmentPool = await runtime('paper_enrollment_runtime');
     const providerId = 'https://paper.example.org';
-    const webId = providerId + '/users/' + first.input.username;
+    const webId = providerId + '/' + first.input.username;
     const returnUri = providerId + '/signup-return';
     const { createCandidate } = require('../candidates/postgres-account-lifecycle');
     const { makeBrowserEnrollmentService } = require('../candidates/provider-browser-enrollment-service');

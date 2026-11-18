@@ -10,12 +10,12 @@
  * This candidate uses real PostgreSQL 18 and real Fuseki HTTP only in a
  * strictly disposable local CI fixture. No production service registration.
  */
+import { ownerWebId } from '../../services/utils/disposable-provider-identity.js';
 import crypto from 'node:crypto';
 import http from 'node:http';
 
 const ORIGIN='http://127.0.0.1:3041';
 const ISSUER='https://paper.example.org/provider';
-const OWNER_PREFIX='https://paper.example.org/users/';
 const AUDIENCE='urn:activitypods:dataset-admin:v1';
 const DOMAIN=Buffer.from('activitypods:dataset-admin:claim:v1\0','utf8');
 const DATASET=/^claimtest-[a-z0-9]{8,24}$/u;
@@ -44,7 +44,7 @@ function canonical(c,now){
   object(c,KEYS);
   if(c.version!==1||c.issuer!==ISSUER||c.audience!==AUDIENCE||
      typeof c.dataset!=='string'||!DATASET.test(c.dataset)||
-     c.ownerWebid!==OWNER_PREFIX+c.dataset||
+     c.ownerWebid!==ownerWebId(c.dataset)||
      typeof c.reservationId!=='string'||!UUID.test(c.reservationId)||
      typeof c.nonce!=='string'||!UUID.test(c.nonce)||
      !Number.isSafeInteger(c.issuedAtMs)||

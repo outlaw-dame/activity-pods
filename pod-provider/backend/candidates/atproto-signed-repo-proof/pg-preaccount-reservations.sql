@@ -66,14 +66,13 @@ DECLARE
   consumed integer;
 BEGIN
   IF p_provider IS NULL OR length(p_provider) NOT BETWEEN 10 AND 256
-     OR p_provider !~ '^https://[a-z0-9.-]+/[a-z0-9/_-]+$'
+     OR p_provider !~ '^https://[a-z0-9.-]+/provider$'
      OR p_app IS NULL OR p_app !~ '^[a-zA-Z0-9._:-]{1,128}$'
      OR p_key_hash IS NULL OR p_request_hash IS NULL
      OR octet_length(p_key_hash) <> 32 OR octet_length(p_request_hash) <> 32
      OR p_username IS NULL OR p_username !~ '^[a-z][a-z0-9_-]{1,31}$'
      OR p_expected_webid IS NULL OR length(p_expected_webid) > 512
-     OR p_expected_webid !~ '^https://[a-z0-9.-]+/users/[a-z][a-z0-9_-]{1,31}$'
-     OR right(p_expected_webid, length('/users/' || p_username)) <> '/users/' || p_username
+     OR p_expected_webid <> left(p_provider, -length('/provider')) || '/' || p_username
      OR p_daily_limit NOT BETWEEN 1 AND 100000 OR p_lease_seconds NOT BETWEEN 1 AND 120
   THEN
     RAISE EXCEPTION 'Invalid account reservation request' USING ERRCODE = '22023';

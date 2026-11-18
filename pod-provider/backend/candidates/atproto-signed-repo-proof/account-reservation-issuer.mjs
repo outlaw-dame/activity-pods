@@ -8,10 +8,10 @@
  * credential. The caller must run it in a separate, least-privileged
  * issuer process; ordinary SemApps providers cannot import a signing key.
  */
+import { ownerWebId } from '../../services/utils/disposable-provider-identity.js';
 import crypto from 'node:crypto';
 import {signDisposableDatasetClaim} from './dataset-admin-claim-service.mjs';
 
-const ROOT='https://paper.example.org/users/';
 const ISSUER='https://paper.example.org/provider';
 const DATASET=/^claimtest-[a-z0-9]{8,24}$/u;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -36,7 +36,7 @@ export async function issueBoundDatasetClaim({
      privateKey.type!=='private'||privateKey.asymmetricKeyType!=='ed25519'||
      !Number.isSafeInteger(now))refuse();
 
-  const expectedWebId=ROOT+dataset;
+  const expectedWebId=ownerWebId(dataset);
   const lease=await authority.getDatasetClaimLease(fence,dataset,expectedWebId);
   if(!(lease instanceof Date)||!Number.isSafeInteger(lease.getTime()))refuse();
   const expiresAtMs=lease.getTime();

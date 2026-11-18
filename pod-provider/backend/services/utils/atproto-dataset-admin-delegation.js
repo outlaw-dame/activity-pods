@@ -1,4 +1,5 @@
 'use strict';
+const { ownerWebId } = require('./disposable-provider-identity');
 
 /**
  * Candidate ordinary-provider client for a separate dataset administrator.
@@ -64,7 +65,7 @@ function validateTicket(dataset, ticket, now = Date.now()) {
       claim.issuer !== 'https://paper.example.org/provider' ||
       claim.audience !== 'urn:activitypods:dataset-admin:v1' ||
       claim.dataset !== dataset ||
-      claim.ownerWebid !== 'https://paper.example.org/users/' + dataset ||
+      claim.ownerWebid !== ownerWebId(dataset) ||
       typeof claim.reservationId !== 'string' ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(claim.reservationId) ||
       typeof claim.nonce !== 'string' ||

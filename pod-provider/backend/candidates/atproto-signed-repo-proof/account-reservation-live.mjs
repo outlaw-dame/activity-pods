@@ -18,7 +18,7 @@ import {signDisposableDatasetClaim,verifyDisposableDatasetClaim
 
 const PHASE = process.argv[2];
 const DSN = process.env.ATPROTO_REPO_PROOF_DSN;
-const ROOT = 'https://paper.example.org/users/';
+const ROOT = 'https://paper.example.org/';
 const PROVIDER = 'https://paper.example.org/provider';
 const ENV_OK = process.env.NODE_ENV === 'test' &&
   process.env.ATPROTO_REPO_PROOF_DISPOSABLE === 'confirmed' &&

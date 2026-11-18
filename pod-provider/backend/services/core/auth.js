@@ -87,6 +87,14 @@ module.exports = {
         );
       }
 
+      // Use the same configured base and join as SemApps webid.createWebId.
+      // Catch a provider deployment mismatch before consuming the one-shot admission.
+      if (delegatedDatasetProof && (!CONFIG.BASE_URL ||
+          datasetAdminTicket.claim?.ownerWebid !== urlJoin(CONFIG.BASE_URL, username))) {
+        throw new MoleculerError('Signed dataset owner does not match the provider WebID',
+          403, 'ACCOUNT_DATASET_OWNER_MISMATCH', { retryable: false });
+      }
+
       ctx.meta.skipObjectsWatcher = true;
       this.logger.info(`[Auth] signup start for ${username}`);
 

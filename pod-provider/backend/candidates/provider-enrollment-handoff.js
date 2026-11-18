@@ -17,7 +17,7 @@ function createProviderEnrollmentHandoff({
     gate();
     if (!UUID.test(reservationId || '') || client !== appClientId || redirectUri !== returnUri ||
         !/^[a-z][a-z0-9_-]{1,31}$/u.test(username || '') ||
-        webId !== providerId + '/users/' + username || typeof setCookie !== 'function') {
+        webId !== providerId + '/' + username || typeof setCookie !== 'function') {
       throw new Error('Enrollment scope mismatch');
     }
     const options = { meta: {}, timeout: 5000, retries: 0 };

@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   postgres-http-enrollment:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
       postgres:

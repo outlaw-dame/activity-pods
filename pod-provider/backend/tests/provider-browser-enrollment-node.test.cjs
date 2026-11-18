@@ -195,6 +195,14 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
     assert.equal(statusReply.headers.get('cache-control'), 'no-store');
     assert.equal(statusReply.headers.get('access-control-allow-origin'), browserOrigin);
     assert.equal((await statusReply.json()).state, 'awaiting_consent');
+    const browserStatus = await fetch(endpoint + '/status', { method: 'POST', headers, body: '{}' });
+    assert.equal(browserStatus.status, 200);
+    assert.deepEqual((await browserStatus.json()).requirements, manifest);
+    const refusedStatus = await fetch(endpoint + '/status', {
+      method: 'POST', headers: { ...headers, origin: 'https://other.example.org' }, body: '{}'
+    });
+    assert.equal(refusedStatus.status, 403);
+    await refusedStatus.arrayBuffer();
     const post = (body, extra = {}) => fetch(endpoint + '/consent', {
       method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body)
     });

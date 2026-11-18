@@ -19,6 +19,7 @@ import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined';
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
+import SignupConsent from './SignupConsent';
 import Header from '../common/Header';
 import { signInWithPasskey } from '../utils/passkeys';
 import { resolveLoginReturn } from './loginNavigationPolicy.mjs';
@@ -291,6 +292,10 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget }) => {
       }
 
       const data = await res.json().catch(() => null);
+      if (res.status === 202 && data?.state === 'awaiting_consent') {
+        window.location.assign('/login?enrollment=1');
+        return;
+      }
       const { token, webId } = data || {};
 
       if (!token || !webId) {
@@ -705,6 +710,8 @@ const LoginPage = () => {
   const interactionId = searchParams.get('interaction_id');
   const isSignup = searchParams.get('signup') !== null;
   const redirectTarget = searchParams.get('redirect') || '/network';
+
+  if (searchParams.get('enrollment') === '1') return <PageShell titleKey="app.titles.signup"><SignupConsent /></PageShell>;
 
   return isSignup ? (
     <SignUpForm interactionId={interactionId} redirectTarget={redirectTarget} />

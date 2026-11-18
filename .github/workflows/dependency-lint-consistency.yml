@@ -26,6 +26,7 @@ jobs:
           npm ci --prefix pod-provider/backend --no-audit --no-fund
           npm ci --prefix pod-provider/frontend --ignore-scripts --no-audit --no-fund
           npm ci --prefix tests --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/browser-enrollment --ignore-scripts --no-audit --no-fund
           npm ci --prefix pod-provider/backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
       - name: Install Yarn workspaces and documentation
         run: |

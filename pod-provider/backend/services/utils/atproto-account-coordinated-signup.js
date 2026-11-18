@@ -47,9 +47,32 @@ function fingerprint({api,appClientId,redirectUri,accountParams,protocols,env}){
 }
 async function coordinatedDisposableSignup({
   ctx,api,env=process.env,
-  reserveImpl=reserveCoordinatedDataset, beginEnrollment
+  reserveImpl=reserveCoordinatedDataset, beginEnrollment, browserTransaction
 }={}){
   assertDisposable(env);
+  if (ctx.params?.browserSignupTransaction === true) {
+    if (!browserTransaction || !beginEnrollment) deny('BROWSER_SIGNUP_UNAVAILABLE');
+    const { browserSignupTransaction: mode, ...input } = ctx.params;
+    if (mode !== true || Object.keys(input).some(k => !['username','email','password','profile'].includes(k))) {
+      deny('BROWSER_SIGNUP_SCOPE_DENIED',400);
+    }
+    const account = api.normalizeAccountCreateParams(input);
+    const { appClientId, redirectUri, bearer, consume } = browserTransaction;
+    const headers = ctx.meta?.$headers || {};
+    const fp = fingerprint({ api, appClientId, redirectUri, accountParams: account,
+      protocols: api.requestedProtocolsFromAccountParams(account), env });
+    let verified;
+    try { verified = await consume({ cookie: headers.cookie, origin: headers.origin, fingerprint: fp }); }
+    catch { deny('BROWSER_SIGNUP_TRANSACTION_REFUSED',403); }
+    const privateContext = { broker: ctx.broker, params: { ...input, appClientId, redirectUri,
+      idempotencyKey: verified.idempotencyKey,
+      verification: { method: 'provider-signed', challengeToken: verified.challengeToken } },
+      meta: { $headers: { authorization: 'Bearer ' + bearer, origin: headers.origin } } };
+    const pending = await coordinatedDisposableSignup({ ctx: privateContext, api, env, reserveImpl, beginEnrollment });
+    ctx.meta.$statusCode = privateContext.meta.$statusCode;
+    ctx.meta.$responseHeaders = privateContext.meta.$responseHeaders;
+    return pending;
+  }
   const accountParams=api.normalizeAccountCreateParams(ctx.params || {});
   rejectUntrustedInput(ctx.params,accountParams);
   const headers=ctx.meta?.$headers || {};

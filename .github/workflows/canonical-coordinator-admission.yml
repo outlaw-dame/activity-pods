@@ -6,6 +6,8 @@ on:
       - 'pod-provider/backend/candidates/postgres-account-lifecycle.js'
       - 'pod-provider/backend/candidates/provider-*-enrollment*.js'
       - 'pod-provider/backend/candidates/provider-enrollment-handoff.js'
+      - 'pod-provider/backend/candidates/browser-signup-transaction.js'
+      - 'pod-provider/backend/sql/paper-browser-signup-transaction.sql'
       - 'pod-provider/backend/services/unified-account-api.service.js'
       - 'pod-provider/backend/services/utils/atproto-account-coordinated-signup.js'
       - 'pod-provider/backend/sql/paper-account-postgres-candidate-*.sql'
@@ -50,6 +52,7 @@ jobs:
       - name: Exercise restricted canonical admission, duplicates and uncertain outcomes
         env:
           NODE_ENV: test
+          APODS_ACCOUNT_COORDINATOR_DISPOSABLE: confirmed
           PAPER_ACCOUNTS_DISPOSABLE: confirmed
           PAPER_BROWSER_ENROLLMENT_DISPOSABLE: confirmed
           APODS_ACCOUNT_RESERVATION_DISPOSABLE: confirmed

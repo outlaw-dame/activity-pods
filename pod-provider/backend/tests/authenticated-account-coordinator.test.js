@@ -118,7 +118,7 @@ afterEach(()=>{
   }
 });
 
-async function setup({appConfig=app(), onCreate=()=>({webId:'synthetic'}), beginEnrollment}={}){
+async function setup({appConfig=app(), onCreate=()=>({webId:'synthetic'}), beginEnrollment, browserTransaction}={}){
   const broker=new ServiceBroker({logger:false});
   const addRoute=jest.fn(()=>true);
   const create=jest.fn(onCreate);
@@ -139,7 +139,7 @@ async function setup({appConfig=app(), onCreate=()=>({webId:'synthetic'}), begin
     }
   });
   broker.createService({name:'unified-account',actions:{create}});
-  broker.createService(beginEnrollment ? { ...api, methods: { ...api.methods, beginDisposableEnrollment: beginEnrollment } } : api);
+  broker.createService(beginEnrollment ? { ...api, created() { this.localBrowserSignupTransaction = browserTransaction; }, methods: { ...api.methods, beginDisposableEnrollment: beginEnrollment } } : api);
   await broker.start();
   return{broker,create,gateway};
 }
@@ -218,6 +218,40 @@ test('signup HTTP response carries a pending session cookie only for a matching 
     global.fetch = original;
     await broker.stop();
   }
+});
+
+test('browser posts account fields and a private session cookie without app credentials', async () => {
+  const ticketValue = ticket(), webId = ticketValue.claim.ownerWebid;
+  const original = global.fetch;
+  const signed = request();
+  const consume = jest.fn(async ({ cookie, origin, fingerprint }) => {
+    expect(cookie).toBe('__Host-paper-signup=private-browser-session');
+    expect(origin).toBe(ORIGIN);
+    expect(fingerprint).toBe(JSON.parse(Buffer.from(signed.verification.challengeToken.split('.')[0], 'base64url')).requestFingerprint);
+    return { idempotencyKey: KEY, challengeToken: signed.verification.challengeToken };
+  });
+  const { broker, gateway, create } = await setup({
+    beginEnrollment: async ({ setCookie }) => { setCookie('__Host-paper-enrollment=issued; Secure; HttpOnly; Path=/'); return { state: 'awaiting_consent' }; },
+    browserTransaction: { appClientId: APP, redirectUri: REDIRECT, bearer: AUTH, consume },
+    onCreate: () => ({ canonicalAccountId: webId, webId, solid: { webId }, activitypub: { actorId: webId }, atproto: { repoInitialized: true } })
+  });
+  global.fetch = makeFetch({ ticketValue });
+  try {
+    const endpoint = 'http://127.0.0.1:' + gateway.server.address().port + '/api/accounts/create';
+    const submit = extra => original(endpoint, { method: 'POST', headers: {
+      'content-type':'application/json', origin:ORIGIN, cookie:'__Host-paper-signup=private-browser-session'
+    }, body:JSON.stringify({ browserSignupTransaction:true, username:signed.username, email:signed.email,
+      password:signed.password, profile:signed.profile, ...extra }) });
+    expect((await submit({ appClientId:APP })).status).toBe(400);
+    expect(consume).not.toHaveBeenCalled();
+    const response = await submit({});
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ state:'awaiting_consent' });
+    expect(create).toHaveBeenCalledTimes(1);
+    consume.mockRejectedValueOnce(new Error('already consumed'));
+    expect((await submit({})).status).toBe(403);
+    expect(create).toHaveBeenCalledTimes(1);
+  } finally { global.fetch = original; await broker.stop(); }
 });
 
 test('real API authorizes approved app and user, calls coordinator, forwards only ticket, and refuses 201 without attestation',async()=>{

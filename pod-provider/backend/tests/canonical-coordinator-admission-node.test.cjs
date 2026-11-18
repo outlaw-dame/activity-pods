@@ -35,7 +35,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     owner = new Pool({ ...options, connectionString: db.href });
     const files = [
       ...['v1','v2-signup-ledger','v3-evidence-seal','v4-atomic-completion','v6-enrollment'].map(v => '../sql/paper-account-postgres-candidate-' + v + '.sql'),
-      '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
+      '../sql/paper-browser-signup-transaction.sql', '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
       ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql')
     ];
     for (const file of files) {
@@ -58,6 +58,30 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const issuer = await runtime('paper_account_proof_issuer');
     const reserver = await runtime('paper_account_signup_reserver');
     const binder = await runtime('paper_account_bridge_binder');
+    const { makeBrowserSignupTransaction } = require('../candidates/browser-signup-transaction');
+    const txConfig = { providerId: 'https://provider.example', appClientId: 'https://app.example/id',
+      browserOrigin: 'https://login.example', returnUri: 'https://app.example/return', encryptionKey: crypto.randomBytes(32) };
+    const verifier = makeBrowserSignupTransaction({ ...txConfig, pool: await runtime('paper_browser_signup_verifier') });
+    const redeemer = makeBrowserSignupTransaction({ ...txConfig, pool: await runtime('paper_browser_signup_redeemer') });
+    const fingerprint = crypto.randomBytes(32).toString('hex'), idempotencyKey = crypto.randomUUID();
+    const proof = 'fixture.' + crypto.randomBytes(32).toString('base64url');
+    let cookie;
+    const tx = { idempotencyKey, fingerprint, proof, expiresAt: new Date(Date.now()+60000), setCookie: value => { cookie = value; } };
+    await assert.rejects(redeemer.bindVerified(tx), { code: '42501' });
+    await verifier.bindVerified(tx);
+    const redemption = { cookie, origin: txConfig.browserOrigin, fingerprint };
+    await assert.rejects(verifier.bindVerified(tx));
+    await assert.rejects(redeemer.consume({ ...redemption, fingerprint: 'a'.repeat(64) }));
+    await assert.rejects(redeemer.consume({ ...redemption, origin: 'https://other.example' }));
+    await assert.rejects(redeemer.consume({ ...redemption, cookie: cookie + '; ' + cookie.split(';')[0] }));
+    const otherReturn = makeBrowserSignupTransaction({ ...txConfig, returnUri: 'https://app.example/other',
+      pool: await runtime('paper_browser_signup_redeemer') });
+    await assert.rejects(otherReturn.consume(redemption));
+    await assert.rejects(verifier.bindVerified({ ...tx, expiresAt: new Date(Date.now()-1000) }));
+    const redemptions = await Promise.allSettled([redeemer.consume(redemption), redeemer.consume(redemption)]);
+    assert.deepEqual(redemptions.filter(item => item.status === 'fulfilled').map(item => item.value),
+      [{ idempotencyKey, challengeToken: proof }]);
+    assert.equal((await owner.query('SELECT sealed_proof IS NULL AS cleared FROM paper_browser_signup.transactions')).rows[0].cleared,true);
     const authority = makeAccountReservationAuthority({ workerPool: worker, issuerPool: issuer });
     const appClientId = 'https://paper.example.org/application';
     const appScope = crypto.createHash('sha256').update('activitypods:approved-app:v1\0').update(appClientId).digest('hex');

@@ -11,6 +11,7 @@ const root = path.resolve(__dirname, '../../pod-provider/frontend/build');
     for (const decision of ['allow', 'decline', 'lost']) {
       const page = await browser.newPage();
       const calls = [];
+      const signupRequests = [];
       page.on('pageerror', e => console.error(e.message));
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -20,6 +21,17 @@ const root = path.resolve(__dirname, '../../pod-provider/frontend/build');
             body: "window.CONFIG={BACKEND_URL:'https://login.example.test/',INSTANCE_NAME:'Local enrollment',COLOR_PRIMARY:'#222222',COLOR_SECONDARY:'#444444',INSTANCE_DESCRIPTION:{en:'Local'},AVAILABLE_LOCALES:['en'],DEFAULT_LOCALE:'en',FRONTEND_URL:'https://login.example.test/'}"
           });
         if (url.hostname !== 'login.example.test') return route.abort();
+        if (url.pathname === '/v1/usernames/available') return route.fulfill({ json: { available: true } });
+        if (url.pathname === '/api/accounts/create') {
+          signupRequests.push(route.request().postDataJSON());
+          return route.fulfill({
+            status: 202,
+            headers: {
+              'set-cookie': '__Host-paper-enrollment=browser-fixture; Secure; HttpOnly; SameSite=Strict; Path=/'
+            },
+            json: { state: 'awaiting_consent' }
+          });
+        }
         if (url.pathname.endsWith('/status'))
           return route.fulfill({
             json: {
@@ -38,7 +50,28 @@ const root = path.resolve(__dirname, '../../pod-provider/frontend/build');
         if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return route.fulfill({ status: 404, body: '' });
         return route.fulfill({ path: file });
       });
-      await page.goto('https://login.example.test/login?enrollment=1');
+      if (decision === 'allow') {
+        await page.goto('https://login.example.test/login?signup=true&verified_signup=1');
+        await page.getByPlaceholder('username').fill('browsertest');
+        await page.getByLabel('E-Mail').fill('browser@example.test');
+        await page.getByLabel('Password', { exact: true }).fill('disposable-password');
+        await page.locator('button[type="submit"]').click();
+        await page.waitForURL('**/login?enrollment=1');
+        assert.deepEqual(signupRequests, [
+          {
+            browserSignupTransaction: true,
+            username: 'browsertest',
+            email: 'browser@example.test',
+            password: 'disposable-password',
+            profile: { displayName: 'browsertest' }
+          }
+        ]);
+        assert(
+          (await page.context().cookies()).some(cookie => cookie.name === '__Host-paper-enrollment' && cookie.httpOnly)
+        );
+      } else {
+        await page.goto('https://login.example.test/login?enrollment=1');
+      }
       const box = page.getByRole('checkbox', { name: 'Photos' });
       assert.equal(await box.isChecked({ timeout: 5000 }), false);
       if (decision === 'allow') await box.check();

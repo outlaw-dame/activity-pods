@@ -148,7 +148,7 @@ function resolvePostLoginTarget(value) {
 
 // ─── Sign-Up form ─────────────────────────────────────────────────────────────
 
-const SignUpForm = ({ onSignup, interactionId, redirectTarget }) => {
+const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransaction }) => {
   const [locale] = useLocaleState();
   const translate = useTranslate();
   const dataProvider = useDataProvider();
@@ -276,10 +276,14 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget }) => {
     setLoading(true);
     setErrors({});
     try {
-      const res = await fetch(urlJoin(CONFIG.BACKEND_URL, 'auth/signup'), {
+      const res = await fetch(urlJoin(CONFIG.BACKEND_URL, verifiedTransaction ? 'api/accounts/create' : 'auth/signup'), {
+        credentials: verifiedTransaction ? 'include' : 'same-origin',
+        redirect: 'error',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password, 'schema:knowsLanguage': locale })
+        body: JSON.stringify(verifiedTransaction
+          ? { browserSignupTransaction: true, username, email, password, profile: { displayName: username } }
+          : { username, email, password, 'schema:knowsLanguage': locale })
       });
 
       if (!res.ok) {
@@ -714,7 +718,7 @@ const LoginPage = () => {
   if (searchParams.get('enrollment') === '1') return <PageShell titleKey="app.titles.signup"><SignupConsent /></PageShell>;
 
   return isSignup ? (
-    <SignUpForm interactionId={interactionId} redirectTarget={redirectTarget} />
+    <SignUpForm verifiedTransaction={searchParams.get('verified_signup') === '1'} interactionId={interactionId} redirectTarget={redirectTarget} />
   ) : (
     <LogInForm interactionId={interactionId} redirectTarget={redirectTarget} />
   );

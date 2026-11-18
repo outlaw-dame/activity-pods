@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
 const fs = require('fs'),
   path = require('path'),
   assert = require('assert/strict');
-const root = path.resolve(__dirname, '../build');
+const root = path.resolve(__dirname, '../../pod-provider/frontend/build');
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined });
   try {

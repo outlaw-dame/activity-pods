@@ -11,7 +11,7 @@ const { createProviderBrowserEnrollment } = require('./provider-browser-enrollme
  * loadRequirements must resolve and hash the approved app's permission semantics,
  * not trust a browser manifest, dc:modified label or a digest of identifiers alone.
  */
-function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, ...options } = {}) {
+function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, browserTransaction, ...options } = {}) {
   if (!broker || typeof broker.call !== 'function') throw new Error('Enrollment broker required');
   const enrollment = createProviderBrowserEnrollment({
     ...options,
@@ -88,6 +88,7 @@ function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, ...optio
     : undefined;
   const signupApi = beginEnrollment ? {
     ...unifiedAccountApi,
+    created() { this.localBrowserSignupTransaction = browserTransaction; },
     methods: {
       ...unifiedAccountApi.methods,
       beginDisposableEnrollment: beginEnrollment

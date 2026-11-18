@@ -55,7 +55,7 @@ module.exports = {
           400,'ACCOUNT_COORDINATOR_INPUT_DENIED',{retryable:false});
       }
       if (process.env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE === 'confirmed') {
-        return coordinatedDisposableSignup({ctx,api:this,beginEnrollment:this.beginDisposableEnrollment});
+        return coordinatedDisposableSignup({ctx,api:this,beginEnrollment:this.beginDisposableEnrollment,browserTransaction:this.localBrowserSignupTransaction});
       }
       let provisioningGrant = null;
       let accountCreationStarted = false;

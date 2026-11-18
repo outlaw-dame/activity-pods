@@ -48,6 +48,8 @@ jobs:
           tests/browser-enrollment/node_modules/.bin/playwright install --with-deps chromium --only-shell
           umask 077
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext "subjectAltName=IP:127.0.0.1" -keyout "$RUNNER_TEMP/browser.key" -out "$RUNNER_TEMP/browser.crt"
+      - name: Exercise compiled signup and consent forms in Chromium
+        run: npm test --prefix tests/browser-enrollment
       - name: Write disposable connection configuration
         run: |
           umask 077

@@ -1,6 +1,8 @@
 'use strict';
 
 const { Errors: { MoleculerError } } = require('moleculer');
+const unifiedAccountApi = require('../services/unified-account-api.service');
+const { createProviderEnrollmentHandoff } = require('./provider-enrollment-handoff');
 const { createProviderBrowserEnrollment } = require('./provider-browser-enrollment');
 
 /**
@@ -9,7 +11,7 @@ const { createProviderBrowserEnrollment } = require('./provider-browser-enrollme
  * loadRequirements must resolve and hash the approved app's permission semantics,
  * not trust a browser manifest, dc:modified label or a digest of identifiers alone.
  */
-function makeBrowserEnrollmentService({ broker, ...options } = {}) {
+function makeBrowserEnrollmentService({ broker, handoffPool, lifecycle, ...options } = {}) {
   if (!broker || typeof broker.call !== 'function') throw new Error('Enrollment broker required');
   const enrollment = createProviderBrowserEnrollment({
     ...options,
@@ -81,7 +83,17 @@ function makeBrowserEnrollmentService({ broker, ...options } = {}) {
   };
   // Keep issuance outside the HTTP/service action namespace. The coordinator
   // must bind the existing canonical operation before using this local method.
-  return Object.freeze({ schema, issue: enrollment.issue });
+  const beginEnrollment = handoffPool && lifecycle
+    ? createProviderEnrollmentHandoff({ ...options, broker, handoffPool, lifecycle, issue: enrollment.issue })
+    : undefined;
+  const signupApi = beginEnrollment ? {
+    ...unifiedAccountApi,
+    methods: {
+      ...unifiedAccountApi.methods,
+      beginDisposableEnrollment: beginEnrollment
+    }
+  } : undefined;
+  return Object.freeze({ schema, issue: enrollment.issue, signupApi });
 }
 
 module.exports = { makeBrowserEnrollmentService };

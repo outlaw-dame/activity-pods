@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { MAX_SIGNUP_CHALLENGE_BYTES } = require('./utils/signup-challenge');
 const { MoleculerError } = require('moleculer').Errors;
 
 const ACCOUNT_PROVISIONING_CAPABILITY = 'provider.account.provisioning';
@@ -958,7 +959,7 @@ module.exports = {
       if (!crypto.timingSafeEqual(signature, expected)) return false;
       const bytes = Buffer.from(pieces[0], 'base64url');
       if (bytes.toString('base64url') !== pieces[0] ||
-          bytes.length > 900) return false;
+          bytes.length > MAX_SIGNUP_CHALLENGE_BYTES) return false;
       let payload;
       try { payload = JSON.parse(bytes.toString('utf8')); }
       catch { return false; }

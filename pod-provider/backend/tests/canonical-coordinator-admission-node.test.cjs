@@ -97,6 +97,9 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const account = { username:'invited', email:'invited@example.test', password:'disposable-password',
       profile:{displayName:'invited'} };
     const invitation = issueLocalInvitation({ scope, privateKey:invitationKeys.privateKey, username:account.username,email:account.email });
+    // A signed invitation must always fit the downstream verifier's UTF-8 byte budget.
+    assert.throws(() => issueLocalInvitation({ scope: { ...scope, appClientId: 'https://app.example/' + 'x'.repeat(260) },
+      privateKey: invitationKeys.privateKey, username: account.username, email: 'é'.repeat(150) + '@example.test' }));
     let issuedCookie;
     const verification = { account, origin:scope.browserOrigin, invitation, setCookie: value => { issuedCookie = value; } };
     await assert.rejects(verify({ ...verification, account:{...account,email:'another@example.test'} }));

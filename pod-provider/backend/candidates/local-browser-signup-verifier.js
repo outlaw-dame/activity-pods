@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const api = require('../services/unified-account-api.service').methods;
 const { fingerprint } = require('../services/utils/atproto-account-coordinated-signup');
+const { MAX_SIGNUP_CHALLENGE_BYTES } = require('../services/utils/signup-challenge');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const purpose = 'activitypods:local-browser-signup-invitation:v1';
 
@@ -32,6 +33,15 @@ function message(scope, username, email, key, issuedAt) {
     ])
   );
 }
+function challengeBytes(scope, username, email, idempotencyKey, issuedAtMs, requestFingerprint, nonce) {
+  const bytes = Buffer.from(JSON.stringify({
+    version: 1, purpose: 'activitypods:new-account:v1', appClientId: scope.appClientId,
+    username, email, origin: scope.browserOrigin, redirectUri: scope.returnUri,
+    idempotencyKey, requestFingerprint, issuedAtMs, expiresAtMs: issuedAtMs + 120000, nonce
+  }));
+  if (bytes.length > MAX_SIGNUP_CHALLENGE_BYTES) refuse();
+  return bytes;
+}
 // Operator-side only. The independent operator authorizes this disposable
 // identity out of band. The provider receives only the public invitation key.
 function issueLocalInvitation({ privateKey, scope, username, email }) {
@@ -41,6 +51,8 @@ function issueLocalInvitation({ privateKey, scope, username, email }) {
       typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) refuse();
   const key = crypto.randomUUID(),
     issuedAt = Date.now();
+  // Fingerprints and UUID nonces have fixed encoded widths. Measure the exact UTF-8 payload.
+  challengeBytes(scope, username, email, key, issuedAt, '0'.repeat(64), key);
   const signature = crypto.sign(null, message(scope, username, email, key, issuedAt), privateKey);
   return [key, issuedAt, signature.toString('base64url')].join('.');
 }
@@ -109,21 +121,8 @@ function makeLocalSignupVerifier({ publicKey, scope, transaction, env = process.
       protocols: api.requestedProtocolsFromAccountParams.call(api, accountParams),
       env
     });
-    const payload = {
-      version: 1,
-      purpose: 'activitypods:new-account:v1',
-      appClientId,
-      username: account.username,
-      email: account.email,
-      origin,
-      redirectUri,
-      idempotencyKey,
-      requestFingerprint,
-      issuedAtMs,
-      expiresAtMs,
-      nonce: crypto.randomUUID()
-    };
-    const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const data = challengeBytes(configured, account.username, account.email, idempotencyKey,
+      issuedAtMs, requestFingerprint, crypto.randomUUID()).toString('base64url');
     const mac = crypto
       .createHmac('sha256', signingKey)
       .update('activitypods:durable-user-verification:v1\0')

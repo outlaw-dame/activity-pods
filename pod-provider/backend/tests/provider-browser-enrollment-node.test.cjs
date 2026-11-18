@@ -27,6 +27,7 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
   const database = 'paper_enrollment_' + suffix;
   const login = 'paper_enrollment_' + suffix;
   const password = crypto.randomBytes(32).toString('hex');
+  let browserGateway;
   let databaseCreated = false, loginCreated = false, roleCreated = false, owner, runtime, secondRuntime, broker;
   try {
     const roleBefore = await admin.query("SELECT 1 FROM pg_roles WHERE rolname='paper_enrollment_runtime'");
@@ -51,7 +52,11 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
     const providerId = 'https://provider.paper.example.org';
     const appClientId = 'https://app.paper.example.org/client';
     const appUri = 'https://app.paper.example.org/application';
-    const browserOrigin = 'https://login.paper.example.org';
+    if (process.env.PAPER_CHROMIUM_ENROLLMENT === 'confirmed') {
+      const { startBrowserGateway } = require('../../../tests/browser-enrollment/postgres.cjs');
+      browserGateway = await startBrowserGateway();
+    }
+    const browserOrigin = browserGateway?.origin || 'https://login.paper.example.org';
     const returnUri = 'https://app.paper.example.org/signup-return';
     const csrfKey = crypto.randomBytes(32);
     const required = appUri + '#profile';
@@ -221,6 +226,16 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
     const repeated = await post(body);
     assert.equal(repeated.status, 409); await repeated.arrayBuffer();
     assert.equal(adapterCalls, 1);
+    if (browserGateway) {
+      await browserGateway.run({ gatewayUrl: endpoint, required, optional, issue: async () => {
+        const item = await fixture(adapter);
+        nativeOwners.set(item.webId, { webId: item.webId, username: item.username, signupReservationId: crypto.randomUUID() });
+        return { cookie: item.cookie, readState: async () => (await owner.query(
+          'SELECT enrollment_state FROM paper_account_candidate.signup_operations WHERE operation_id=$1',
+          [item.scope.operationId])).rows[0].enrollment_state };
+      } });
+      assert.equal(adapterCalls, 2, 'browser approval invoked native adapter once, refusal did not');
+    }
     // Valid-shaped completion fields must still fail for pending, refused,
     // uncertain or wrong-app enrollment. This tests the SQL constraint only;
     // these synthetic fields are not actual completion evidence.
@@ -252,6 +267,7 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
       await assert.rejects(service.view({ cookie: first.cookie, origin: browserOrigin }), { code: 'ENROLLMENT_NOT_RELEASED' });
     } finally { process.env.NODE_ENV = saved; }
   } finally {
+    if (browserGateway) await browserGateway.close();
     if (broker) await broker.stop();
     for (const pool of [runtime, secondRuntime, owner]) if (pool) await pool.end();
     if (databaseCreated) await admin.query(`DROP DATABASE ${database}`);

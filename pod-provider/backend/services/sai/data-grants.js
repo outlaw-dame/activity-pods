@@ -1,3 +1,4 @@
+const { findScopedRecord } = require('../utils/sai-scoped-lookup');
 const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
 const { ControlledContainerMixin } = require('@semapps/ldp');
 
@@ -25,31 +26,21 @@ module.exports = {
     },
     // Get the DataGrant linked with an AccessNeed
     async getByAccessNeed(ctx) {
-      const { accessNeedUri, podOwner } = ctx.params;
-
-      const filteredContainer = await this.actions.list(
-        {
-          filters: {
-            'http://www.w3.org/ns/solid/interop#satisfiesAccessNeed': accessNeedUri,
-            'http://www.w3.org/ns/solid/interop#dataOwner': podOwner
-          },
-          webId: podOwner
-        },
-        { parentCtx: ctx }
-      );
-
-      return filteredContainer['ldp:contains']?.[0];
+      return findScopedRecord(this, ctx, 'dataOwner', 'satisfiesAccessNeed', ctx.params.accessNeedUri);
     },
     async getByDataAuthorization(ctx) {
-      const { dataAuthorizationUri, podOwner } = ctx.params;
+      const { dataAuthorizationUri, podOwner, appUri } = ctx.params;
 
       const dataAuthorization = await ctx.call('data-authorizations.get', {
         resourceUri: dataAuthorizationUri,
         webId: podOwner
       });
 
+      if (dataAuthorization['interop:dataOwner'] !== podOwner || dataAuthorization['interop:grantee'] !== appUri) {
+        throw new Error('Mismatched SAI data authorization');
+      }
       return await this.actions.getByAccessNeed(
-        { accessNeedUri: dataAuthorization['interop:satisfiesAccessNeed'], podOwner },
+        { accessNeedUri: dataAuthorization['interop:satisfiesAccessNeed'], podOwner, appUri },
         { parentCtx: ctx }
       );
     }

@@ -1,3 +1,4 @@
+const { findScopedRecord } = require('../utils/sai-scoped-lookup');
 const { ControlledContainerMixin, arrayOf } = require('@semapps/ldp');
 const { MIME_TYPES } = require('@semapps/mime-types');
 const { beforeSaiMutation } = require('../utils/atproto-sai-native-fence');
@@ -81,7 +82,7 @@ module.exports = {
 
         // Check if an access grant already exist for this AccessNeedGroup
         const accessAuthorization = await this.actions.getByAccessNeedGroup(
-          { accessNeedGroupUri, podOwner },
+          { accessNeedGroupUri, podOwner, appUri },
           { parentCtx: ctx }
         );
 
@@ -152,20 +153,7 @@ module.exports = {
     },
     // Get the AccessAuthorization linked with an AccessNeedGroup
     async getByAccessNeedGroup(ctx) {
-      const { accessNeedGroupUri, podOwner } = ctx.params;
-
-      const filteredContainer = await this.actions.list(
-        {
-          filters: {
-            'http://www.w3.org/ns/solid/interop#grantedBy': podOwner,
-            'http://www.w3.org/ns/solid/interop#hasAccessNeedGroup': accessNeedGroupUri
-          },
-          webId: podOwner
-        },
-        { parentCtx: ctx }
-      );
-
-      return filteredContainer['ldp:contains']?.[0];
+      return findScopedRecord(this, ctx, 'grantedBy', 'hasAccessNeedGroup', ctx.params.accessNeedGroupUri);
     },
     // Get all the special rights granted to an application
     async getSpecialRights(ctx) {
@@ -406,7 +394,11 @@ module.exports = {
         // Get DataGrants corresponding to DataAuthorizations
         let dataGrantsUris = [];
         for (const dataAuthorizationUri of arrayOf(ctx.params.resource['interop:hasDataAuthorization'])) {
-          dataGrantsUris.push(await ctx.call('data-grants.getByDataAuthorization', { dataAuthorizationUri, podOwner }));
+          const grant = await ctx.call('data-grants.getByDataAuthorization', {
+            dataAuthorizationUri, podOwner, appUri: ctx.params.resource['interop:grantee']
+          });
+          if (!grant?.id) throw new Error('Missing scoped SAI data grant');
+          dataGrantsUris.push(grant.id);
         }
 
         // Create a AccessGrant with the same data, except interop:grantedWith and interop:hasDataAuthorization
@@ -444,6 +436,7 @@ module.exports = {
         // Delete AccessGrant that match the same AccessNeedGroup
         const accessGrant = await ctx.call('access-grants.getByAccessNeedGroup', {
           accessNeedGroupUri: res.oldData['interop:hasAccessNeedGroup'],
+          appUri: res.oldData['interop:grantee'],
           podOwner: res.oldData['interop:grantedBy']
         });
         if (accessGrant) {

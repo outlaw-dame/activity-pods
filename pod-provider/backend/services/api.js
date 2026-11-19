@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const ApiGatewayService = require('moleculer-web');
-const { optimizeApiRouteOrder } = require('../utils/api-route-ordering');
+const { optimizeApiRouteOrder, prioritizeExplicitAliases } = require('../utils/api-route-ordering');
 const { Errors: E } = require('moleculer-web');
 const WebSocketMixin = require('../mixins/websocket');
 const CONFIG = require('../config/config');
@@ -85,6 +85,12 @@ module.exports = {
     },
     // Overwrite optimization method to put catchAll routes at the end
     // See https://github.com/moleculerjs/moleculer-web/issues/335
+    optimizeAliasesOrder() {
+      ApiGatewayService.methods.optimizeAliasesOrder.call(this);
+      // Auto-alias regeneration and route replacement can sort aliases
+      // without invoking optimizeRouteOrder a second time.
+      prioritizeExplicitAliases(this);
+    },
     optimizeRouteOrder() {
       optimizeApiRouteOrder(this);
     }

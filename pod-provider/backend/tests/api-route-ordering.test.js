@@ -77,3 +77,18 @@ describe('API gateway route precedence across distributed pod cells', () => {
   });
 
 });
+
+test('alias regeneration keeps signup ahead of the Pod catch-all', () => {
+  const { ServiceBroker } = require('moleculer');
+  jest.isolateModules(() => {
+    jest.doMock('../config/config', () => ({ BASE_URL: 'https://paper.example.org/' }));
+    const broker = new ServiceBroker({ logger: false });
+    const gateway = broker.createService(require('../services/api'));
+    gateway.addRoute({ name: 'signup-enrollment', path: '/api/signup-enrollment',
+      aliases: { 'POST /verify': 'signup-enrollment.verify' } });
+    gateway.addRoute(require('@semapps/ldp/routes/getCatchAllRoute')('/', true));
+    gateway.optimizeAliasesOrder();
+    expect(gateway.resolveAlias('/api/signup-enrollment/verify', 'POST').alias.route.opts.name).toBe('signup-enrollment');
+    expect(gateway.resolveAlias('/alice/documents', 'POST').alias.route.opts.name).toBe('ldp');
+  });
+});

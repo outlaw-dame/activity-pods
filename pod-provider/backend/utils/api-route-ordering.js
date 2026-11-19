@@ -16,9 +16,13 @@ const routePriority = route => {
 // not lose its original precedence merely because its parent route is '/'.
 const aliasPriority = alias => alias.route.opts?.catchAll ? 1 : 0;
 
-function optimizeApiRouteOrder(gateway) {
-  gateway.routes.sort((a, b) => routePriority(a) - routePriority(b));
+function prioritizeExplicitAliases(gateway) {
   gateway.aliases.sort((a, b) => aliasPriority(a) - aliasPriority(b));
 }
 
-module.exports = { optimizeApiRouteOrder };
+function optimizeApiRouteOrder(gateway) {
+  gateway.routes.sort((a, b) => routePriority(a) - routePriority(b));
+  prioritizeExplicitAliases(gateway);
+}
+
+module.exports = { optimizeApiRouteOrder, prioritizeExplicitAliases };

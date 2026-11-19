@@ -14,7 +14,7 @@ if(process.env.NODE_ENV!=='test'||
 }
 const baseline={
  origin:process.env.FUSEKI_ISOLATION_URL,fixtureOnly:true,
- ordinary:{username:'fixture-ordinary',password:'fixture-ordinary-only'},
+ ordinary:{username:'admin',password:'fixture-ordinary-only'},
  projector:{username:'fixture-projector',password:'fixture-projector-only'},
  attestor:{username:'fixture-attestor',password:'fixture-attestor-only'}
 };
@@ -25,7 +25,7 @@ assert.equal(correct.productionStorageReleased,false);
 
 const cases=[
  ['generic admin credentials',()=>({
-   ...baseline,ordinary:{username:'admin',password:'fixture-admin-only'}
+   ...baseline,ordinary:{username:'fixture-provisioner',password:'fixture-admin-only'}
  })],
  ['generic attestor credentials',()=>({
    ...baseline,ordinary:{...baseline.attestor}

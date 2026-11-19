@@ -1,6 +1,10 @@
 // Read all .env* files in the root folder and add them to process.env
 // See https://github.com/kerimdzhanov/dotenv-flow for more details
-require('dotenv-flow').config();
+// A disposable role-isolated Pod process receives its complete environment
+// from its launcher. Loading .env.test here would import the Jena admin login.
+if (!(process.env.NODE_ENV === 'test' && process.env.PAPER_LOCAL_POD_DATA_PASSWORD !== undefined)) {
+  require('dotenv-flow').config();
+}
 
 const {
   parseAutomaticReconciliationLookbackMs

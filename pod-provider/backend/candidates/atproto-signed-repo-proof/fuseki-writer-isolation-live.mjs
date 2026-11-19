@@ -24,10 +24,10 @@ const subjects = Object.freeze({
 const predicate = '<urn:paper:isolated:state>';
 // Fixed, public test-only passwords. NEVER reuse for deployment.
 const credentials = Object.freeze({
-  admin: 'admin:fixture-admin-only',
+  admin: 'fixture-provisioner:fixture-admin-only',
   projector: 'fixture-projector:fixture-projector-only',
   attestor: 'fixture-attestor:fixture-attestor-only',
-  ordinary: 'fixture-ordinary:fixture-ordinary-only'
+  ordinary: 'admin:fixture-ordinary-only'
 });
 const auth = principal => principal === null ? {} : {
   authorization: 'Basic ' + Buffer.from(credentials[principal]).toString('base64')

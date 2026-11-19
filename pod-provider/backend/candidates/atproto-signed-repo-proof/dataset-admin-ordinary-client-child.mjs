@@ -11,7 +11,8 @@ const ALLOWED = new Set([
   'NODE_ENV','ATPROTO_REPO_PROOF_DISPOSABLE',
   'ATPROTO_FUSEKI_ISOLATION_DISPOSABLE','FUSEKI_ISOLATION_URL',
   'APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE',
-  'DATASET_ADMIN_ORDINARY_TICKET','DATASET_ADMIN_ORDINARY_MODE'
+  'DATASET_ADMIN_ORDINARY_TICKET','DATASET_ADMIN_ORDINARY_MODE',
+  'SEMAPPS_SPARQL_ENDPOINT','SEMAPPS_AUTH_RESERVED_USER_NAMES','SEMAPPS_AVAILABLE_LOCALES','PAPER_LOCAL_POD_DATA_PASSWORD'
 ]);
 if(Object.keys(process.env).some(key=>!ALLOWED.has(key))||
    process.env.NODE_ENV!=='test'||
@@ -38,6 +39,7 @@ try{
   assert.equal(result.created,true);
   assert.equal(result.idempotent,true);
   assert.equal(result.strategy,'isolated_claim_admin_disposable');
+  await require('./ordinary-signed-pod-acceptance.cjs').provePodData(dataset);
   console.log('ORDINARY_PROVIDER_DATASET_DELEGATION '+JSON.stringify({
     mode,restrictedOrdinaryProcess:true,
     adminSecretAvailable:false,signatureIssuerAvailable:false,

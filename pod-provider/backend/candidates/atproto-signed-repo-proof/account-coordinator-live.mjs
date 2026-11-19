@@ -141,8 +141,9 @@ function serverEnv(state,account,admin){
       ATPROTO_REPO_PROOF_DISPOSABLE:'confirmed',
       ATPROTO_FUSEKI_ISOLATION_DISPOSABLE:'confirmed',
       FUSEKI_ISOLATION_URL:'http://127.0.0.1:3041',
-      DATASET_ADMIN_FUSEKI_USER:'admin',
+      DATASET_ADMIN_FUSEKI_USER:'fixture-provisioner',
       DATASET_ADMIN_FUSEKI_PASSWORD:'fixture-admin-only',
+      PAPER_LOCAL_POD_DATA_PASSWORD:'fixture-ordinary-only',
       DATASET_ADMIN_AGENT_DSN:dsn('paper_dataset_admin_login',admin.password),
       DATASET_ADMIN_ISSUER_PUBLIC_PEM:Buffer.from(pem).toString('base64')
     }

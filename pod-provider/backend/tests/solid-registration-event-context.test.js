@@ -13,7 +13,7 @@ describe('cross-replica Solid signup event context', () => {
     const emits = [...auth.matchAll(/ctx\.emit\(\s*['"]auth\.registered['"]/g)];
     expect(emits).toHaveLength(1);
     expect(auth).toMatch(
-      /ctx\.emit\(\s*'auth\.registered'\s*,\s*\{\s*webId\s*,\s*profileData\s*,\s*accountData\s*\}\s*,\s*\{\s*meta:\s*\{\s*webId:\s*null\s*,\s*dataset:\s*null\s*\}\s*\}\s*\)/
+      /ctx\.emit\(\s*'auth\.registered'\s*,\s*\{\s*webId\s*,\s*profileData\s*,\s*accountData:\s*\{\s*username:\s*accountData\.username\s*,\s*webId\s*\}\s*\}\s*,\s*\{\s*meta:\s*\{\s*webId:\s*null\s*,\s*dataset:\s*null\s*\}\s*\}\s*\)/
     );
   });
 

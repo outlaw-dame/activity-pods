@@ -15,7 +15,7 @@ module.exports = {
   settings: {
     baseUrl: CONFIG.BASE_URL,
     jwtPath: path.resolve(__dirname, '../../jwt'),
-    accountsDataset: CONFIG.AUTH_ACCOUNTS_DATASET,
+    accountsDataset: process.env.PAPER_LOCAL_NATIVE_AUTH === 'confirmed' ? 'paper-private-auth' : CONFIG.AUTH_ACCOUNTS_DATASET,
     reservedUsernames: CONFIG.AUTH_RESERVED_USER_NAMES,
     minPasswordLength: 8,
     minUsernameLength: 2,
@@ -169,7 +169,7 @@ module.exports = {
         // their storage authority from the actual WebID/accountData, not ctx.meta.
         ctx.emit(
           'auth.registered',
-          { webId, profileData, accountData },
+          { webId, profileData, accountData: { username: accountData.username, webId } },
           { meta: { webId: null, dataset: null } }
         );
 

@@ -266,3 +266,24 @@ test('delegated signup requires a username before admission and account side eff
     }
   });
 });
+
+test.each(['webid.createWebId', 'activitypub-provisioning.provisionForAccount'])(
+  'keeps the coordinated account fenced after a lost reply from %s', async failedAction => {
+    await withFlags({ NODE_ENV:'test', APODS_ACCOUNT_RESERVATION_DISPOSABLE:'confirmed',
+      APODS_ACCOUNT_COORDINATOR_DISPOSABLE:'confirmed', APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE:'confirmed' }, async () => {
+      const { ctx, state } = ctxWithTicket(ticket());
+      const dispatch = ctx.call;
+      ctx.call = jest.fn(async (action, ...args) => {
+        if (action === failedAction) throw new Error('Lost reply');
+        return dispatch(action, ...args);
+      });
+      state._cleanupPartialAtprotoArtifacts = jest.fn();
+      await expect(loadSignup().actions.signup.call(state, ctx))
+        .rejects.toMatchObject({type:'ACCOUNT_IDENTITY_RECONCILIATION_REQUIRED', data:{retryable:false}});
+      expect(consumeOnce).toHaveBeenCalledTimes(1);
+      expect(ctx.call.mock.calls.map(([action]) => action)).toContain('auth.account.create');
+      expect(ctx.call.mock.calls.map(([action]) => action)).not.toContain('auth.account.remove');
+      expect(state._cleanupPartialAtprotoArtifacts).not.toHaveBeenCalled();
+    });
+  }
+);

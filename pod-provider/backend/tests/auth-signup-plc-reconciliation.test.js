@@ -28,7 +28,7 @@ describe('irreversible PLC signup rollback safety', () => {
     const src=signupSource();
     const begin=src.indexOf('irreversibleIdentityStarted = mustPreserveFailedSignup();');
     const call=src.indexOf("atproto-provisioning.provisionForAccount",begin);
-    const catchIndex=src.indexOf('if (irreversibleIdentityStarted) {',call);
+    const catchIndex=src.indexOf('if (delegatedDatasetProof || irreversibleIdentityStarted) {',call);
     const remove=src.indexOf("'auth.account.remove'",catchIndex);
     expect(begin).toBeGreaterThan(-1);
     expect(call).toBeGreaterThan(begin);

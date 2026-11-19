@@ -241,7 +241,9 @@ module.exports = {
             : {})
         };
       } catch (e) {
-        if (irreversibleIdentityStarted) {
+        // Coordinated signup already consumed a durable reservation and created its signed
+        // dataset before the native account was stored. Preserve that recovery binding.
+        if (delegatedDatasetProof || irreversibleIdentityStarted) {
           this.logger.error('[Auth] Preserving failed signup account and signing records for identity reconciliation');
           throw new MoleculerError(
             'Account identity outcome requires reconciliation before retry',

@@ -7,6 +7,8 @@ const { createCandidate } = require('./postgres-account-lifecycle');
 const { createLocalSignupApp } = require('./local-signup-app');
 const { localNativeAccountStore } = require('./local-native-account-store');
 
+const { resolvePlcDirectory } = require('../utils/atproto-plc-directory-policy');
+
 const roles = {
   verifierPool: 'paper_browser_signup_verifier',
   redeemerPool: 'paper_browser_signup_redeemer',
@@ -44,6 +46,14 @@ function createLocalBrowserRuntime(service, filename) {
   try {
     if (!localNativeAccountStore() || process.env.PAPER_BROWSER_ENROLLMENT_DISPOSABLE !== 'confirmed' ||
         process.env.SEMAPPS_HOME_URL !== providerId + '/' || process.env.SEMAPPS_FRONTEND_URL !== providerId + '/') throw Error();
+    if (process.env.APODS_ATPROTO_ENABLE_PLC_SUBMISSION !== 'true' ||
+        process.env.APODS_ATPROTO_REQUIRE_VERIFIED_REPO !== 'true' ||
+        process.env.APODS_AUTO_PROVISION_ATPROTO_ON_SIGNUP === 'false' ||
+        process.env.APODS_ATPROTO_HANDLE_DOMAIN !== 'paper.example.org' ||
+        resolvePlcDirectory() !== 'http://127.0.0.1:2582' ||
+        !process.env.ACTIVITYPODS_TOKEN || process.env.ACTIVITYPODS_TOKEN.length < 32 ||
+        !process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY || process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY.length < 32 ||
+        process.env.ACTIVITYPODS_TOKEN === process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY) throw Error();
     const config = readConfiguration(filename);
     if (config.csrfKey === config.transactionKey ||
         typeof config.invitationPublicKey !== 'string' || !config.invitationPublicKey.startsWith('-----BEGIN PUBLIC KEY-----')) throw Error();

@@ -156,10 +156,10 @@ async function bounded(response){
   return Buffer.concat(pieces,total).toString('utf8');
 }
 export async function createDisposableDatasetAdmin({
-  pool,origin=ORIGIN,adminUsername,adminPassword,publicKeyPem
+  pool,origin=ORIGIN,adminUsername,adminPassword,podDataPassword,publicKeyPem
 }={}){
   if(!disposable()||origin!==ORIGIN||
-     adminUsername!=='admin'||adminPassword!=='fixture-admin-only'||
+     adminUsername!=='fixture-provisioner'||adminPassword!=='fixture-admin-only'||podDataPassword!=='fixture-ordinary-only'||
      typeof publicKeyPem!=='string'||!publicKeyPem||
      typeof pool?.connect!=='function')fail('DATASET_ADMIN_CONFIG_UNSAFE');
   await assertRestrictedDatasetAdminLogin(pool);
@@ -168,6 +168,7 @@ export async function createDisposableDatasetAdmin({
     key=crypto.createPublicKey(publicKeyPem);
     if(key.asymmetricKeyType!=='ed25519')fail();
   }catch{fail('DATASET_ADMIN_ISSUER_INVALID');}
+  const podData='Basic '+Buffer.from('admin:'+podDataPassword).toString('base64');
   const basic='Basic '+Buffer.from(adminUsername+':'+adminPassword).toString('base64');
   const template = await readFile(require.resolve('@semapps/triplestore/templates/secure-dataset.ttl'), 'utf8');
   async function fuseki(endpoint,method,body=null,type=null,principal='system'){
@@ -175,7 +176,7 @@ export async function createDisposableDatasetAdmin({
     const timer=setTimeout(()=>controller.abort(),6000);
     try{
       const response=await fetch(origin+endpoint,{
-        method,headers:{authorization:basic,'X-SemappsUser':principal,
+        method,headers:{authorization:endpoint==='/$/datasets'?basic:podData,'X-SemappsUser':principal,
           ...(type?{'content-type':type}:{}),
           accept:'application/sparql-results+json'},
         body,redirect:'manual',signal:controller.signal

@@ -60,8 +60,9 @@ async function childProcess(config){
   ATPROTO_REPO_PROOF_DISPOSABLE:'confirmed',
   ATPROTO_FUSEKI_ISOLATION_DISPOSABLE:'confirmed',
   FUSEKI_ISOLATION_URL:'http://127.0.0.1:3041',
-  DATASET_ADMIN_FUSEKI_USER:'admin',
+  DATASET_ADMIN_FUSEKI_USER:'fixture-provisioner',
   DATASET_ADMIN_FUSEKI_PASSWORD:'fixture-admin-only',
+      PAPER_LOCAL_POD_DATA_PASSWORD:'fixture-ordinary-only',
   DATASET_ADMIN_AGENT_DSN:restrictedDsn(config.password),
   DATASET_ADMIN_ISSUER_PUBLIC_PEM:Buffer.from(config.publicKey).toString('base64')
  };
@@ -111,6 +112,9 @@ async function runOrdinaryProviderClient(config,mode){
   ATPROTO_FUSEKI_ISOLATION_DISPOSABLE:'confirmed',
   FUSEKI_ISOLATION_URL:'http://127.0.0.1:3041',
   APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE:'confirmed',
+  SEMAPPS_SPARQL_ENDPOINT:'http://127.0.0.1:3041',
+  SEMAPPS_AUTH_RESERVED_USER_NAMES:'system', SEMAPPS_AVAILABLE_LOCALES:'en',
+  PAPER_LOCAL_POD_DATA_PASSWORD:'fixture-ordinary-only',
   DATASET_ADMIN_ORDINARY_MODE:mode,
   DATASET_ADMIN_ORDINARY_TICKET:Buffer.from(
     JSON.stringify(config.ticket),'utf8').toString('base64')

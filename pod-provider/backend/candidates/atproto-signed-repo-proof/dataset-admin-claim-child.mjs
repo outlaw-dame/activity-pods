@@ -15,7 +15,7 @@ const allowedEnvironment=new Set([
  'NODE_ENV','ATPROTO_FUSEKI_ISOLATION_DISPOSABLE',
  'ATPROTO_REPO_PROOF_DISPOSABLE','FUSEKI_ISOLATION_URL',
  'DATASET_ADMIN_AGENT_DSN','DATASET_ADMIN_ISSUER_PUBLIC_PEM',
- 'DATASET_ADMIN_FUSEKI_USER','DATASET_ADMIN_FUSEKI_PASSWORD'
+ 'DATASET_ADMIN_FUSEKI_USER','DATASET_ADMIN_FUSEKI_PASSWORD','PAPER_LOCAL_POD_DATA_PASSWORD'
 ]);
 if(Object.keys(process.env).some(key=>!allowedEnvironment.has(key))){
  throw Error('Dataset administrator child inherited an unauthorized environment');
@@ -29,7 +29,7 @@ if(process.env.NODE_ENV!=='test'||
    process.env.DATASET_ADMIN_AGENT_DSN?.includes(
      '@127.0.0.1:5548/atproto_signed_repo_proof_test')!==true||
    !process.env.DATASET_ADMIN_ISSUER_PUBLIC_PEM||
-   process.env.DATASET_ADMIN_FUSEKI_USER!=='admin'||
+   process.env.DATASET_ADMIN_FUSEKI_USER!=='fixture-provisioner'||
    process.env.DATASET_ADMIN_FUSEKI_PASSWORD!=='fixture-admin-only'||
    process.env.DATASET_ADMIN_SIGNER_PRIVATE_KEY){
  throw Error('Disposable dataset administrator release gate is closed');
@@ -45,6 +45,7 @@ try{
   pool,origin:process.env.FUSEKI_ISOLATION_URL,
   adminUsername:process.env.DATASET_ADMIN_FUSEKI_USER,
   adminPassword:process.env.DATASET_ADMIN_FUSEKI_PASSWORD,
+  podDataPassword:process.env.PAPER_LOCAL_POD_DATA_PASSWORD,
   publicKeyPem:Buffer.from(
     process.env.DATASET_ADMIN_ISSUER_PUBLIC_PEM,'base64').toString('utf8')
  });

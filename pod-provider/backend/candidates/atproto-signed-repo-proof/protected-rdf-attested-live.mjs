@@ -50,7 +50,7 @@ const id=value=>{if(!/^[a-z_][a-z0-9_]{0,62}$/u.test(value))throw Error('Unsafe 
  return '"'+value+'"';};
 const credentials=Object.freeze({
  projector: 'fixture-projector:fixture-projector-only',
- ordinary: 'fixture-ordinary:fixture-ordinary-only'
+ ordinary: 'admin:fixture-ordinary-only'
 });
 const denied=async promise=>assert.rejects(promise,e=>e?.code==='42501');
 function rolePool(name,password){

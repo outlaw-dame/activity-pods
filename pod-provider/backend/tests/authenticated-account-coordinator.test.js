@@ -596,3 +596,13 @@ test('one-time invocation verifies bound ticket and MAC response, and refuses co
     code:'ACCOUNT_COORDINATOR_RECONCILIATION_REQUIRED'
   });
 });
+
+describe('approved app signup quota', () => {
+  const policy = { settings: { maxAccountsPerAppPerDay: 17 } };
+  test.each([[{}, 17], [{ maxAccountsPerDay: null }, 17], [{ maxAccountsPerDay: 1 }, 1],
+    [{ maxAccountsPerDay: 5 }, 5], [{ maxAccountsPerDay: 0 }, 1]])(
+    'resolves %j to %i reservations per day', (approvedApp, expected) => {
+      expect(provider.methods.resolveDailyLimit.call(policy, approvedApp)).toBe(expected);
+    }
+  );
+});

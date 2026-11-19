@@ -95,7 +95,7 @@ function normalizeApprovedApp(entry) {
     ]),
     allowAtproto: entry.allowAtproto !== false,
     allowUnsigned: entry.allowUnsigned === true,
-    maxAccountsPerDay: Number.isFinite(Number(entry.maxAccountsPerDay)) ? Number(entry.maxAccountsPerDay) : null
+    maxAccountsPerDay: entry.maxAccountsPerDay != null && Number.isFinite(Number(entry.maxAccountsPerDay)) ? Number(entry.maxAccountsPerDay) : null
   };
 }
 
@@ -1068,7 +1068,7 @@ module.exports = {
     },
 
     resolveDailyLimit(app) {
-      if (Number.isFinite(Number(app?.maxAccountsPerDay))) {
+      if (app?.maxAccountsPerDay != null && Number.isFinite(Number(app.maxAccountsPerDay))) {
         return Math.max(1, Number(app.maxAccountsPerDay));
       }
       return Math.max(1, Number(this.settings.maxAccountsPerAppPerDay) || 1);

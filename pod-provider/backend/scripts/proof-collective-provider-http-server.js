@@ -10,36 +10,18 @@ const http = require('node:http');
 const fs = require('node:fs');
 
 const port = Number(process.env.G1_E2E_HTTPS_PORT || 3443);
-const origin = 'https://app-e2e.test:' + port;
-const appUri = origin + '/app';
-const accessNeedUri = origin + '/access-need';
-const context = {
-  id: '@id',
-  type: '@type',
-  interop: 'http://www.w3.org/ns/solid/interop#',
-  apods: 'http://activitypods.org/ns/core#',
-  oidc: 'http://www.w3.org/ns/solid/oidc#'
-};
-function resource(res, obj) {
+const { createLocalSignupApp } = require('../candidates/local-signup-app');
+const { appDocument, needDocument, oidcDocument } = createLocalSignupApp(port);
+function resource(res, body) {
   res.writeHead(200, {
     'content-type': 'application/ld+json; charset=utf-8',
     'cache-control': 'no-store',
     'access-control-allow-origin': '*',
+    'vary': 'JsonLdContext',
     'x-content-type-options': 'nosniff'
   });
-  res.end(JSON.stringify({ '@context': context, ...obj }));
+  res.end(body);
 }
-const app = {
-  '@id': appUri, '@type': 'interop:Application',
-  'interop:hasAccessNeedGroup': accessNeedUri,
-  'interop:hasAuthorizationCallbackEndpoint': origin + '/callback'
-};
-const need = {
-  id: accessNeedUri,
-  type: 'interop:AccessNeedGroup',
-  'interop:accessNecessity': 'interop:AccessRequired',
-  'apods:hasSpecialRights': ['apods:CreateGroup', 'apods:ReadGroups', 'apods:ManageMembers']
-};
 const proxy = https.createServer({
   cert: fs.readFileSync(process.env.G1_E2E_CERT),
   key: fs.readFileSync(process.env.G1_E2E_KEY)
@@ -54,25 +36,11 @@ const proxy = https.createServer({
       // the same canonical HTTPS identity without colliding JSON-LD terms.
       if (req.headers.jsonldcontext ===
           'https://www.w3.org/ns/solid/oidc-context.jsonld') {
-        res.writeHead(200, {
-          'content-type': 'application/ld+json; charset=utf-8',
-          'cache-control': 'no-store',
-          'vary': 'JsonLdContext'
-        });
-        return res.end(JSON.stringify({
-          '@context': ['https://www.w3.org/ns/solid/oidc-context.jsonld'],
-          client_id: appUri,
-          client_name: 'Paper disposable G1 application',
-          redirect_uris: [origin + '/callback'],
-          response_types: ['code'],
-          grant_types: ['authorization_code'],
-          token_endpoint_auth_method: 'none',
-          scope: 'openid profile webid'
-        }));
+        return resource(res, oidcDocument);
       }
-      return resource(res, app);
+      return resource(res, appDocument);
     }
-    if (pathname === '/access-need') return resource(res, need);
+    if (pathname === '/access-need') return resource(res, needDocument);
     if (pathname === '/callback') {
       res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
       return res.end('Disposable OAuth callback; no session material logged.');

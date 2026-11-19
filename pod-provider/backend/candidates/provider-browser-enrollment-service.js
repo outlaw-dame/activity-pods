@@ -124,6 +124,13 @@ function makeLocalBrowserSignupServices({ verifierPool, redeemerPool, invitation
       appBearer.length < 16 || appBearer.length > 4096 || /[\r\n]/u.test(appBearer)) {
     throw new Error('Local browser signup configuration refused');
   }
+  if (settings.loadRequirements === undefined) {
+    const app = require('./local-signup-app').createLocalSignupApp();
+    if (settings.appClientId !== app.appUri || settings.appUri !== app.appUri || settings.returnUri !== app.returnUri) {
+      throw new Error('Local signup app scope mismatch');
+    }
+    settings.loadRequirements = app.loadRequirements;
+  }
   const scope = { providerId: settings.providerId, appClientId: settings.appClientId,
     browserOrigin: settings.browserOrigin, returnUri: settings.returnUri };
   const options = { ...scope, encryptionKey: transactionKey };

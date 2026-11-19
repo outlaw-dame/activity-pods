@@ -66,7 +66,7 @@ function createLocalBrowserRuntime(service, filename) {
     services.signupApi.created.call(service);
     service.beginDisposableEnrollment = services.signupApi.methods.beginDisposableEnrollment;
     let admitted;
-    function start() {
+    const start = () => {
       admitted ??= Promise.all(Object.entries(roles).map(async ([name, role]) => {
           const result = await pools[name].query(`SELECT r.rolname=current_user AND current_user=session_user
             AND r.rolcanlogin AND NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls)
@@ -80,7 +80,7 @@ function createLocalBrowserRuntime(service, filename) {
           if (result.rows[0]?.ok !== true) throw Error();
         })).catch(() => { throw new Error('Local enrollment database admission refused'); });
       return admitted;
-    }
+    };
     service.broker.createService({ ...services.schema, async started() {
       await start();
       return services.schema.started.call(this);

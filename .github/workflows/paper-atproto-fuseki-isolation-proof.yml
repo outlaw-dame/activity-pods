@@ -11,6 +11,8 @@ on:
       - 'pod-provider/backend/tests/local-native-auth-node.test.cjs'
       - 'pod-provider/backend/moleculer.config.js'
       - 'pod-provider/backend/candidates/local-pod-data.js'
+      - 'pod-provider/backend/candidates/local-binding-index.js'
+      - 'pod-provider/backend/tests/local-binding-index-node.test.cjs'
       - 'pod-provider/backend/services/core/triplestore.js'
       - 'pod-provider/backend/config/config.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
@@ -160,6 +162,21 @@ jobs:
           psql "$ATPROTO_REPO_PROOF_DSN" -X -v ON_ERROR_STOP=1 -c "CREATE ROLE paper_native_account_login LOGIN PASSWORD 'disposable_private_auth'; GRANT paper_private_auth_runtime TO paper_native_account_login WITH INHERIT TRUE, SET FALSE, ADMIN FALSE"
           unset ATPROTO_REPO_PROOF_DSN
           node --test backend/tests/local-native-auth-node.test.cjs
+
+      - name: Verify scoped private identity binding index
+        env:
+          PAPER_LOCAL_POD_DATA_PASSWORD: fixture-ordinary-only
+          PAPER_LOCAL_BINDING_INDEX_PASSWORD: fixture-binding-index-only
+          PAPER_LOCAL_BROWSER_CONFIG: disposable-index-probe
+          PAPER_LOCAL_NATIVE_AUTH: confirmed
+          APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE: confirmed
+          SEMAPPS_SPARQL_ENDPOINT: http://127.0.0.1:3041
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 10 --user fixture-provisioner:fixture-admin-only \
+            --data 'dbName=binding-index-proof&dbType=tdb2' 'http://127.0.0.1:3041/$/datasets' >/dev/null
+          unset ATPROTO_REPO_PROOF_DSN
+          node --test backend/tests/local-binding-index-node.test.cjs
 
       - name: Prove durable PostgreSQL account reservation and cross-replica identity fencing
         run: |

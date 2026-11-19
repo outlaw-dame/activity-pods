@@ -23,6 +23,7 @@ class MoleculerError extends Error {
 
 function loadService() {
   const modules = {
+    '../candidates/local-binding-index': { createLocalBindingIndex: () => undefined },
     'url-join': (...parts) => parts.join('/').replace(/\/{2,}/g, '/'),
     '@semapps/ldp': { ControlledContainerMixin: {} },
     '@semapps/mime-types': { MIME_TYPES: { JSON: 'application/json' } },

@@ -26,12 +26,12 @@ function fields(object) {
 
 function localNativeAccountStore(env = process.env) {
   if (!env.PAPER_LOCAL_NATIVE_AUTH_DSN) {
-    if (env.SEMAPPS_AUTH_ACCOUNTS_DATASET === 'paper-private-auth') throw new Error('Missing private account connection');
+    if (env.PAPER_LOCAL_NATIVE_AUTH || env.SEMAPPS_AUTH_ACCOUNTS_DATASET === 'paper-private-auth') throw new Error('Missing private account connection');
     return undefined;
   }
   if (!localPodData(env) || env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
       env.APODS_ACCOUNT_COORDINATOR_DISPOSABLE !== 'confirmed' ||
-      env.SEMAPPS_AUTH_ACCOUNTS_DATASET !== 'paper-private-auth') throw new Error('Private account profile refused');
+      env.PAPER_LOCAL_NATIVE_AUTH !== 'confirmed' || env.SEMAPPS_AUTH_ACCOUNTS_DATASET === 'paper-private-auth') throw new Error('Private account profile refused');
   let url;
   try { url = new URL(env.PAPER_LOCAL_NATIVE_AUTH_DSN); } catch { throw new Error('Invalid private account connection'); }
   if (url.protocol !== 'postgres:' || url.hostname !== '127.0.0.1' || url.port !== '5548' ||

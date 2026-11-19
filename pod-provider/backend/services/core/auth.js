@@ -15,7 +15,7 @@ module.exports = {
   settings: {
     baseUrl: CONFIG.BASE_URL,
     jwtPath: path.resolve(__dirname, '../../jwt'),
-    accountsDataset: CONFIG.AUTH_ACCOUNTS_DATASET,
+    accountsDataset: process.env.PAPER_LOCAL_NATIVE_AUTH === 'confirmed' ? 'paper-private-auth' : CONFIG.AUTH_ACCOUNTS_DATASET,
     reservedUsernames: CONFIG.AUTH_RESERVED_USER_NAMES,
     minPasswordLength: 8,
     minUsernameLength: 2,

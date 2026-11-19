@@ -102,7 +102,7 @@ function createPodCellMiddlewares() {
 const middlewares = fabric.serviceGroup === GROUP_POD_CELL ? createPodCellMiddlewares() : [];
 // Apply on every broker that may host auth actions, including distributed cells.
 middlewares.push(AccountEnrollmentMiddleware());
-if (process.env.PAPER_LOCAL_NATIVE_AUTH_DSN || CONFIG.AUTH_ACCOUNTS_DATASET === 'paper-private-auth') {
+if (process.env.PAPER_LOCAL_NATIVE_AUTH || process.env.PAPER_LOCAL_NATIVE_AUTH_DSN || CONFIG.AUTH_ACCOUNTS_DATASET === 'paper-private-auth') {
   middlewares.push(require('./candidates/local-native-account-store').localNativeAccountStore());
 }
 

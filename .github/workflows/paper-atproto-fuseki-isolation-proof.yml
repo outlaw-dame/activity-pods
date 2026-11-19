@@ -151,7 +151,7 @@ jobs:
           PAPER_ACCOUNTS_DISPOSABLE: confirmed
           APODS_ACCOUNT_COORDINATOR_DISPOSABLE: confirmed
           APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE: confirmed
-          SEMAPPS_AUTH_ACCOUNTS_DATASET: paper-private-auth
+          PAPER_LOCAL_NATIVE_AUTH: confirmed
           SEMAPPS_SPARQL_ENDPOINT: http://127.0.0.1:3041
         run: |
           set -euo pipefail

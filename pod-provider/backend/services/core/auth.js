@@ -169,7 +169,7 @@ module.exports = {
         // their storage authority from the actual WebID/accountData, not ctx.meta.
         ctx.emit(
           'auth.registered',
-          { webId, profileData, accountData },
+          { webId, profileData, accountData: { username: accountData.username, webId } },
           { meta: { webId: null, dataset: null } }
         );
 

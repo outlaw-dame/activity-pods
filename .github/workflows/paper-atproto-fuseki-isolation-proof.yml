@@ -6,6 +6,10 @@ on:
       - '.github/workflows/paper-atproto-fuseki-isolation-proof.yml'
       - 'pod-provider/docker-compose-fuseki-isolation.yml'
       - 'pod-provider/scripts/fixtures/fuseki-isolation-shiro.ini'
+      - 'pod-provider/backend/candidates/local-native-account-store.js'
+      - 'pod-provider/backend/sql/paper-local-native-auth.sql'
+      - 'pod-provider/backend/tests/local-native-auth-node.test.cjs'
+      - 'pod-provider/backend/moleculer.config.js'
       - 'pod-provider/backend/candidates/local-pod-data.js'
       - 'pod-provider/backend/services/core/triplestore.js'
       - 'pod-provider/backend/config/config.js'
@@ -139,6 +143,23 @@ jobs:
           set -euo pipefail
           npm ci --prefix backend --ignore-scripts --no-audit --no-fund
           npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
+
+      - name: Verify native private account signup with an isolated login
+        env:
+          PAPER_LOCAL_NATIVE_AUTH_DSN: postgres://paper_native_account_login:disposable_private_auth@127.0.0.1:5548/atproto_signed_repo_proof_test
+          PAPER_LOCAL_POD_DATA_PASSWORD: fixture-ordinary-only
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
+          APODS_ACCOUNT_COORDINATOR_DISPOSABLE: confirmed
+          APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE: confirmed
+          SEMAPPS_AUTH_ACCOUNTS_DATASET: paper-private-auth
+          SEMAPPS_SPARQL_ENDPOINT: http://127.0.0.1:3041
+        run: |
+          set -euo pipefail
+          npm rebuild --prefix backend bcrypt --build-from-source
+          psql "$ATPROTO_REPO_PROOF_DSN" -X -v ON_ERROR_STOP=1 -f backend/sql/paper-local-native-auth.sql
+          psql "$ATPROTO_REPO_PROOF_DSN" -X -v ON_ERROR_STOP=1 -c "CREATE ROLE paper_native_account_login LOGIN PASSWORD 'disposable_private_auth'; GRANT paper_private_auth_runtime TO paper_native_account_login WITH INHERIT TRUE, SET FALSE, ADMIN FALSE"
+          unset ATPROTO_REPO_PROOF_DSN
+          node --test backend/tests/local-native-auth-node.test.cjs
 
       - name: Prove durable PostgreSQL account reservation and cross-replica identity fencing
         run: |

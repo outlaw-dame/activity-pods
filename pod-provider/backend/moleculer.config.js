@@ -102,6 +102,9 @@ function createPodCellMiddlewares() {
 const middlewares = fabric.serviceGroup === GROUP_POD_CELL ? createPodCellMiddlewares() : [];
 // Apply on every broker that may host auth actions, including distributed cells.
 middlewares.push(AccountEnrollmentMiddleware());
+if (process.env.PAPER_LOCAL_NATIVE_AUTH_DSN || CONFIG.AUTH_ACCOUNTS_DATASET === 'paper-private-auth') {
+  middlewares.push(require('./candidates/local-native-account-store').localNativeAccountStore());
+}
 
 // Locality telemetry is fabric-safe and may be enabled for either the real Pod
 // cell or an isolated proof group. It observes routing only; it has no service

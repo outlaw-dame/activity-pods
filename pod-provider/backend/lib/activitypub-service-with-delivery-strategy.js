@@ -1,5 +1,6 @@
 'use strict';
 
+const urlJoin = require('url-join');
 const QueueMixin = require('moleculer-bull');
 const { as, sec } = require('@semapps/ontologies');
 const semappsActivityPubPackage = require('@semapps/activitypub/package.json');
@@ -549,7 +550,29 @@ function createActivityPubServiceWithDeliveryStrategy({
       this.broker.createService({ mixins: [SideEffectsService, sideEffectsQueueMixin], settings: { podProvider } });
       this.broker.createService({ mixins: [CollectionService], settings: { podProvider, path: collectionsPath } });
       this.broker.createService({ mixins: [CollectionsRegistryService], settings: { baseUri, podProvider } });
-      this.broker.createService({ mixins: [ActorService], settings: { baseUri, selectActorData, podProvider } });
+      const actor = podProvider ? {
+        ...ActorService,
+        events: {
+          ...ActorService.events,
+          async 'auth.registered'(ctx) {
+            const { webId } = ctx.params;
+            const account = await this.broker.call('auth.account.findByWebId', { webId },
+              { meta: {}, retries: 0, timeout: 5000 });
+            if (typeof account?.username !== 'string' || !account.username ||
+                account.username === '.' || account.username === '..' ||
+                encodeURIComponent(account.username) !== account.username ||
+                account.webId !== webId || urlJoin(baseUri, account.username) !== webId) {
+              throw new Error('Registered actor has no matching local account');
+            }
+            // SemApps treats an actor with no dataset as remote. Bind only the
+            // actor bootstrap call to the owner resolved from the account store.
+            await this.actions.appendActorData({ actorUri: webId }, {
+              parentCtx: ctx, meta: { dataset: account.username, webId: null }
+            });
+          }
+        }
+      } : ActorService;
+      this.broker.createService({ mixins: [actor], settings: { baseUri, selectActorData, podProvider } });
       this.broker.createService({ mixins: [ApiService], settings: { baseUri, podProvider } });
       this.broker.createService({ mixins: [ObjectService], settings: { baseUri, podProvider, activateTombstones } });
       this.broker.createService({ mixins: [ActivityService], settings: { baseUri, podProvider, path: activitiesPath } });

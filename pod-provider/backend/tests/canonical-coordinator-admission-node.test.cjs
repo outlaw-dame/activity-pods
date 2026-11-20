@@ -37,7 +37,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       ...['v1','v2-signup-ledger','v3-evidence-seal','v4-atomic-completion','v6-enrollment'].map(v => '../sql/paper-account-postgres-candidate-' + v + '.sql'),
       '../sql/paper-browser-signup-transaction.sql', '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
       ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff','pg-dataset-admin-claim'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql'),
-      '../sql/paper-provider-genesis-readback.sql', '../sql/paper-provider-genesis-projection.sql'
+      '../sql/paper-provider-genesis-readback.sql', '../sql/paper-provider-genesis-projection.sql', '../sql/paper-provider-genesis-hosting.sql'
     ];
     for (const file of files) {
       const sql = await fs.readFile(path.join(__dirname, file), 'utf8');
@@ -311,6 +311,8 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rows[0].webid,webId);
     assert.equal((await bootstrapReader.query(readGenesis,[crypto.randomUUID(),...bootstrapScope.slice(1)])).rowCount,0);
     await assert.rejects(bootstrapReader.query('SELECT * FROM paper_atproto_repo_proof.blocks'),{code:'42501'});
+    const hostedScope = 'SELECT * FROM paper_account_reservation_proof.hosted_genesis_scope($1)';
+    assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,0);
     const leaseArgs=[...bootstrapScope,head];
     const leases=await Promise.all([projector.query(claimGenesis,leaseArgs),projector.query(claimGenesis,leaseArgs)]);
     assert.equal(leases.reduce((count,result)=>count+result.rowCount,0),1);
@@ -321,6 +323,15 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.equal((await attestor.query(ackGenesis,ackArgs)).rows[0].applied,true);
     assert.equal((await attestor.query(ackGenesis,ackArgs)).rows[0].applied,false);
     assert.equal((await owner.query('SELECT count(*)::int AS n FROM paper_atproto_authority.consents')).rows[0].n,0);
+
+    const hosted = (await bootstrapReader.query(hostedScope,[did])).rows;
+    assert.equal(hosted.length, 1);
+    assert.equal(hosted[0].operation_id,admitted.operationId);
+    assert.equal(hosted[0].lease_epoch,lease_epoch);
+    assert.deepEqual(hosted[0].rdf_digest,ackArgs[6]);
+    await owner.query("UPDATE paper_atproto_repo_proof.native_event_outbox SET blocked_at=clock_timestamp() WHERE did=$1",[did]);
+    assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,0);
+    assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,0);
 
     const drift = await reserve();
     await owner.query(`GRANT SELECT(webid) ON paper_account_candidate.accounts TO ${logins[2]}`);

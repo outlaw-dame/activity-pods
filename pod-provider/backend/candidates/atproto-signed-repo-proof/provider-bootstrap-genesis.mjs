@@ -33,7 +33,7 @@ async function plcKey(did, handle) {
   } finally { await response.body?.cancel().catch(() => {}); }
 }
 
-export async function verifyProviderGenesis(pool, { reservationId, operationId, did }) {
+export async function readVerifiedProviderGenesis(pool, { reservationId, operationId, did }) {
   if (process.env.NODE_ENV !== 'test' || process.env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
       process.env.ATPROTO_REPO_PROOF_DISPOSABLE !== 'confirmed' || !uuid.test(reservationId) ||
       !uuid.test(operationId)) refused();
@@ -56,5 +56,10 @@ export async function verifyProviderGenesis(pool, { reservationId, operationId, 
   const current = await read();
   if (['webid','handle','head_cid','root_cid','rev'].some(field => current[field] !== row[field]) ||
       !current.commit_block.equals(row.commit_block) || !current.root_block.equals(row.root_block)) refused();
-  return Object.freeze({ ...proof, webId: row.webid });
+  return Object.freeze({ ...proof, webId:row.webid, handle:row.handle, pdsOrigin:row.pds_origin, carBytes, publicKeyPem:key });
+}
+
+export async function verifyProviderGenesis(pool,scope) {
+  const {did,rev,commitCid,rootCid,valid,webId} = await readVerifiedProviderGenesis(pool,scope);
+  return Object.freeze({did,rev,commitCid,rootCid,valid,webId});
 }

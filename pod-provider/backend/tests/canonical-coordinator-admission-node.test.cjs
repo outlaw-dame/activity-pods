@@ -37,7 +37,8 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       ...['v1','v2-signup-ledger','v3-evidence-seal','v4-atomic-completion','v6-enrollment'].map(v => '../sql/paper-account-postgres-candidate-' + v + '.sql'),
       '../sql/paper-browser-signup-transaction.sql', '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
       ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff','pg-dataset-admin-claim'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql'),
-      '../sql/paper-provider-genesis-readback.sql', '../sql/paper-provider-genesis-projection.sql', '../sql/paper-provider-genesis-hosting.sql'
+      '../sql/paper-provider-genesis-readback.sql', '../sql/paper-provider-genesis-projection.sql', '../sql/paper-provider-genesis-hosting.sql',
+      '../sql/paper-provider-genesis-sealer.sql'
     ];
     for (const file of files) {
       const sql = await fs.readFile(path.join(__dirname, file), 'utf8');
@@ -329,6 +330,14 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.equal(hosted[0].operation_id,admitted.operationId);
     assert.equal(hosted[0].lease_epoch,lease_epoch);
     assert.deepEqual(hosted[0].rdf_digest,ackArgs[6]);
+    const sealer = await runtime('paper_provider_genesis_sealer');
+    await assert.rejects(sealer.query("UPDATE paper_account_candidate.accounts SET changed_at=clock_timestamp() WHERE account_id=$1",[admitted.accountId]),{code:'42501'});
+    await assert.rejects(sealer.query("UPDATE paper_account_candidate.signup_operations SET state='ready' WHERE operation_id=$1",[admitted.operationId]),{code:'42501'});
+    const seal = "UPDATE paper_account_candidate.signup_operations SET state='evidence_sealed',generation=generation+1,evidence_digest=$2,evidence_commit_cid=$3,evidence_root_cid=$4,evidence_rev=$5,evidence_fence=$6,evidence_account_generation=2,evidence_sealed_at=clock_timestamp() WHERE operation_id=$1";
+    const sealArgs = [admitted.operationId,crypto.randomBytes(32),head,rootCid,rev,lease_epoch];
+    await assert.rejects(sealer.query(seal,[...sealArgs.slice(0,-1),Number(lease_epoch)+1]),{code:'42501'});
+    assert.equal((await sealer.query(seal,sealArgs)).rowCount,1);
+    assert.equal((await owner.query('SELECT state FROM paper_account_candidate.accounts WHERE account_id=$1',[admitted.accountId])).rows[0].state,'provisioning');
     await owner.query("UPDATE paper_atproto_repo_proof.native_event_outbox SET blocked_at=clock_timestamp() WHERE did=$1",[did]);
     assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,0);
     assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,0);

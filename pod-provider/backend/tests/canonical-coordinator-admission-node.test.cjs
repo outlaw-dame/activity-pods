@@ -205,6 +205,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       if (action === 'auth.account.findByWebId') {
         return { webId, username: first.input.username, signupReservationId: pendingReservation };
       }
+      if (action === 'auth-agent.registerApp') return webId+'/registration';
       assert.equal(action, 'identitybindings.getByCanonicalAccountId');
       return { webId, activityPubActorId: webId, atprotoManaged: true, repoInitialized: true,
         atSigningKeyRef: 'signing-ref', atRotationKeyRef: 'rotation-ref', repoRootCid: 'test-root', repoRev: 'test-rev',
@@ -307,8 +308,11 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     await owner.query("INSERT INTO paper_atproto_repo_proof.native_event_outbox(did,commit_cid,rev,kind) VALUES ($1,$2,$3,'at.commit.v1')",[did,head,rev]);
     await owner.query('INSERT INTO paper_atproto_repo_proof.rdf_projection_jobs(account_id,did,head_cid,root_cid,rev) VALUES ($1,$2,$3,$4,$5)',[webId,did,head,rootCid,rev]);
     assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,0,'unconsented bootstrap denied');
-    await owner.query("UPDATE paper_account_candidate.signup_operations SET enrollment_state='consent_recorded',enrollment_selection=$2,enrollment_registration_uri=$3 WHERE operation_id=$1",
-      [admitted.operationId,{},webId+'/registration']);
+    const consent=await enrollment.schema.actions.consent.handler({
+      meta:{ enrollmentCookie:cookies[0].split(';')[0], enrollmentOrigin:providerId },
+      params:{ csrfToken:session.csrfToken, approve:true, selected:[appClientId+'#profile'] }
+    });
+    assert.equal(consent.state,'consent_recorded');
     assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rows[0].webid,webId);
     assert.equal((await bootstrapReader.query(readGenesis,[crypto.randomUUID(),...bootstrapScope.slice(1)])).rowCount,0);
     await assert.rejects(bootstrapReader.query('SELECT * FROM paper_atproto_repo_proof.blocks'),{code:'42501'});

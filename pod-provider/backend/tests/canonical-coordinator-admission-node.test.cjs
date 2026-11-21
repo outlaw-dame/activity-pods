@@ -345,6 +345,9 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     assert.equal((await owner.query('SELECT state FROM paper_account_candidate.accounts WHERE account_id=$1',[admitted.accountId])).rows[0].state,'provisioning');
     const activator = await runtime('paper_provider_owner_activator');
     const native = await runtime('paper_private_auth_runtime');
+    const discover = 'SELECT * FROM paper_account_reservation_proof.provider_owner_scope($1,$2)';
+    assert.equal((await bootstrapReader.query(discover,[bootstrapScope[0],webId])).rows[0].operation_id,admitted.operationId);
+    assert.equal((await bootstrapReader.query(discover,[crypto.randomUUID(),webId])).rowCount,0);
     const activate = 'SELECT paper_account_reservation_proof.activate_provider_owner($1,$2,$3,$4,$5,$6,$7,$8) AS ok';
     const args = [bootstrapScope[0], admitted.operationId, webId, did, head, rootCid, rev, lease_epoch];
     const ready = 'SELECT paper_private_auth.owner_ready($1,$2,$3) AS ok';

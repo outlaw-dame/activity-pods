@@ -46,6 +46,7 @@ test('Paper checks current required SAI rights on each request', async () => {
   try {
     await update('INSERT', facts);
     assert.equal(await check(),true);
+    assert.equal(await paperAppAccess(broker,owner,app.appUri,'https://other.example/'),false);
     await update('DELETE',optional);
     assert.equal(await check(),true);
     await update('DELETE',required);

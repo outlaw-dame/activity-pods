@@ -27,7 +27,8 @@ function queryForOwner(owner) {
 }
 
 async function paperAppAccess(broker, owner, clientId, issuer) {
-  if (clientId !== app.appUri || issuer !== 'https://paper.example.org/') return true;
+  if (clientId !== app.appUri) return true;
+  if (issuer !== 'https://paper.example.org/') return false;
   const match = typeof owner === 'string' && owner.match(ownerPattern);
   if (!match || process.env.NODE_ENV !== 'test' || !process.env.PAPER_LOCAL_BROWSER_CONFIG ||
       process.env.PAPER_BROWSER_ENROLLMENT_DISPOSABLE !== 'confirmed') return false;

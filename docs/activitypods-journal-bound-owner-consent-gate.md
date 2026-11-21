@@ -189,3 +189,19 @@ security review; none is established by this disposable proof. Promotion of
 legacy unversioned credentials is prohibited: affected clients must
 reauthorize with owner consent. Record reviewed CI and source SHA before
 considering any release change.
+
+
+## Staging-derived OAuth service loader hardening (PR #258)
+
+The post-#257 **production-mode staging** provider initially failed startup
+because the new Redis Lua refresh-policy helper was stored under
+`backend/services/oauth/`. Moleculer's configured recursive service glob
+`services/!(utils)/**/*.js` tries to register any JavaScript file there as
+a service. The helper exports algorithms, not a Moleculer service schema.
+It belongs at `backend/utils/oauth-refresh-atomic-policy.js`, outside that
+loader namespace. Its imports are explicit in the three consuming modules.
+The Redis OAuth workflow now rejects any non-`*.service.js` JavaScript file
+under `backend/services/oauth/` before integration testing. This failure
+was **not** detected by isolated real-Redis tests; the full production-mode
+staging provider-startup test is an independent mandatory acceptance check.
+The private AES key stays required, and no signup/SAI/PDS release fuse changes.

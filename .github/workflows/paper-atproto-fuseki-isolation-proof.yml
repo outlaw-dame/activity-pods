@@ -93,6 +93,9 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attestor.mjs
           node --check backend/candidates/atproto-signed-repo-proof/pg-attested-projection-ops.mjs
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/account-reservation-authority.mjs
@@ -204,6 +207,20 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs prepare
 
+      - name: Prove native owner attestor refuses contradictory RDF and unsafe SQL roles
+        env:
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node --test backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
+
+      - name: Reserve a native owner SAI grant and independently read protected Jena
+        env:
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs prepare
+
       - name: Restart persistent Fuseki for independent readback
         run: |
           set -euo pipefail
@@ -238,6 +255,13 @@ jobs:
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs verify
 
+      - name: Prove native SAI readback attestation across process and Jena restart
+        env:
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs verify
+
       - name: Prove independent protected-RDF receipt after persistent Jena restart
         run: |
           set -euo pipefail
@@ -260,6 +284,14 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/dataset-admin-claim-live.mjs cleanup
+
+      - name: Destroy native owner SAI activation and scoped credentials
+        if: always()
+        env:
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs cleanup
 
       - name: Destroy disposable PostgreSQL schemas and restricted credentials
         if: always()

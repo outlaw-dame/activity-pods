@@ -40,14 +40,16 @@ const role=()=>({
 });
 const ids={reservationId:'e15441be-fda9-43f2-af94-9738d97cd1a8',
  operationId:'136fbe40-4eb1-4a89-b6d0-e96fbc71aebb'};
-function fixture({roleData=role(),reads,pg={attest:true,confirm:true}}={}){
+function fixture({roleData=role(),roleByLease,reads,pg={attest:true,confirm:true}}={}){
  const calls=[];const released=[];let next=0,leases=0;
  const pool={async connect(){
   const id=++leases;
   return {
    async query(sql,values){
     calls.push({sql,values,lease:id});
-    if(sql.includes('FROM pg_catalog.pg_roles'))return {rowCount:1,rows:[roleData]};
+    if(sql.includes('FROM pg_catalog.pg_roles'))return {
+     rowCount:1,rows:[roleByLease?.[id-1]||roleData]
+    };
     if(sql.includes('attest_bound_owner_consent'))return {rowCount:1,rows:[{accepted:pg.attest}]};
     if(sql.includes('confirm_bound_owner_consent'))return {rowCount:1,rows:[{accepted:pg.confirm}]};
     assert.fail('Unexpected PG SQL');
@@ -78,7 +80,17 @@ test('requires exact narrow Postgres attestor role with no legacy execute',async
   await fails(()=>createDisposableJournalBoundSaiAttestor({
    ...f,config,fixtureOnly:true}),'JOURNAL_SAI_ATTESTOR_ROLE_UNSAFE');
   assert.equal(f.calls.length,1);
+  assert.deepEqual(f.released,[{lease:1,discard:true}]);
  }
+});
+test('reject role privilege drift after constructor and before real Jena attestation',async()=>{
+ enabled();
+ const f=fixture({roleByLease:[role(),{...role(),issuer:true}]});
+ const attestor=await createDisposableJournalBoundSaiAttestor({
+  ...f,config,fixtureOnly:true});
+ await fails(()=>attestor.attest(ids),'JOURNAL_SAI_ATTESTOR_ROLE_UNSAFE');
+ assert.deepEqual(f.calls.map(c=>c.lease),[1,2]);
+ assert.deepEqual(f.released,[{lease:1,discard:false},{lease:2,discard:true}]);
 });
 test('two real typed reads precede bounded PG attestation and current journal confirmation',async()=>{
  enabled();

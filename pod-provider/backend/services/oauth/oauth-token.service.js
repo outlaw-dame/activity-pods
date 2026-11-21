@@ -222,8 +222,7 @@ module.exports = {
     async issueAccessToken(session, ctx) {
       await requireCurrentConsent(ctx,session);
       const epoch=await pgEpoch.current(ctx,session);
-      if(epoch!==null&&session.oauthPgRevision!==undefined&&
-         session.oauthPgRevision!==epoch){
+      if(epoch!==null&&session.oauthPgRevision!==epoch){
         throw new MoleculerError('PostgreSQL OAuth epoch changed',400,'INVALID_GRANT');
       }
       const { privateJwk } = await ctx.call('jwk.get');

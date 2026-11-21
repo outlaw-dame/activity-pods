@@ -235,6 +235,10 @@ async function main(){
     },jkt);
   assert.equal((await introspect(firstResult.access_token)).active,true);
   assert.equal((await introspect(firstResult.access_token)).oauth_pg_revision,'1');
+  await assert.rejects(oauthToken.methods.issueAccessToken.call(
+    tokenState,{...identity(initial,'1'),oauthPgRevision:undefined},pgCtx),
+    e=>e?.type==='INVALID_GRANT',
+    'A direct signer call cannot promote an unversioned session');
   const liveRefresh=await oauthRefresh.actions.introspectRefreshToken.handler.call(
     refreshState,{...pgCtx,params:{refreshToken:firstResult.refresh_token}});
   assert.equal(liveRefresh.active,true);

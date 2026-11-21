@@ -38,7 +38,9 @@ const scripts=[
  new URL('pg-preaccount-reservations.sql',here),
  new URL('schema.sql',here),
  new URL('pg-v4-reservation-completion-bridge.sql',here),
- new URL('paper-atproto-canonical-authority-v3-bound-enrollment.sql',root)
+ new URL('paper-atproto-canonical-authority-v3-bound-enrollment.sql',root),
+ new URL('paper-atproto-canonical-authority-v4-oauth-generations.sql',root),
+ new URL('paper-atproto-canonical-authority-v7-session-oauth.sql',root)
 ];
 const schemas=['paper_atproto_authority','paper_atproto_repo_proof',
  'paper_account_reservation_proof','paper_account_candidate'];
@@ -46,13 +48,17 @@ const memberships={issuer:'paper_atproto_consent_issuer',
  attestor:'paper_atproto_consent_attestor',
  attestor2:'paper_atproto_consent_attestor',
  revoker:'paper_atproto_authority_revoker',
- revoker2:'paper_atproto_authority_revoker',ordinary:null};
+ revoker2:'paper_atproto_authority_revoker',
+ oauthissuer:'paper_oauth_epoch_issuer',
+ oauthrevoker:'paper_oauth_epoch_revoker',ordinary:null};
 const cleanupRoles=[
  'paper_atproto_consent_issuer','paper_atproto_consent_attestor',
  'paper_atproto_authority_reader','paper_atproto_authority_revoker',
  'paper_atproto_authority_importer','paper_enrollment_runtime',
  'paper_account_proof_worker','paper_account_proof_issuer',
- 'paper_account_bridge_binder','paper_account_bridge_finalizer'
+ 'paper_account_bridge_binder','paper_account_bridge_finalizer',
+ 'paper_oauth_epoch_issuer','paper_oauth_epoch_revoker',
+ 'paper_oauth_epoch_reader','paper_oauth_epoch_signer'
 ];
 const label=crypto.randomBytes(5).toString('hex');
 const names=Object.fromEntries(Object.keys(memberships).map(k=>[k,'paper_sai_journal_'+k+'_'+label]));
@@ -196,7 +202,8 @@ try{
   if(member)await admin.query('GRANT '+ident(member)+' TO '+ident(names[kind])+
    ' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
  }
- const [issuer,attestor,attestor2,revoker,revoker2,ordinary]=
+ const [issuer,attestor,attestor2,revoker,revoker2,
+  oauthissuer,oauthrevoker,ordinary]=
   await Promise.all(Object.keys(memberships).map(login));
  for(const c of [issuer,attestor,ordinary]){
   await denied(c,'UPDATE paper_atproto_authority.consents SET state=$1',['active']);
@@ -314,6 +321,74 @@ try{
  }
  assert.equal(await confirm(attestor,owner),true);
  assert.equal(await confirm(attestor,owner,owner.registration,owner.grant,failDigest),false);
+ // The only OAuth issuer API now derives owner, DID, app/client and SAI
+ // revision directly from the same *authenticated owner enrollment token*
+ // used to create native consent. The SQL roles cannot choose a WebID.
+ const oauthGrant=crypto.randomBytes(24).toString('base64url');
+ const oauthGrant2=crypto.randomBytes(24).toString('base64url');
+ const oauthScope='atproto repo:app.bsky.feed.post?action=create';
+ const issue=(actor,grantId,scope,expected)=>call(oauthissuer,
+  'issue_session_oauth_generation',
+  [actor.provider||base,actor.origin||'https://app-e2e.test:3443',
+   actor.tokenHash,grantId,scope,expected],
+  ['text','text','bytea','text','text','bigint']);
+ const revokeOAuth=(actor,grantId,expected)=>call(oauthrevoker,
+  'revoke_session_oauth_generation',
+  [actor.provider||base,actor.origin||'https://app-e2e.test:3443',
+   actor.tokenHash,grantId,expected],
+  ['text','text','bytea','text','bigint']);
+ await denied(oauthissuer,
+  'SELECT paper_atproto_authority.issue_oauth_generation('+
+  '$1,$2,$3,$4,$5,$6,$7)',
+  [owner.owner,app,app,oauthGrant,sha(oauthScope),0,1]);
+ await denied(oauthrevoker,
+  'SELECT paper_atproto_authority.revoke_oauth_generation($1,$2,$3,$4)',
+  [owner.owner,app,oauthGrant,1]);
+ await denied(ordinary,
+  'SELECT paper_atproto_authority.issue_session_oauth_generation('+
+  '$1,$2,$3,$4,$5,$6)',
+  [base,'https://app-e2e.test:3443',owner.tokenHash,oauthGrant,oauthScope,0]
+ );
+ assert.equal(await issue(incomplete,oauthGrant,oauthScope,0),'0',
+  'No attested consent for another owner');
+ assert.equal(await issue({...owner,tokenHash:sha('forged-token')},oauthGrant,
+  oauthScope,0),'0');
+ assert.equal(await issue({...owner,origin:'https://evil.example.org'},oauthGrant,
+  oauthScope,0),'0');
+ assert.equal(await issue(owner,oauthGrant,'atproto repo:*',0),'0',
+  'Owner cannot authorize a wildcard scope outside reviewed manifest');
+ assert.equal(await issue(owner,oauthGrant,oauthScope,0),'1');
+ assert.equal(await issue(owner,oauthGrant,oauthScope,0),'0',
+  'Replay cannot mint second credential');
+ const actual=(await admin.query('SELECT owner_webid,app_uri,client_id,'+
+  'revision::text,encode(scope_sha256,\'hex\') AS scope_sha,state '+
+  'FROM paper_atproto_authority.oauth_generations WHERE owner_webid=$1',
+  [owner.owner])).rows[0];
+ assert.equal(actual.owner_webid,owner.owner);
+ assert.equal(actual.app_uri,app);
+ assert.equal(actual.client_id,app);
+ assert.equal(actual.scope_sha,sha(oauthScope).toString('hex'));
+ assert.equal(actual.revision,'1');assert.equal(actual.state,'active');
+ assert.equal(await revokeOAuth({...owner,tokenHash:sha('wrong')},
+   oauthGrant,1),'0');
+ assert.equal(await revokeOAuth(owner,oauthGrant,1),'2');
+ assert.equal(await revokeOAuth(owner,oauthGrant,1),'0',
+   'Revocation may not acknowledge twice');
+ assert.equal(await issue(owner,oauthGrant2,oauthScope,2),'3',
+   'Fresh authenticated approval may rotate a revoked generation');
+ await admin.query('UPDATE paper_account_candidate.signup_operations '+
+  "SET enrollment_expires_at=clock_timestamp()-interval '1 second' "+
+  'WHERE operation_id=$1',[owner.operation]);
+ assert.equal(await issue(owner,crypto.randomBytes(24).toString('base64url'),
+   oauthScope,3),'0','Expired owner session cannot mint another grant');
+ assert.equal(await revokeOAuth(owner,oauthGrant2,3),'0',
+   'Expired owner session cannot be replayed for revoke');
+ await admin.query('UPDATE paper_account_candidate.signup_operations '+
+  "SET enrollment_expires_at=clock_timestamp()+interval '2 minutes' "+
+  'WHERE operation_id=$1',[owner.operation]);
+ assert.equal(await revokeOAuth(owner,oauthGrant2,3),'4');
+ console.log('PASS: authentic enrollment journal scopes restricted PG OAuth issuance/revocation, permissions, replay and expiry');
+
  assert.equal(await api.verifyActiveGrant({
   owner:owner.owner,app,did:owner.did,grantUri:owner.grant,consentRevision:'1'
  }),true);

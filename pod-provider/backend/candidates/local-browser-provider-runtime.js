@@ -17,7 +17,7 @@ const roles = {
   binderPool: 'paper_enrollment_identity_binder'
 };
 
-function readConfiguration(filename) {
+function readConfiguration(filename, journalBoundConsent = false) {
   const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   const bytes = Buffer.alloc(16385);
   try {
@@ -28,8 +28,12 @@ function readConfiguration(filename) {
     if (length !== stat.size) throw Error();
     const config = JSON.parse(bytes.subarray(0, length).toString('utf8'));
     const keys = ['passwords', 'transactionKey', 'csrfKey', 'invitationPublicKey', 'appBearer'];
+    const expectedRoles = [
+      ...Object.values(roles), ...(journalBoundConsent ? ['paper_atproto_consent_issuer'] : [])
+    ];
     if (Object.keys(config).sort().join() !== keys.sort().join() ||
-        Object.keys(config.passwords).sort().join() !== Object.values(roles).sort().join()) throw Error();
+        !config.passwords || typeof config.passwords !== 'object' ||
+        Object.keys(config.passwords).sort().join() !== expectedRoles.sort().join()) throw Error();
     return config;
   } finally { bytes.fill(0); fs.closeSync(fd); }
 }
@@ -54,11 +58,20 @@ function createLocalBrowserRuntime(service, filename) {
         !process.env.ACTIVITYPODS_TOKEN || process.env.ACTIVITYPODS_TOKEN.length < 32 ||
         !process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY || process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY.length < 32 ||
         process.env.ACTIVITYPODS_TOKEN === process.env.APODS_ATPROTO_MANAGED_REPO_CAPABILITY) throw Error();
-    const config = readConfiguration(filename);
+    // The existing production-configured provider stays on its closed
+    // signup fuse. This extra mode is only a deliberately disposable
+    // coordinator integration using a distinct issuer-only LOGIN.
+    const journalMode = process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE === 'confirmed';
+    if (process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE &&
+        !journalMode) throw Error();
+    const configuredRoles = journalMode
+      ? { ...roles, issuerPool: 'paper_atproto_consent_issuer' }
+      : roles;
+    const config = readConfiguration(filename, journalMode);
     if (config.csrfKey === config.transactionKey ||
         typeof config.invitationPublicKey !== 'string' || !config.invitationPublicKey.startsWith('-----BEGIN PUBLIC KEY-----')) throw Error();
     const app = createLocalSignupApp();
-    for (const [name, role] of Object.entries(roles)) {
+    for (const [name, role] of Object.entries(configuredRoles)) {
       const password = config.passwords[role];
       if (typeof password !== 'string' || password.length < 16 || password.length > 256) throw Error();
       const pool = new Pool({ host: '127.0.0.1', port: 5548, database: 'atproto_signed_repo_proof_test',
@@ -68,7 +81,16 @@ function createLocalBrowserRuntime(service, filename) {
       pools[name] = pool;
     }
     const { makeLocalBrowserSignupServices } = require('./provider-browser-enrollment-service');
-    const services = makeLocalBrowserSignupServices({ ...pools, broker: service.broker, providerId, browserOrigin: providerId,
+    const reserveOwnerConsent = journalMode
+      ? require('./journal-bound-consent-issuer')
+        .createDisposableJournalBoundConsentIssuer({
+          pool: pools.issuerPool, providerId, browserOrigin: providerId,
+          fixtureOnly: true
+        }).reserve
+      : undefined;
+    const services = makeLocalBrowserSignupServices({
+      ...pools, broker: service.broker, providerId, browserOrigin: providerId,
+      journalBoundConsent: journalMode, reserveOwnerConsent,
       appClientId: app.appUri, appUri: app.appUri, returnUri: app.returnUri, fixtureOnly: true,
       invitationPublicKey: crypto.createPublicKey(config.invitationPublicKey), appBearer: config.appBearer,
       transactionKey: key(config.transactionKey), csrfKey: key(config.csrfKey),
@@ -77,7 +99,7 @@ function createLocalBrowserRuntime(service, filename) {
     service.beginDisposableEnrollment = services.signupApi.methods.beginDisposableEnrollment;
     let admitted;
     const start = () => {
-      admitted ??= Promise.all(Object.entries(roles).map(async ([name, role]) => {
+      admitted ??= Promise.all(Object.entries(configuredRoles).map(async ([name, role]) => {
           const result = await pools[name].query(`SELECT r.rolname=current_user AND current_user=session_user
             AND r.rolcanlogin AND NOT (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls)
             AND (SELECT count(*) FROM pg_auth_members WHERE member=r.oid)=1

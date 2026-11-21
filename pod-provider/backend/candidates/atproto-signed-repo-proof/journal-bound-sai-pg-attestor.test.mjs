@@ -41,16 +41,22 @@ const role=()=>({
 const ids={reservationId:'e15441be-fda9-43f2-af94-9738d97cd1a8',
  operationId:'136fbe40-4eb1-4a89-b6d0-e96fbc71aebb'};
 function fixture({roleData=role(),reads,pg={attest:true,confirm:true}}={}){
- const calls=[];let next=0;
- const pool={async query(sql,values){
-  calls.push({sql,values});
-  if(sql.includes('FROM pg_catalog.pg_roles'))return {rowCount:1,rows:[roleData]};
-  if(sql.includes('attest_bound_owner_consent'))return {rowCount:1,rows:[{accepted:pg.attest}]};
-  if(sql.includes('confirm_bound_owner_consent'))return {rowCount:1,rows:[{accepted:pg.confirm}]};
-  assert.fail('Unexpected PG SQL');
+ const calls=[];const released=[];let next=0,leases=0;
+ const pool={async connect(){
+  const id=++leases;
+  return {
+   async query(sql,values){
+    calls.push({sql,values,lease:id});
+    if(sql.includes('FROM pg_catalog.pg_roles'))return {rowCount:1,rows:[roleData]};
+    if(sql.includes('attest_bound_owner_consent'))return {rowCount:1,rows:[{accepted:pg.attest}]};
+    if(sql.includes('confirm_bound_owner_consent'))return {rowCount:1,rows:[{accepted:pg.confirm}]};
+    assert.fail('Unexpected PG SQL');
+   },
+   release(discard=false){released.push({lease:id,discard});}
+  };
  }};
  const readNativeSai=async()=>reads?reads[next++]||reads.at(-1):evidence();
- return {pool,calls,readNativeSai};
+ return {pool,calls,released,readNativeSai};
 }
 const fails=(fn,code)=>assert.rejects(fn(),e=>e?.code===code);
 test('fails closed in production even with synthetic fixture credentials',async()=>{
@@ -86,8 +92,11 @@ test('two real typed reads precede bounded PG attestation and current journal co
  assert.equal(result.grantUri,grant);
  assert.equal(result.registrationUri,registration);
  assert.equal(result.evidenceSha256.length,64);
- assert.equal(f.calls.length,3);
- const attest=f.calls[1],confirm=f.calls[2];
+ assert.equal(f.calls.length,4);
+ assert.deepEqual(f.calls.map(c=>c.lease),[1,2,2,2],
+   'Role audit and both privileged CAS checks share one connection');
+ assert.deepEqual(f.released,[{lease:1,discard:false},{lease:2,discard:false}]);
+ const attest=f.calls[2],confirm=f.calls[3];
  assert.match(attest.sql,/attest_bound_owner_consent/);
  assert.match(confirm.sql,/confirm_bound_owner_consent/);
  assert.equal(attest.values[0],ids.reservationId);
@@ -102,7 +111,8 @@ test('attestor cannot report success if the owner revoked before final PG confir
  const attestor=await createDisposableJournalBoundSaiAttestor({
   ...f,config,fixtureOnly:true});
  await fails(()=>attestor.attest(ids),'JOURNAL_SAI_SCOPE_STALE_OR_REVOKED');
- assert.equal(f.calls.length,3);
+ assert.equal(f.calls.length,4);
+ assert.deepEqual(f.released,[{lease:1,discard:false},{lease:2,discard:true}]);
 });
 test('changed Jena rights after initial PG CAS are never a successful attestation',async()=>{
  enabled();
@@ -110,7 +120,7 @@ test('changed Jena rights after initial PG CAS are never a successful attestatio
  const attestor=await createDisposableJournalBoundSaiAttestor({
   ...f,config,fixtureOnly:true});
  await fails(()=>attestor.attest(ids),'SAI_ACTIVATION_EVIDENCE_INVALID');
- assert.equal(f.calls.length,2,'No stale final PG confirmation after bad RDF');
+ assert.equal(f.calls.length,3,'No stale final PG confirmation after bad RDF');
 });
 test('changed registration or unexpected right is denied without a final PG confirmation',async()=>{
  enabled();
@@ -119,7 +129,7 @@ test('changed registration or unexpected right is denied without a final PG conf
  const attestor=await createDisposableJournalBoundSaiAttestor({
   ...f,config,fixtureOnly:true});
  await fails(()=>attestor.attest(ids),'JOURNAL_SAI_RDF_CHANGED');
- assert.equal(f.calls.length,2);
+ assert.equal(f.calls.length,3);
 });
 test('neither client-supplied UUID nor missing SQL attestation can authorize',async()=>{
  enabled();
@@ -129,5 +139,5 @@ test('neither client-supplied UUID nor missing SQL attestation can authorize',as
  await fails(()=>attestor.attest({...ids,reservationId:'foreign-reservation'}),
   'JOURNAL_SAI_OPERATION_INVALID');
  await fails(()=>attestor.attest(ids),'JOURNAL_SAI_SCOPE_STALE_OR_REVOKED');
- assert.equal(f.calls.length,2);
+ assert.equal(f.calls.length,3);
 });

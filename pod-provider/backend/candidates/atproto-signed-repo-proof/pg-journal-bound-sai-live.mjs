@@ -274,8 +274,14 @@ try{
    origin:JENA,username:'fixture-attestor',
    password:'fixture-attestor-only',fixtureOnly:true
   });
+  const attestorDsn=new URL(DSN);
+  attestorDsn.username=names.attestor;attestorDsn.password=passwords.attestor;
+  const attestorPool=new Pool({connectionString:attestorDsn.toString(),max:2,
+   connectionTimeoutMillis:2500,query_timeout:5500,idleTimeoutMillis:2500,
+   allowExitOnIdle:true});
+  clients.push(attestorPool);
   const trusted=await createDisposableJournalBoundSaiAttestor({
-   pool:attestor,readNativeSai:read,fixtureOnly:true,
+   pool:attestorPool,readNativeSai:read,fixtureOnly:true,
    config:{owner:owner.owner,app,needGroup,requiredRights:nativeRights}
   });
   const independentlyRead=await trusted.inspect();

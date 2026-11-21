@@ -224,7 +224,10 @@ async function cleanup(){
   }
   // Cleanup is only scoped to these synthetic owner/grant rows. Leave
   // the other signed-RDF test's canonical records and SQL schemas intact.
-  try{await project('DELETE DATA { '+ownerGraph+' }');}catch{}
+  // Cleanup must be observable; a failed native RDF removal is not an
+  // acceptable success signal even for a disposable fixture. The workflow's
+  // separate container/volume teardown still runs on cleanup failure.
+  await project('DELETE DATA { '+ownerGraph+' }');
   await admin.query('DELETE FROM paper_atproto_authority.consents WHERE owner_webid=$1',[owner]);
   await admin.query('DELETE FROM paper_atproto_authority.identities WHERE owner_webid=$1',[owner]);
   for(const kind of ['issuer','attestor','attestor2','revoker']){

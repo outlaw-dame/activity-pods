@@ -150,6 +150,56 @@ test('real PostgreSQL enrollment: bounded credential, exact owner, consent CAS a
     const optionalConsent = await fixture();
     await service.consent({ ...optionalConsent.request, selected: [required, optional] });
     assert.deepEqual(seen.at(-1).acceptedAccessNeeds, [required, optional].sort());
+    // The new opt-in journal-bound path must reserve canonical PENDING SAI
+    // state after the durable owner claim and BEFORE native registerApp.
+    // This test uses the real enrollment journal and a fake role callback;
+    // the separate PG18+Jena suite exercises the actual restricted SQL.
+    const priorBoundFlag = process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE;
+    process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE = 'confirmed';
+    try {
+      const ordered = [];
+      let permitted = true;
+      const protectedSettings = {
+        ...settings,
+        registerApp: async scope => {
+          ordered.push('native');
+          return scope.webId + '/registrations/verified';
+        },
+        journalBoundConsent: true,
+        reserveOwnerConsent: async ({ providerId: claimedProvider, origin, tokenHash }) => {
+          ordered.push('canonical');
+          assert.equal(claimedProvider, providerId);
+          assert.equal(origin, browserOrigin);
+          assert(Buffer.isBuffer(tokenHash) && tokenHash.length === 32);
+          return permitted;
+        }
+      };
+      const boundedIssuer = createProviderBrowserEnrollment({ ...protectedSettings, pool: runtime });
+      const boundedOther = createProviderBrowserEnrollment({ ...protectedSettings, pool: secondRuntime });
+      const approved = await fixture(boundedIssuer);
+      assert.deepEqual(await boundedIssuer.consent(approved.request),
+        { state: 'consent_recorded', completionPending: true });
+      assert.deepEqual(ordered, ['canonical', 'native']);
+      await assert.rejects(boundedOther.consent(approved.request), {code:'ENROLLMENT_ALREADY_CLAIMED'});
+      assert.deepEqual(ordered, ['canonical', 'native'],
+        'An acknowledged or uncertain owner claim must not start a second SAI mutation');
+      const rejected = await fixture(boundedIssuer);
+      permitted = false;
+      await assert.rejects(boundedIssuer.consent(rejected.request),
+        {code:'ENROLLMENT_CONSENT_RECONCILIATION_REQUIRED'});
+      assert.equal((await boundedOther.view({cookie:rejected.cookie,origin:browserOrigin})).state,'consent_claimed');
+      assert.deepEqual(ordered, ['canonical','native','canonical'],
+        'Failed PG admission never starts the native registration');
+      await assert.rejects(boundedOther.consent(rejected.request), {code:'ENROLLMENT_ALREADY_CLAIMED'});
+      const declined = await fixture(boundedIssuer);
+      assert.deepEqual(await boundedIssuer.consent({...declined.request,approve:false,selected:[]}),
+        {state:'denied'});
+      assert.deepEqual(ordered, ['canonical','native','canonical'],
+        'Declining access never invokes the canonical issuer');
+    } finally {
+      if (priorBoundFlag === undefined) delete process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE;
+      else process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE = priorBoundFlag;
+    }
     const expired = await fixture();
     await owner.query("UPDATE paper_account_candidate.signup_operations SET enrollment_expires_at=clock_timestamp()-interval '1 second' WHERE operation_id=$1", [expired.scope.operationId]);
     await assert.rejects(service.view({ cookie: expired.cookie, origin: browserOrigin }));

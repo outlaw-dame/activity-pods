@@ -22,18 +22,41 @@ function createDisposableJournalBoundConsentIssuer({
   };
   gate();
   for (const expected of [providerId, browserOrigin]) {
+    let parsed;
+    try { parsed = new URL(expected); }
+    catch { unavailable('OWNER_CONSENT_ISSUER_CONFIGURATION_INVALID'); }
     if (typeof expected !== 'string' || expected.length > 2048 ||
-        !expected.startsWith('https://') || new URL(expected).origin !== expected) {
+        parsed.protocol !== 'https:' || parsed.username || parsed.password ||
+        parsed.search || parsed.hash || parsed.origin !== expected) {
       unavailable('OWNER_CONSENT_ISSUER_CONFIGURATION_INVALID');
     }
   }
-  if (typeof pool?.query !== 'function') unavailable('OWNER_CONSENT_ISSUER_CONFIGURATION_INVALID');
+  if (typeof pool?.connect !== 'function') unavailable('OWNER_CONSENT_ISSUER_CONFIGURATION_INVALID');
 
-  async function admission() {
+  async function borrow() {
+    let expired = false, timer;
+    const pending = Promise.resolve().then(() => pool.connect()).then(client => {
+      if (expired) {
+        client.release(true);
+        unavailable('OWNER_CONSENT_ISSUER_CONNECTION_UNAVAILABLE');
+      }
+      if (!client || typeof client.query !== 'function' || typeof client.release !== 'function') {
+        unavailable('OWNER_CONSENT_ISSUER_CONNECTION_UNAVAILABLE');
+      }
+      return client;
+    });
+    try {
+      return await Promise.race([pending, new Promise((_, reject) => {
+        timer = setTimeout(() => { expired = true; reject(new Error('Issuer acquire timeout')); }, 3500);
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+
+  async function admission(client) {
     gate();
     let result;
     try {
-      result = await pool.query(
+      result = await client.query(
         "SELECT current_setting('server_version_num')::integer AS version," +
         "current_user=session_user AS own_login," +
         "r.rolcanlogin AND NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR" +
@@ -80,16 +103,29 @@ function createDisposableJournalBoundConsentIssuer({
       }
       // Never cache authority decisions across a database restore, privilege
       // change or pool reconnection. Each call checks its actual PG LOGIN.
-      await admission();
-      const result = await pool.query({
-        text: 'SELECT paper_atproto_authority.begin_session_owner_consent($1::text,$2::text,$3::bytea) AS allowed',
-        values: [providerId, browserOrigin, tokenHash],
-        query_timeout: 5000
-      });
-      if (result.rowCount !== 1 || result.rows[0]?.allowed !== true) {
-        unavailable('OWNER_CONSENT_ISSUER_JOURNAL_NOT_CURRENT');
+      let client, discard = false;
+      try {
+        client = await borrow();
+        // Privilege audit and state-changing CAS occur on the SAME PG login
+        // connection. Never borrow another session between these checks.
+        await admission(client);
+        const result = await client.query({
+          text: 'SELECT paper_atproto_authority.begin_session_owner_consent($1::text,$2::text,$3::bytea) AS allowed',
+          values: [providerId, browserOrigin, tokenHash],
+          query_timeout: 5000
+        });
+        if (result.rowCount !== 1 || result.rows[0]?.allowed !== true) {
+          unavailable('OWNER_CONSENT_ISSUER_JOURNAL_NOT_CURRENT');
+        }
+        return true;
+      } catch (error) {
+        discard = true;
+        throw error?.code?.startsWith('OWNER_CONSENT_') ? error :
+          Object.assign(new Error('Bound consent issuer database unavailable'),
+            { code: 'OWNER_CONSENT_ISSUER_UNAVAILABLE' });
+      } finally {
+        if (client) client.release(discard);
       }
-      return true;
     }
   });
 }

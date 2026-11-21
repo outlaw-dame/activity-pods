@@ -1,7 +1,7 @@
 const Redis = require('ioredis');
 const crypto = require('node:crypto');
 const { parseIntWithBounds, nowEpochSec } = require('../../utils/oauth-security');
-const { consentKey } = require('./oauth-refresh-atomic-policy');
+const { consentKey } = require('../../utils/oauth-refresh-atomic-policy');
 
 // Every owner-approved OAuth consent has an independently unpredictable
 // generation. Reapproval can never make an old access/refresh token current.

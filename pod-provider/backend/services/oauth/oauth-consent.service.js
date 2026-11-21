@@ -33,12 +33,22 @@ module.exports = {
     ttlSec: parseIntWithBounds(process.env.OAUTH_GRANT_TTL_SECONDS, 60 * 60 * 24 * 30, 60, 60 * 60 * 24 * 180, 'OAUTH_GRANT_TTL_SECONDS')
   },
   created() {
-    this.redis = new Redis(this.settings.redisUrl);
+    this.redis = new Redis(this.settings.redisUrl, {
+      lazyConnect: true, enableOfflineQueue: false,
+      autoResendUnfulfilledCommands: false,
+      connectTimeout: 2500, maxRetriesPerRequest: 1
+    });
+  },
+  async started() {
+    await this.redis.connect();
+    if (await this.redis.ping() !== 'PONG') {
+      throw new Error('OAuth Redis authority unavailable');
+    }
   },
   async stopped() {
-    if (this.redis) {
-      await this.redis.quit().catch(() => this.redis.disconnect());
-    }
+    if (!this.redis) return;
+    if (this.redis.status !== 'ready') { this.redis.disconnect(); return; }
+    await this.redis.quit().catch(() => this.redis.disconnect());
   },
   actions: {
     upsert: {

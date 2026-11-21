@@ -35,11 +35,20 @@ module.exports = {
     // Unknown Redis ACKs must never be replayed automatically after reconnect.
     this.redis=new Redis(this.settings.redisUrl,{
       connectTimeout:2500,enableOfflineQueue:false,
-      autoResendUnfulfilledCommands:false,maxRetriesPerRequest:1
+      autoResendUnfulfilledCommands:false,maxRetriesPerRequest:1,
+      lazyConnect:true
     });
   },
+  async started(){
+    // The service may accept actions only after its no-offline-queue Redis
+    // session is ready. Do not buffer potentially ambiguous writes.
+    await this.redis.connect();
+    if(await this.redis.ping()!=='PONG')throw Error('OAuth refresh Redis unavailable');
+  },
   async stopped() {
-    if(this.redis)await this.redis.quit().catch(()=>this.redis.disconnect());
+    if(!this.redis)return;
+    if(this.redis.status!=='ready'){this.redis.disconnect();return;}
+    await this.redis.quit().catch(()=>this.redis.disconnect());
   },
   actions: {
     issueRefreshToken: {

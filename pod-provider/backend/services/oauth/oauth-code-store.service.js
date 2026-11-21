@@ -30,6 +30,7 @@ module.exports = {
         canonicalAccountId: { type: 'string', min: 1 },
         did: { type: 'string', min: 1 },
         scope: { type: 'string', min: 1 },
+        consentGrantId: { type: 'string', pattern: '^[A-Za-z0-9_-]{32}$' },
         dpopJkt: { type: 'string', min: 8 },
         codeChallenge: { type: 'string', min: 43, max: 128 },
         codeChallengeMethod: { type: 'string', min: 1 },
@@ -44,6 +45,7 @@ module.exports = {
           canonicalAccountId: ctx.params.canonicalAccountId,
           did: ctx.params.did,
           scope: ctx.params.scope,
+          consentGrantId: ctx.params.consentGrantId,
           dpopJkt: ctx.params.dpopJkt,
           codeChallenge: ctx.params.codeChallenge,
           codeChallengeMethod: ctx.params.codeChallengeMethod,
@@ -66,22 +68,25 @@ module.exports = {
         const codeKey = `${this.settings.keyPrefix}:${code}`;
         const usedKey = `${this.settings.usedPrefix}:${code}`;
 
-        const used = await this.redis.exists(usedKey);
-        if (used === 1) {
-          throw new MoleculerError('Authorization code already used', 400, 'AUTHORIZATION_CODE_ALREADY_USED');
-        }
-
-        const payload = await this.redis.get(codeKey);
+        // GETDEL, not GET then DEL inside a MULTI, is the single-use
+        // linearization point for all provider replicas. Lost ACKs burn the
+        // code: never mint two refresh-token families from one approval.
+        const payload = await this.redis.getdel(codeKey);
         if (!payload) {
-          throw new MoleculerError('Invalid authorization code', 400, 'INVALID_AUTHORIZATION_CODE');
+          const used=await this.redis.exists(usedKey);
+          throw new MoleculerError(
+            used===1?'Authorization code already used':'Invalid authorization code',
+            400,used===1?'AUTHORIZATION_CODE_ALREADY_USED':'INVALID_AUTHORIZATION_CODE'
+          );
         }
-
-        const record = JSON.parse(payload);
-        await this.redis.multi()
-          .del(codeKey)
-          .set(usedKey, '1', 'EX', this.settings.codeTtlSec)
-          .exec();
-
+        await this.redis.set(usedKey,'1','EX',this.settings.codeTtlSec);
+        let record;
+        try{record=JSON.parse(payload);}catch{
+          throw new MoleculerError('Invalid authorization code',400,'INVALID_AUTHORIZATION_CODE');
+        }
+        if(!/^[A-Za-z0-9_-]{32}$/u.test(record?.consentGrantId||'')){
+          throw new MoleculerError('Unbound authorization code',400,'INVALID_AUTHORIZATION_CODE');
+        }
         return record;
       }
     }

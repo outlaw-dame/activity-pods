@@ -5,6 +5,7 @@ const { MIME_TYPES } = require('@semapps/mime-types');
 const { arrayOf } = require('@semapps/ldp');
 const { throw403, throw404 } = require('@semapps/middlewares');
 const CONFIG = require('../config/config');
+const { isClaimableGroup, isSafeGroupSlug, isGroupWebIdSyntax } = require('./utils/group-ownership');
 
 const GroupsService = {
   name: 'groups',
@@ -32,7 +33,17 @@ const GroupsService = {
      */
     async create(ctx) {
       const { id, type } = ctx.params;
-      const ownerWebId = ctx.meta.webId;
+      const ownerWebId = ctx.meta?.webId;
+
+      // The service remains loadable even when groups are disabled. Enforce
+      // the provider policy at the authoritative mutation, not only in UI.
+      if (CONFIG.ENABLE_GROUPS !== true) throw new E.ForbiddenError();
+
+      // Reject ambiguous and path-bearing IDs before any account/storage mutation.
+      if (!isSafeGroupSlug(id)) {
+        throw new E.BadRequestError('Invalid group identifier');
+      }
+      if (!ownerWebId || ownerWebId === 'system') throw new E.ForbiddenError();
       const groupWebId = urlJoin(CONFIG.BASE_URL, id);
 
       if (!['foaf:Organization', 'foaf:Group'].includes(type))
@@ -64,7 +75,7 @@ const GroupsService = {
       }
 
       // Create WebID
-      await await ctx.call('webid.create', {
+      await ctx.call('webid.create', {
         resource: {
           '@id': groupWebId,
           '@type': type === 'foaf:Organization' ? ['foaf:Organization', 'as:Organization'] : ['foaf:Group', 'as:Group'],
@@ -131,15 +142,40 @@ const GroupsService = {
 
       const account = await ctx.call('auth.account.findByUsername', { username });
       if (!account) throw404('Actor not found');
+      if (account.disabled === true || account.deletedAt != null) {
+        throw403('You are not allowed to claim a group with this actor.');
+      }
 
       if (!webId || (webId !== 'system' && webId !== account.webId)) {
         throw403('You are not allowed to claim a group with this actor.');
       }
 
-      // Attach group to account
+      // Validate untrusted input before invoking the account datastore.
+      if (!isGroupWebIdSyntax(groupWebId)) {
+        throw403('You are not allowed to claim this group.');
+      }
+
+      // The target URI alone grants no ownership. Resolve it through the
+      // provider's authoritative account registry and require the exact
+      // group-owner binding before mutating the account's owns collection.
+      const groupAccount = await ctx.call('auth.account.findByWebId', { webId: groupWebId });
+      if (!isClaimableGroup({
+        groupWebId,
+        groupAccount,
+        ownerWebId: account.webId,
+        trustedProviderCall: webId === 'system'
+      })) {
+        throw403('You are not allowed to claim this group.');
+      }
+
+      // Idempotent for sequential/replayed requests. Concurrent ownership
+      // updates still require a transactional provider-side primitive.
+      const owns = arrayOf(account.owns);
+      if (owns.includes(groupWebId)) return;
+
       await ctx.call('auth.account.update', {
         id: account['@id'],
-        owns: account.owns ? [...arrayOf(account.owns), groupWebId] : groupWebId
+        owns: [...owns, groupWebId]
       });
     },
     async undoClaim(ctx) {

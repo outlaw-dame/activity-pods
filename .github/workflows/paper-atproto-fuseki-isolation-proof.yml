@@ -98,6 +98,7 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
           node --check backend/candidates/atproto-signed-repo-proof/pg-journal-bound-sai-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.mjs
+          node --check backend/candidates/journal-bound-consent-issuer.js
           node --check backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
@@ -158,6 +159,7 @@ jobs:
 
       - name: Prove journal-bound native SAI on actual isolated Jena and PostgreSQL 18
         env:
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
           PAPER_JOURNAL_BOUND_SAI_DISPOSABLE: confirmed
           PAPER_JOURNAL_BOUND_SAI_JENA: confirmed
           ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed

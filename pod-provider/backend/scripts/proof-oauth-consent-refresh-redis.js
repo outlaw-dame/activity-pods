@@ -10,7 +10,7 @@ const consent=require('../services/oauth/oauth-consent.service');
 const code=require('../services/oauth/oauth-code-store.service');
 const refresh=require('../services/oauth/oauth-refresh-session.service');
 const access=require('../services/oauth/oauth-token.service');
-const {FAMILY_MAX_TOKENS}=require('../services/oauth/oauth-refresh-atomic-policy');
+const {FAMILY_MAX_TOKENS,consentKey}=require('../services/oauth/oauth-refresh-atomic-policy');
 
 const url='redis://127.0.0.1:6398';
 if(process.env.NODE_ENV!=='test'||
@@ -99,6 +99,12 @@ async function main(){
  );
  const verify=token=>access.actions.introspectAccessToken.handler.call(
   {settings:jwtConfig},{params:{token},call:issuerCtx.call}
+ );
+ // The old colon-joined format could alias two different owner/client
+ // pairs. Domain-separated tuple hashes prevent that security collision.
+ assert.notEqual(
+  consentKey(ns,'https://a:b','https://c'),
+  consentKey(ns,'https://a','b:https://c')
  );
  const old=await grant();
  console.log('PHASE: owner consent written');

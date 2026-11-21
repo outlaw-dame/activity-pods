@@ -16,6 +16,20 @@ const COLLECTION=/^[a-z][a-z0-9]*(?:\.[a-z0-9][a-z0-9-]*){2,}$/u;
 const TOKEN=/^DPoP ([A-Za-z0-9._~+/-]{20,8192}={0,2})$/u;
 const PROOF=/^[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}\.[A-Za-z0-9_-]{10,2048}$/u;
 const EPOCH=/^[1-9][0-9]{0,18}$/u;
+const MAX=9223372036854775807n;
+function pgEpochEnabled(){
+  const flag=process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE;
+  if(flag===undefined)return false;
+  if(flag!=='confirmed'||process.env.NODE_ENV!=='test'||
+     process.env.PAPER_OAUTH_PG_RESTORE_DISPOSABLE!=='confirmed'||
+     process.env.PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE!=='confirmed'){
+    deny('PDS_OAUTH_NOT_RELEASED');
+  }
+  return true;
+}
+function validRevision(x){
+  return typeof x==='string'&&EPOCH.test(x)&&BigInt(x)<=MAX;
+}
 function deny(code='PDS_OAUTH_NOT_AUTHORIZED'){
   const error=new Error('Provider authorization is unavailable');
   error.code=code;
@@ -113,6 +127,8 @@ export function createProviderPdsWriteAuthorization({
        info.cnf.jkt.length!==43||!scopeAllows(info.scope,collection,action)){
       deny();
     }
+    const pgEnabled=pgEpochEnabled();
+    if(pgEnabled&&!validRevision(info.oauth_pg_revision))deny();
     const clientId=info.client_id;
     const appUri=apps.get(clientId);
     const htu=resourceOrigin+'/xrpc/'+endpoint;
@@ -137,6 +153,7 @@ export function createProviderPdsWriteAuthorization({
          latest.canonical_account_id!==webId||
          latest.client_id!==clientId||latest.cnf?.jkt!==proof.jkt||
          !scopeAllows(latest.scope,collection,action)||
+         (pgEnabled&&latest.oauth_pg_revision!==info.oauth_pg_revision)||
          !consent||consent.revoked!==false||
          consent.canonicalAccountId!==webId||
          consent.clientId!==clientId||
@@ -148,6 +165,10 @@ export function createProviderPdsWriteAuthorization({
          !canonical(grant.grantUri)||
          !EPOCH.test(String(grant.revision)))deny();
       return Object.freeze({verified:true,ownerDid:did,ownerWebId:webId,
+        ...(pgEnabled?{oauthEpoch:Object.freeze({
+          clientId,grantId:latest.consent_grant_id,scope:latest.scope,
+          revision:latest.oauth_pg_revision
+        })}:{}),
         permission:'atproto:record-write',dpopVerified:true,
         issuerVerified:true,audienceVerified:true,
         appUri,grantUri:grant.grantUri,

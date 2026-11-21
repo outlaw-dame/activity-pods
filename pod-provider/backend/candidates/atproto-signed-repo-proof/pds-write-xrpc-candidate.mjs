@@ -179,12 +179,24 @@ export function createAuthenticatedRecordWriteXrpc({
       typeof auth?.consentRevision!=='string') {
       deny('AuthRequired',401);
     }
+    const pgOptIn=process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE!==undefined;
+    if(pgOptIn){
+      if(process.env.NODE_ENV!=='test'||
+         process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE!=='confirmed'||
+         process.env.PAPER_OAUTH_PG_RESTORE_DISPOSABLE!=='confirmed'||
+         process.env.PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE!=='confirmed'||
+         typeof auth.oauthEpoch!=='object'||auth.oauthEpoch===null||
+         Object.keys(auth.oauthEpoch).sort().join(',')!=='clientId,grantId,revision,scope'){
+        deny('AuthRequired',401);
+      }
+    }
     const key=await resolveSigner({accountId:before.webId,did});
     if(typeof key?.publicKeyPem!=='string'||key.publicKeyPem.length>4096||
       typeof key?.signer!=='function')deny('PDS_WRITE_SIGNER_UNAVAILABLE');
     const writer=await createFencedWriter({
       accountId:before.webId,did,appUri:auth.appUri,
-      grantUri:auth.grantUri,consentRevision:auth.consentRevision
+      grantUri:auth.grantUri,consentRevision:auth.consentRevision,
+      ...(pgOptIn?{oauthEpoch:auth.oauthEpoch}:{})
     });
     if(typeof writer?.verify!=='function'||typeof writer?.write!=='function'){
       deny('PDS_WRITE_WRITER_UNAVAILABLE');
@@ -254,7 +266,12 @@ export function createAuthenticatedRecordWriteXrpc({
       renewed?.action!==method||
       renewed?.appUri!==auth.appUri||
       renewed?.grantUri!==auth.grantUri||
-      renewed?.consentRevision!==auth.consentRevision){
+      renewed?.consentRevision!==auth.consentRevision||
+      (pgOptIn&&(
+        renewed?.oauthEpoch?.clientId!==auth.oauthEpoch.clientId||
+        renewed?.oauthEpoch?.grantId!==auth.oauthEpoch.grantId||
+        renewed?.oauthEpoch?.scope!==auth.oauthEpoch.scope||
+        renewed?.oauthEpoch?.revision!==auth.oauthEpoch.revision))){
       deny('PDS_WRITE_CONSENT_CHANGED');
     }
     const verified=await writer.verify({

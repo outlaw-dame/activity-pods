@@ -10,6 +10,8 @@ const CONFIG = require('../../config/config');
 const { verifySolidDpop } = require('../../utils/solid-dpop-verifier');
 const { allowedOrigin } = require('../../config/oidc-cors-policy');
 
+const { paperAppAccess } = require('../../candidates/local-paper-app-access');
+
 const validatedRequests = new WeakMap();
 
 module.exports = {
@@ -30,11 +32,20 @@ module.exports = {
   },
   async started() {
     // Dynamically import Provider since it's an ESM module
-    const { default: Provider } = await import('oidc-provider');
+    const { default: Provider, errors } = await import('oidc-provider');
 
     const { privateJwk } = await this.broker.call('jwk.get');
 
     const config = baseConfig(this.settings, privateJwk);
+
+    const findAccount = config.findAccount;
+    // This hook also runs when exchanging an authorization or refresh token.
+    config.findAccount = async (ctx, owner, token) => {
+      if (!await paperAppAccess(this.broker, owner, ctx.oidc.client?.clientId, this.settings.baseUrl)) {
+        throw new errors.AccessDenied('The owner has not granted the required application access');
+      }
+      return findAccount(ctx, owner, token);
+    };
 
     const redisClient = new Redis(this.settings.redisUrl, { keyPrefix: 'oidc:' });
     config.adapter = name => new RedisAdapter(name, redisClient);
@@ -122,6 +133,10 @@ module.exports = {
               return Promise.reject(new E.UnAuthorizedError(E.ERR_INVALID_TOKEN));
             }
           }
+          if (!await paperAppAccess(this.broker, payload.webid, payload.azp, this.settings.baseUrl)) {
+            ctx.meta.webId = 'anon';
+            throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
+          }
           ctx.meta.tokenPayload = payload;
           ctx.meta.webId = payload.azp; // Use the WebID of the application requesting access
           ctx.meta.impersonatedUser = payload.webid; // Used by some services which need to know the real user (Attention: webid with a i)
@@ -150,6 +165,10 @@ module.exports = {
               ctx.meta.webId = 'anon';
               return Promise.reject(new E.UnAuthorizedError(E.ERR_INVALID_TOKEN));
             }
+          }
+          if (!await paperAppAccess(this.broker, payload.webid, payload.azp, this.settings.baseUrl)) {
+            ctx.meta.webId = 'anon';
+            throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
           }
           ctx.meta.tokenPayload = payload;
           ctx.meta.webId = payload.azp; // Use the WebID of the application requesting access

@@ -12,6 +12,10 @@ on:
       - 'pod-provider/backend/moleculer.config.js'
       - 'pod-provider/backend/candidates/local-pod-data.js'
       - 'pod-provider/backend/candidates/local-binding-index.js'
+      - 'pod-provider/backend/candidates/local-paper-app-access.js'
+      - 'pod-provider/backend/candidates/local-signup-app.js'
+      - 'pod-provider/backend/tests/local-paper-app-access-node.test.cjs'
+      - 'pod-provider/backend/services/solid/solid-oidc.js'
       - 'pod-provider/backend/tests/local-binding-index-node.test.cjs'
       - 'pod-provider/backend/services/core/triplestore.js'
       - 'pod-provider/backend/config/config.js'
@@ -163,7 +167,7 @@ jobs:
           unset ATPROTO_REPO_PROOF_DSN
           node --test backend/tests/local-native-auth-node.test.cjs
 
-      - name: Verify scoped private identity binding index
+      - name: Verify private binding index and current Paper app permissions
         env:
           PAPER_LOCAL_POD_DATA_PASSWORD: fixture-ordinary-only
           PAPER_LOCAL_BINDING_INDEX_PASSWORD: fixture-binding-index-only
@@ -176,7 +180,9 @@ jobs:
           curl --fail --silent --show-error --max-time 10 --user fixture-provisioner:fixture-admin-only \
             --data 'dbName=binding-index-proof&dbType=tdb2' 'http://127.0.0.1:3041/$/datasets' >/dev/null
           unset ATPROTO_REPO_PROOF_DSN
-          node --test backend/tests/local-binding-index-node.test.cjs
+          curl --fail --silent --show-error --max-time 10 --user fixture-provisioner:fixture-admin-only \
+            --data 'dbName=claimtest-paperaccess01&dbType=tdb2' 'http://127.0.0.1:3041/$/datasets' >/dev/null
+          PAPER_BROWSER_ENROLLMENT_DISPOSABLE=confirmed node --test backend/tests/local-binding-index-node.test.cjs backend/tests/local-paper-app-access-node.test.cjs
 
       - name: Prove durable PostgreSQL account reservation and cross-replica identity fencing
         run: |

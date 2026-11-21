@@ -76,15 +76,24 @@ async function actor(kind){
   const c=new Client({connectionString:dsn.toString(),connectionTimeoutMillis:3000,query_timeout:9000});
   await c.connect();clients.push(c);
   assert.equal((await c.query('SELECT current_user AS u')).rows[0].u,name);
-  const role=(await c.query(
-    "SELECT pg_catalog.has_table_privilege(current_user,"+
-    "'paper_oauth_restore_witness.current_epochs','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AS tables,"+
-    "pg_catalog.has_table_privilege(current_user,"+
-    "'paper_oauth_restore_witness.events','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AS events,"+
-    "pg_catalog.pg_has_role(current_user,'paper_oauth_witness_issuer','SET') AS can_set"
-  )).rows[0];
-  assert.equal(role.tables,false);assert.equal(role.events,false);
-  assert.equal(role.can_set,false);
+  if(kind==='ordinary'){
+    // The ordinary login has NO schema USAGE. PostgreSQL deliberately
+    // refuses a name-resolving privilege query, before table lookup.
+    const schema=(await c.query(
+      "SELECT has_schema_privilege(current_user,"+
+      "'paper_oauth_restore_witness','USAGE') AS allowed")).rows[0];
+    assert.equal(schema.allowed,false);
+  }else{
+    const role=(await c.query(
+      "SELECT pg_catalog.has_table_privilege(current_user,"+
+      "'paper_oauth_restore_witness.current_epochs','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AS tables,"+
+      "pg_catalog.has_table_privilege(current_user,"+
+      "'paper_oauth_restore_witness.events','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AS events,"+
+      "pg_catalog.pg_has_role(current_user,'paper_oauth_witness_issuer','SET') AS can_set"
+    )).rows[0];
+    assert.equal(role.tables,false);assert.equal(role.events,false);
+    assert.equal(role.can_set,false);
+  }
   await assert.rejects(c.query('SELECT * FROM paper_oauth_restore_witness.current_epochs'),
     e=>e?.code==='42501');
   return c;

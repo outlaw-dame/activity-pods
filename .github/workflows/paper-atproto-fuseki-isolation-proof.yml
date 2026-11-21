@@ -99,6 +99,7 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/pg-journal-bound-sai-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.mjs
           node --check backend/candidates/journal-bound-consent-issuer.js
+          node --check backend/candidates/journal-bound-consent-issuer.test.cjs
           node --check backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
@@ -165,6 +166,7 @@ jobs:
           ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
         run: |
           set -euo pipefail
+          node --test backend/candidates/journal-bound-consent-issuer.test.cjs
           node --test backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
           node backend/candidates/atproto-signed-repo-proof/pg-journal-bound-sai-live.mjs
 

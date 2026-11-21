@@ -76,6 +76,7 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-journal-bound-sai-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.mjs
           node --check pod-provider/backend/candidates/journal-bound-consent-issuer.js
+          node --check pod-provider/backend/candidates/journal-bound-consent-issuer.test.cjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs
@@ -182,11 +183,13 @@ jobs:
       - name: Prove journal-bound native SAI attestor deny-first operation and role rules
         env:
           NODE_ENV: test
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
           ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
           ATPROTO_FUSEKI_ISOLATION_DISPOSABLE: confirmed
           PAPER_JOURNAL_BOUND_SAI_DISPOSABLE: confirmed
         run: |
           set -euo pipefail
+          node --test pod-provider/backend/candidates/journal-bound-consent-issuer.test.cjs
           node --test pod-provider/backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
 
       - name: Prove journal-bound SAI consent over real PostgreSQL 18 signup v1-v6 and reservation v4

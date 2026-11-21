@@ -13,13 +13,29 @@ module.exports = {
   },
 
   created() {
-    this.redis = new Redis(this.settings.redisUrl);
+    // Never queue or automatically replay a one-use Redis operation after
+    // disconnect or an ambiguously acknowledged write.
+    this.redis = new Redis(this.settings.redisUrl, {
+      lazyConnect: true, enableOfflineQueue: false,
+      autoResendUnfulfilledCommands: false,
+      connectTimeout: 2500, maxRetriesPerRequest: 1
+    });
+  },
+
+  async started() {
+    await this.redis.connect();
+    if (await this.redis.ping() !== 'PONG') {
+      throw new Error('OAuth PAR Redis unavailable');
+    }
   },
 
   async stopped() {
-    if (this.redis) {
-      await this.redis.quit().catch(() => this.redis.disconnect());
+    if (!this.redis) return;
+    if (this.redis.status !== 'ready') {
+      this.redis.disconnect();
+      return;
     }
+    await this.redis.quit().catch(() => this.redis.disconnect());
   },
 
   actions: {
@@ -77,7 +93,11 @@ module.exports = {
           expiresAt: now + this.settings.parTtlSec
         };
 
-        await this.redis.set(`${this.settings.keyPrefix}:${requestUri}`, JSON.stringify(record), 'EX', this.settings.parTtlSec);
+        const persisted = await this.redis.set(
+          `${this.settings.keyPrefix}:${requestUri}`, JSON.stringify(record),
+          'EX', this.settings.parTtlSec
+        );
+        if (persisted !== 'OK') throw new Error('OAuth PAR persistence unavailable');
 
         return {
           request_uri: requestUri,
@@ -104,9 +124,10 @@ module.exports = {
       },
       async handler(ctx) {
         const key = `${this.settings.keyPrefix}:${ctx.params.requestUri}`;
-        const payload = await this.redis.get(key);
+        // GETDEL linearizes one-time acceptance across all provider replicas.
+        // A lost acknowledgment burns the request; never retry the mutation.
+        const payload = await this.redis.getdel(key);
         if (!payload) return null;
-        await this.redis.del(key);
         return JSON.parse(payload);
       }
     }

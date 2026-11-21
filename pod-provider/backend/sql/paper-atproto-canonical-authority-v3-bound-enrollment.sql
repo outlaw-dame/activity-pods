@@ -126,6 +126,44 @@ BEGIN
    b.owner_webid,b.did,b.app_uri,p_operation,b.request_sha256);
 END $fn$;
 
+-- The only callable BEGIN entry point for the restricted issuer. An actual
+-- owner browser session has been claimed by the canonical v6 CAS; its hashed
+-- HttpOnly cookie is resolved INSIDE PostgreSQL to the one pre-bound
+-- reservation/operation. The browser never supplies those SQL identifiers.
+CREATE FUNCTION paper_atproto_authority.begin_session_owner_consent(
+ p_provider text,p_origin text,p_enrollment_token_sha256 bytea
+) RETURNS boolean LANGUAGE plpgsql VOLATILE STRICT SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp SET lock_timeout='2s' AS $fn$
+DECLARE b RECORD;
+BEGIN
+ IF p_enrollment_token_sha256 IS NULL OR
+    octet_length(p_enrollment_token_sha256)<>32 OR
+    p_provider IS NULL OR p_origin IS NULL THEN RETURN false; END IF;
+ SELECT r.reservation_id,s.operation_id INTO b
+ FROM paper_account_candidate.signup_operations s
+ JOIN paper_account_reservation_proof.reservations r
+   ON r.v4_operation_id=s.operation_id AND r.v4_account_id=s.account_id
+   AND r.v4_provider_id=s.provider_id AND r.v4_app_client_id=s.app_client_id
+   AND r.v4_hmac_key_version=s.hmac_key_version
+   AND r.v4_idempotency_hmac=s.idempotency_hmac
+   AND r.v4_request_hmac=s.request_hmac
+ WHERE s.provider_id=p_provider AND s.enrollment_origin=p_origin
+   AND s.enrollment_token_hash=p_enrollment_token_sha256
+   AND s.enrollment_state='consent_claimed'
+   AND r.state='side_effects_started' AND r.signup_claimed_at IS NOT NULL
+   AND r.v4_bound_at IS NOT NULL
+ FOR SHARE OF s,r;
+ IF NOT FOUND THEN RETURN false; END IF;
+ RETURN paper_atproto_authority.begin_bound_owner_consent(
+   b.reservation_id,b.operation_id);
+END $fn$;
+REVOKE ALL ON FUNCTION paper_atproto_authority.begin_session_owner_consent(
+ text,text,bytea) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION paper_atproto_authority.begin_bound_owner_consent(
+ uuid,uuid) FROM paper_atproto_consent_issuer;
+GRANT EXECUTE ON FUNCTION paper_atproto_authority.begin_session_owner_consent(
+ text,text,bytea) TO paper_atproto_consent_issuer;
+
 -- An attestation is authorized ONLY after the real provider has durably
 -- recorded its exact native registration URI, which must equal the
 -- independently observed URI. The grant and SHA-256 are derived from
@@ -184,8 +222,8 @@ REVOKE ALL ON FUNCTION paper_atproto_authority.attest_bound_owner_consent(
  uuid,uuid,text,text,bytea) FROM PUBLIC;
 REVOKE ALL ON FUNCTION paper_atproto_authority.confirm_bound_owner_consent(
  uuid,uuid,text,text,bytea) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paper_atproto_authority.begin_bound_owner_consent(
- uuid,uuid) TO paper_atproto_consent_issuer;
+-- Do NOT re-grant the raw operation-ID BEGIN path to the issuer; the
+-- only allowed runtime entrypoint is begin_session_owner_consent.
 GRANT EXECUTE ON FUNCTION paper_atproto_authority.attest_bound_owner_consent(
  uuid,uuid,text,text,bytea),
  paper_atproto_authority.confirm_bound_owner_consent(

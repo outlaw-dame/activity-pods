@@ -5,6 +5,22 @@ const { nowEpochSec, parseIntWithBounds, parseBoolean } = require('../../utils/o
 const CONFIG = require('../../config/config');
 
 const baseUrl = process.env.SEMAPPS_HOME_URL || CONFIG.BASE_URL || '';
+const CONSENT_GRANT=/^[A-Za-z0-9_-]{32}$/u;
+async function requireCurrentConsent(ctx,{canonicalAccountId,clientId,scope,consentGrantId}){
+  if(!CONSENT_GRANT.test(consentGrantId||'')){
+    throw new MoleculerError('Consent generation missing',400,'INVALID_GRANT');
+  }
+  // This is a READ of the owner-approved epoch, not cached session state.
+  // Never issue a fresh token from an older consent that was revoked and
+  // later reapproved under a new generation.
+  const grant=await ctx.call('oauth-consent.get',{canonicalAccountId,clientId});
+  if(!grant||grant.revoked!==false||grant.grantId!==consentGrantId||
+     grant.canonicalAccountId!==canonicalAccountId||
+     grant.clientId!==clientId||grant.scope!==scope){
+    throw new MoleculerError('Consent has changed',400,'INVALID_GRANT');
+  }
+  return grant;
+}
 
 function base64UrlSha256(input) {
   return crypto.createHash('sha256').update(String(input), 'utf8').digest('base64url');
@@ -12,7 +28,7 @@ function base64UrlSha256(input) {
 
 module.exports = {
   name: 'oauth-token',
-  dependencies: ['oauth-code-store', 'oauth-refresh-session', 'oauth-dpop-nonce', 'jwk'],
+  dependencies: ['oauth-code-store', 'oauth-refresh-session', 'oauth-dpop-nonce', 'oauth-consent', 'jwk'],
 
   settings: {
     issuer: process.env.OAUTH_ISSUER || baseUrl,
@@ -78,12 +94,19 @@ module.exports = {
             algorithms: [String(publicJwk.alg || 'ES256')]
           });
 
+          const grantId=payload.consent_grant_id;
+          if(!CONSENT_GRANT.test(grantId||''))return {active:false};
+          await requireCurrentConsent(ctx,{
+            canonicalAccountId:payload.canonical_account_id,
+            clientId:payload.client_id,scope:payload.scope,consentGrantId:grantId
+          });
           return {
             active: true,
             sub: payload.sub,
             scope: payload.scope,
             client_id: payload.client_id,
             canonical_account_id: payload.canonical_account_id,
+            consent_grant_id:grantId,
             cnf: payload.cnf,
             exp: payload.exp
           };
@@ -124,6 +147,7 @@ module.exports = {
         canonicalAccountId: record.canonicalAccountId,
         clientId: record.clientId,
         scope: record.scope,
+        consentGrantId:record.consentGrantId,
         dpopJkt
       }, ctx);
 
@@ -132,6 +156,7 @@ module.exports = {
         canonicalAccountId: record.canonicalAccountId,
         clientId: record.clientId,
         scope: record.scope,
+        consentGrantId:record.consentGrantId,
         dpopJkt
       });
 
@@ -164,6 +189,7 @@ module.exports = {
         canonicalAccountId: rotated.canonicalAccountId,
         clientId: rotated.clientId,
         scope: rotated.scope,
+        consentGrantId:rotated.consentGrantId,
         dpopJkt
       }, ctx);
 
@@ -178,6 +204,7 @@ module.exports = {
     },
 
     async issueAccessToken(session, ctx) {
+      await requireCurrentConsent(ctx,session);
       const { privateJwk } = await ctx.call('jwk.get');
       const privateKey = await importJWK(privateJwk, String(privateJwk.alg || 'ES256'));
       const now = nowEpochSec();
@@ -186,6 +213,7 @@ module.exports = {
         scope: session.scope,
         client_id: session.clientId,
         canonical_account_id: session.canonicalAccountId,
+        consent_grant_id: session.consentGrantId,
         cnf: { jkt: session.dpopJkt }
       })
         .setProtectedHeader({ alg: String(privateJwk.alg || 'ES256'), typ: 'at+jwt' })

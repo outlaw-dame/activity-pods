@@ -68,6 +68,7 @@ const a=(name,letter)=>({
  name,owner:base+'/'+name,did:'did:plc:'+letter.repeat(24),
  account:uuid(),operation:uuid(),reservation:uuid(),
  key:sha('key:'+name),request:sha('request:'+name),
+ tokenHash:sha('token:'+name),
  registration:base+'/'+name+'/data/app-registrations/native',
  grant:base+'/'+name+'/data/access-grants/native'
 });
@@ -121,8 +122,9 @@ async function call(c,fn,args,types){
   '('+args.map((_,i)=>'$'+(i+1)+'::'+types[i]).join(',')+') AS allowed',args);
  assert.equal(r.rowCount,1);return r.rows[0].allowed;
 }
-const begin=(db,actor)=>call(db,'begin_bound_owner_consent',
- [actor.reservation,actor.operation],['uuid','uuid']);
+const begin=(db,actor)=>call(db,'begin_session_owner_consent',
+ [actor.provider||base,actor.origin||'https://app-e2e.test:3443',actor.tokenHash],
+ ['text','text','bytea']);
 const attest=(db,actor,registration=actor.registration,grant=actor.grant,proof=digest)=>
  call(db,'attest_bound_owner_consent',
  [actor.reservation,actor.operation,registration,grant,proof],
@@ -149,7 +151,7 @@ async function seed(actor,selected=rights){
   "VALUES($1,$2,$3,$4,1,$5,$6,'reconciliation_required',2,true,"+
   "$7,$8,$9,$10,$11,$12,clock_timestamp()+interval '10 minutes','consent_claimed',$13)",
   [actor.operation,base,actor.account,app,actor.key,actor.request,
-   sha('token:'+actor.name),sha('csrf:'+actor.name),'https://app-e2e.test:3443',
+   actor.tokenHash,sha('csrf:'+actor.name),'https://app-e2e.test:3443',
    app,'https://app-e2e.test:3443/callback',JSON.stringify(req),JSON.stringify(choice)]);
  await admin.query('INSERT INTO paper_account_reservation_proof.reservations '+
   '(provider_id,app_client_id,idempotency_hash,request_hash,username,expected_webid,'+
@@ -205,6 +207,8 @@ try{
   [owner.owner,owner.did,app,owner.operation,owner.grant,digest]);
  await denied(ordinary,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
   [owner.reservation,owner.operation]);
+ await denied(issuer,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
+  [owner.reservation,owner.operation]);
  await denied(issuer,'SELECT paper_atproto_authority.attest_bound_owner_consent($1,$2,$3,$4,$5)',
   [owner.reservation,owner.operation,owner.registration,owner.grant,digest]);
  await denied(attestor,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
@@ -220,8 +224,10 @@ try{
  await admin.query('UPDATE paper_account_reservation_proof.reservations '+
    'SET app_client_id=$1 WHERE reservation_id=$2',
    [approvedAppScope,owner.reservation]);
- assert.equal(await begin(issuer,{...owner,operation:incomplete.operation}),false);
- assert.equal(await begin(issuer,{...owner,reservation:incomplete.reservation}),false);
+ assert.equal(await begin(issuer,{...owner,origin:'https://attacker.example.org'}),false,
+  'Unrelated browser origin cannot begin another owner consent');
+ assert.equal(await begin(issuer,{...owner,tokenHash:sha('forged-session')}),false);
+ assert.equal(await begin(issuer,{...owner,provider:'https://another.example.org'}),false);
  assert.equal(await begin(issuer,incomplete),false,'Missing ManageMembers must fail');
  assert.equal(await state(incomplete),null);
  assert.equal(await begin(issuer,owner),true);

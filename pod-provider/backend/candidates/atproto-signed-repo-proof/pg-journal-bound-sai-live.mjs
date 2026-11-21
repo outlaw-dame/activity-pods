@@ -8,6 +8,9 @@ import {readFile} from 'node:fs/promises';
 import {Client,Pool} from 'pg';
 import {createRequire} from 'node:module';
 import {createDisposableNativeSaiReader} from './native-sai-pg-consent-attestor.mjs';
+import {createSignedRepoProofStore} from './store.mjs';
+import {createSignedSingleRecordWriter} from './single-record-writer.mjs';
+import {verifySignedSingleRecordSnapshot} from './signed-single-record.mjs';
 import {createDisposableJournalBoundSaiAttestor} from './journal-bound-sai-pg-attestor.mjs';
 const require=createRequire(import.meta.url);
 const {createCanonicalAtprotoPgAuthority}=require('../../utils/atproto-canonical-pg-authority.js');
@@ -37,6 +40,7 @@ const scripts=[
  new URL('paper-atproto-canonical-authority-v2-owner-consent.sql',root),
  new URL('pg-preaccount-reservations.sql',here),
  new URL('schema.sql',here),
+ new URL('single-record-mutation.sql',here),
  new URL('pg-v4-reservation-completion-bridge.sql',here),
  new URL('paper-atproto-canonical-authority-v3-bound-enrollment.sql',root),
  new URL('paper-atproto-canonical-authority-v4-oauth-generations.sql',root),
@@ -376,6 +380,94 @@ try{
    'Revocation may not acknowledge twice');
  assert.equal(await issue(owner,oauthGrant2,oauthScope,2),'3',
    'Fresh authenticated approval may rotate a revoked generation');
+ // POSITIVE CROSS-PROTOCOL CONSISTENCY FIXTURE (not hosted signup).
+ // The account was written via the canonical journal and the new owner-
+ // bound native SAI grant was independently attested above.
+ const linked=(await admin.query(
+  'SELECT webid,activitypub_actor_uri,atproto_did,atproto_handle,'+
+  'atproto_pds_url,atproto_repo_initialized FROM '+
+  'paper_account_candidate.accounts WHERE account_id=$1',[owner.account]
+ )).rows[0];
+ assert.equal(linked.webid,owner.owner);
+ assert.equal(linked.activitypub_actor_uri,owner.owner);
+ assert.equal(linked.atproto_did,owner.did);
+ assert.equal(linked.atproto_repo_initialized,true);
+ assert.equal(linked.atproto_handle,owner.name+'.paper.example.org');
+ assert.equal(linked.atproto_pds_url,'https://pds.paper.example.org');
+ assert.equal(await confirm(attestor,owner),true);
+ const repoPool=new Pool({connectionString:DSN,max:3,
+  connectionTimeoutMillis:3000,query_timeout:6500,
+  idleTimeoutMillis:2500,allowExitOnIdle:true});
+ clients.push(repoPool);
+ const {privateKey,publicKey}=crypto.generateKeyPairSync('ec',{
+  namedCurve:'secp256k1'});
+ const signing={
+  publicKeyPem:publicKey.export({type:'spki',format:'pem'}).toString(),
+  signer:async bytes=>crypto.sign('sha256',bytes,{
+   key:privateKey,dsaEncoding:'ieee-p1363'})
+ };
+ const repo=createSignedRepoProofStore({pool:repoPool,fixtureOnly:true});
+ const genesis=await repo.bootstrap({
+  accountId:owner.owner,did:owner.did,...signing
+ });
+ assert.equal(genesis.verified,true);
+ assert.equal(genesis.outboxStatus,'pending');
+ // Projection ACK here is a disposable DB-only stand-in; in the hosted
+ // path a real protected-Jena signed CID readback is mandatory.
+ const ack=await admin.query(
+  "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
+  "state='applied',lease_epoch=lease_epoch+1,"+
+  "applied_at=clock_timestamp() WHERE account_id=$1 AND did=$2 "+
+  "AND head_cid=$3 AND state='pending' RETURNING generation",
+  [owner.owner,owner.did,genesis.commitCid]
+ );
+ assert.equal(ack.rowCount,1);
+ const writer=createSignedSingleRecordWriter({
+  pool:repoPool,fixtureOnly:true,
+  authorize:async({accountId:account,did:actor,scope:permission})=>{
+   if(account!==owner.owner||actor!==owner.did||
+      permission!=='atproto:record-write')return false;
+   const allowed=await repoPool.query(
+    'SELECT paper_atproto_authority.verify_oauth_generation('+
+    '$1,$2,$3,$4,$5,$6::bigint) AS ok',
+    [owner.owner,app,app,oauthGrant2,sha(oauthScope),3]);
+   return allowed.rows[0]?.ok===true;
+  }
+ });
+ const path='app.bsky.feed.post/3jzm3xwpf342a';
+ const body={$type:'app.bsky.feed.post',
+  text:'Paper unified account signed repository acceptance',
+  createdAt:'2026-11-21T00:00:00.000Z'};
+ const signed=await writer.write({
+  accountId:owner.owner,did:owner.did,
+  expectedCommitCid:genesis.commitCid,expectedRev:genesis.rev,
+  action:'create',path,record:body,...signing
+ });
+ assert.equal(signed.verified,true);
+ assert.equal(signed.path,path);
+ assert.equal(signed.generation,2);
+ assert.notEqual(signed.commitCid,genesis.commitCid);
+ const independent=await verifySignedSingleRecordSnapshot({
+  did:owner.did,publicKeyPem:signing.publicKeyPem,
+  carBytes:signed.carBytes
+ });
+ assert.equal(independent.commitCid,signed.commitCid);
+ assert.equal(independent.recordCid,signed.recordCid);
+ const outbox=(await repoPool.query(
+  'SELECT kind,status,blocked_at FROM '+
+  'paper_atproto_repo_proof.native_event_outbox '+
+  'WHERE did=$1 AND commit_cid=$2',[owner.did,signed.commitCid]
+ )).rows[0];
+ assert.equal(outbox.kind,'at.commit.v1');
+ assert.equal(outbox.status,'pending');
+ assert.equal(outbox.blocked_at,null);
+ await assert.rejects(writer.write({
+  accountId:pending.owner,did:owner.did,
+  expectedCommitCid:signed.commitCid,expectedRev:signed.rev,
+  action:'update',path,record:{...body,text:'forged'},...signing
+ }),e=>e?.code==='SINGLE_RECORD_WRITE_NOT_AUTHORIZED');
+ console.log('PASS: canonical WebID=ActivityPub actor, managed DID/PDS, independently attested SAI, signed CAR/MST and durable native outbox positive fixture');
+
  await admin.query('UPDATE paper_account_candidate.signup_operations '+
   "SET enrollment_expires_at=clock_timestamp()-interval '1 second' "+
   'WHERE operation_id=$1',[owner.operation]);
@@ -387,6 +479,17 @@ try{
   "SET enrollment_expires_at=clock_timestamp()+interval '2 minutes' "+
   'WHERE operation_id=$1',[owner.operation]);
  assert.equal(await revokeOAuth(owner,oauthGrant2,3),'4');
+ await assert.rejects(writer.write({
+  accountId:owner.owner,did:owner.did,
+  expectedCommitCid:signed.commitCid,expectedRev:signed.rev,
+  action:'update',path,
+  record:{...body,text:'must never sign after revoke'},...signing
+ }),e=>e?.code==='SINGLE_RECORD_WRITE_NOT_AUTHORIZED');
+ assert.equal((await writer.verify({
+  accountId:owner.owner,did:owner.did,
+  publicKeyPem:signing.publicKeyPem
+ })).commitCid,signed.commitCid);
+ console.log('PASS: signed repository and native outbox unchanged after owner OAuth revoke');
  console.log('PASS: authentic enrollment journal scopes restricted PG OAuth issuance/revocation, permissions, replay and expiry');
 
  assert.equal(await api.verifyActiveGrant({

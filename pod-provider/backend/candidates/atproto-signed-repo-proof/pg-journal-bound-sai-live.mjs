@@ -51,6 +51,7 @@ const sha=s=>crypto.createHash('sha256').update(s).digest();
 const uuid=()=>crypto.randomUUID();
 const ident=s=>{assert.match(s,/^[a-z_][a-z0-9_]{0,62}$/u);return '"'+s+'"';};
 const base='https://paper.example.org',app='https://app-e2e.test:3443/app';
+const approvedAppScope=sha('activitypods:approved-app:v1\0'+app).toString('hex');
 const rights=['apods:CreateGroup','apods:ReadGroups','apods:ManageMembers'];
 const a=(name,letter)=>({
  name,owner:base+'/'+name,did:'did:plc:'+letter.repeat(24),
@@ -115,7 +116,7 @@ async function seed(actor,selected=rights){
   "VALUES($1,$2,$3,$4,$5,$6,$7,'side_effects_started',"+
   "clock_timestamp()+interval '10 minutes',clock_timestamp(),clock_timestamp(),"+
   '$8,$9,$10,$11,1,$12,$13,clock_timestamp())',
-  [base+'/provider','fixture-app',sha('resv-key:'+actor.name),
+  [base+'/provider',approvedAppScope,sha('resv-key:'+actor.name),
    sha('resv-request:'+actor.name),actor.name,actor.owner,actor.reservation,
    base,app,actor.account,actor.operation,actor.key,actor.request]);
  await admin.query('INSERT INTO paper_atproto_authority.identities '+
@@ -166,6 +167,16 @@ try{
  await denied(attestor,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
   [owner.reservation,owner.operation]);
  await seed(owner);await seed(incomplete,rights.slice(0,2));await seed(pending);
+ // A forged app-scope alias in a previously bridged reservation is not
+ // sufficient just because its copied v4_app_client_id still matches.
+ await admin.query('UPDATE paper_account_reservation_proof.reservations '+
+   'SET app_client_id=$1 WHERE reservation_id=$2',
+   ['forged-approved-app-scope',owner.reservation]);
+ assert.equal(await begin(issuer,owner),false,
+   'App-scope hash mismatch must prevent initial authorization');
+ await admin.query('UPDATE paper_account_reservation_proof.reservations '+
+   'SET app_client_id=$1 WHERE reservation_id=$2',
+   [approvedAppScope,owner.reservation]);
  assert.equal(await begin(issuer,{...owner,operation:incomplete.operation}),false);
  assert.equal(await begin(issuer,{...owner,reservation:incomplete.reservation}),false);
  assert.equal(await begin(issuer,incomplete),false,'Missing ManageMembers must fail');

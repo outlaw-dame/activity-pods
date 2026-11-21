@@ -46,6 +46,9 @@ jobs:
           --health-retries 20
     env:
       NODE_ENV: test
+      SEMAPPS_AVAILABLE_LOCALES: en
+      SEMAPPS_AUTH_RESERVED_USER_NAMES: admin,root
+      SEMAPPS_HOME_URL: https://paper.example.org
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
       ATPROTO_REPO_PROOF_DISPOSABLE: confirmed

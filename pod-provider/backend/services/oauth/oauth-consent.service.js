@@ -1,6 +1,7 @@
 const Redis = require('ioredis');
 const crypto = require('node:crypto');
 const { parseIntWithBounds, nowEpochSec } = require('../../utils/oauth-security');
+const { consentKey } = require('./oauth-refresh-atomic-policy');
 
 // Every owner-approved OAuth consent has an independently unpredictable
 // generation. Reapproval can never make an old access/refresh token current.
@@ -50,7 +51,7 @@ module.exports = {
         const {canonicalAccountId,clientId,scope}=ctx.params;
         if(scope.length>8192)throw Error('OAuth consent scope invalid');
         const now = nowEpochSec();
-        const key = this.settings.keyPrefix+':'+canonicalAccountId+':'+clientId;
+        const key = consentKey(this.settings.keyPrefix,canonicalAccountId,clientId);
         const record = {
           canonicalAccountId, clientId, scope,
           grantId: crypto.randomBytes(24).toString('base64url'),
@@ -72,7 +73,7 @@ module.exports = {
       },
       async handler(ctx) {
         const {canonicalAccountId,clientId}=ctx.params;
-        const key = this.settings.keyPrefix+':'+canonicalAccountId+':'+clientId;
+        const key = consentKey(this.settings.keyPrefix,canonicalAccountId,clientId);
         const raw = await this.redis.get(key);
         if(!raw)return null;
         let record;
@@ -88,8 +89,8 @@ module.exports = {
         clientId: { type: 'string', min: 1 }
       },
       async handler(ctx) {
-        const key = this.settings.keyPrefix+':'+ctx.params.canonicalAccountId+
-          ':'+ctx.params.clientId;
+        const key = consentKey(this.settings.keyPrefix,
+          ctx.params.canonicalAccountId,ctx.params.clientId);
         // Read/modify/write on separate Redis commands could overwrite a
         // newly authorized generation. Lua makes the revocation atomic.
         const changed=await this.redis.eval(REVOKE_CURRENT,1,key,

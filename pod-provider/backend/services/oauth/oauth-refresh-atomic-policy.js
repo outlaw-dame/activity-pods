@@ -1,4 +1,5 @@
 'use strict';
+const crypto=require('node:crypto');
 
 // All mutating operations execute atomically in Redis 8.2. Key names are
 // supplied through KEYS, never arbitrary ARGV. No transaction is retried
@@ -65,7 +66,11 @@ const ROTATE_REFRESH=[
 ].join('\n');
 
 function consentKey(prefix,owner,clientId){
-  return prefix+':'+owner+':'+clientId;
+  // URL components may contain colon delimiters. Hash the exact tuple to
+  // prevent app/owner aliasing and avoid exposing WebIDs in Redis key lists.
+  return prefix+':v2:'+crypto.createHash('sha256')
+    .update('paper:oauth-consent-key:v2\0')
+    .update(JSON.stringify([owner,clientId])).digest('hex');
 }
 module.exports={
   ISSUE_REFRESH,ROTATE_REFRESH,

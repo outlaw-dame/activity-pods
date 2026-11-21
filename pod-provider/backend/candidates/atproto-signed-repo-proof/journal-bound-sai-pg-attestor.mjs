@@ -30,9 +30,13 @@ export async function createDisposableJournalBoundSaiAttestor({
    typeof readNativeSai!=='function')fail('JOURNAL_SAI_CONFIGURATION_INVALID');
  const borrow=()=>borrowFromPool(pool);
  const initial=await borrow();
+ let badInitial=false;
  try{
   await admission(initial);
- }finally{initial.release();}
+ }catch(error){
+  badInitial=true;
+  throw error;
+ }finally{initial.release(badInitial);}
  const inspect=async()=>{
   disposable();
   return verifyNativeSaiEvidence(await readNativeSai(config),config);

@@ -1,0 +1,85 @@
+name: Paper OAuth PostgreSQL recovery fence — PostgreSQL 18 + Redis 8.2
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/paper-oauth-pg-restore-fence.yml'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v1.sql'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v2-owner-consent.sql'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'
+      - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/paper-oauth-pg-restore-fence.yml'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'
+      - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-oauth-pg-restore-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oauth-pg-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+        env:
+          POSTGRES_USER: paper_probe
+          POSTGRES_PASSWORD: probe_local_only
+          POSTGRES_DB: atproto_signed_repo_proof_test
+        ports:
+          - 5549:5432
+        options: >-
+          --health-cmd "pg_isready -U paper_probe -d atproto_signed_repo_proof_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:8.2.11-alpine@sha256:da23c2478319ceb4903857d77a2fd7aa5137d9e9d4c8165dafbacedac6403e95
+        ports:
+          - 6398:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      PAPER_OAUTH_PG_RESTORE_DISPOSABLE: confirmed
+      PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
+      PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
+      PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
+    steps:
+      - name: Checkout pinned source without persistent credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check recovery fixture syntax and nonactivated status
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql
+          grep -q 'FOR SHARE OF e,s,i' pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql
+          if grep -R -n 'paper-atproto-canonical-authority-v4-oauth-generations.sql' pod-provider/backend/services; then
+            echo '::error::OAuth PG candidate must not be loaded into production services'
+            exit 1
+          fi
+      - name: Install exact locked backend dependencies without lifecycle scripts
+        run: |
+          set -euo pipefail
+          npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Prove monotonic PG revocation survives a restored Redis grant
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs

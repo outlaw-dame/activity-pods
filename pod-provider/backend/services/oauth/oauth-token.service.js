@@ -3,6 +3,7 @@ const { MoleculerError } = require('moleculer').Errors;
 const { SignJWT, importJWK, jwtVerify } = require('jose');
 const { nowEpochSec, parseIntWithBounds, parseBoolean } = require('../../utils/oauth-security');
 const CONFIG = require('../../config/config');
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 const baseUrl = process.env.SEMAPPS_HOME_URL || CONFIG.BASE_URL || '';
 const CONSENT_GRANT=/^[A-Za-z0-9_-]{32}$/u;
@@ -100,6 +101,11 @@ module.exports = {
             canonicalAccountId:payload.canonical_account_id,
             clientId:payload.client_id,scope:payload.scope,consentGrantId:grantId
           });
+          await pgEpoch.verify(ctx,{
+            canonicalAccountId:payload.canonical_account_id,
+            clientId:payload.client_id,scope:payload.scope,
+            consentGrantId:grantId,oauthPgRevision:payload.oauth_pg_revision
+          });
           return {
             active: true,
             sub: payload.sub,
@@ -107,6 +113,7 @@ module.exports = {
             client_id: payload.client_id,
             canonical_account_id: payload.canonical_account_id,
             consent_grant_id:grantId,
+            ...(pgEpoch.enabled()?{oauth_pg_revision:payload.oauth_pg_revision}:{}),
             cnf: payload.cnf,
             exp: payload.exp
           };
@@ -142,8 +149,15 @@ module.exports = {
         throw new MoleculerError('PKCE verification failed', 400, 'PKCE_VERIFICATION_FAILED');
       }
 
+      const oauthPgRevision=await pgEpoch.current(ctx,record);
+      // A code without the exact PG revision predates (or bypasses) the
+      // recovery fence. Redeeming it cannot mint a new signed credential.
+      if(oauthPgRevision!==null&&record.oauthPgRevision!==oauthPgRevision){
+        throw new MoleculerError('Authorization code epoch stale',400,'INVALID_GRANT');
+      }
       const token = await this.issueAccessToken({
         sub: record.did,
+        oauthPgRevision,
         canonicalAccountId: record.canonicalAccountId,
         clientId: record.clientId,
         scope: record.scope,
@@ -157,6 +171,7 @@ module.exports = {
         clientId: record.clientId,
         scope: record.scope,
         consentGrantId:record.consentGrantId,
+        ...(oauthPgRevision!==null?{oauthPgRevision}:{}),
         dpopJkt
       });
 
@@ -186,6 +201,7 @@ module.exports = {
 
       const token = await this.issueAccessToken({
         sub: rotated.did,
+        oauthPgRevision:rotated.oauthPgRevision,
         canonicalAccountId: rotated.canonicalAccountId,
         clientId: rotated.clientId,
         scope: rotated.scope,
@@ -205,6 +221,11 @@ module.exports = {
 
     async issueAccessToken(session, ctx) {
       await requireCurrentConsent(ctx,session);
+      const epoch=await pgEpoch.current(ctx,session);
+      if(epoch!==null&&session.oauthPgRevision!==undefined&&
+         session.oauthPgRevision!==epoch){
+        throw new MoleculerError('PostgreSQL OAuth epoch changed',400,'INVALID_GRANT');
+      }
       const { privateJwk } = await ctx.call('jwk.get');
       const privateKey = await importJWK(privateJwk, String(privateJwk.alg || 'ES256'));
       const now = nowEpochSec();
@@ -214,6 +235,7 @@ module.exports = {
         client_id: session.clientId,
         canonical_account_id: session.canonicalAccountId,
         consent_grant_id: session.consentGrantId,
+        ...(epoch!==null?{oauth_pg_revision:epoch}:{}),
         cnf: { jkt: session.dpopJkt }
       })
         .setProtectedHeader({ alg: String(privateJwk.alg || 'ES256'), typ: 'at+jwt' })

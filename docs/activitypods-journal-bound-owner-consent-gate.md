@@ -320,3 +320,62 @@ owner-bound consent, service-key rotation and standalone hosted PDS
 acceptance before enabling any production OAuth generation issuer.
 See federation tracking issue #186. Never treat a passing Redis/PG
 fixture test as a production recovery signoff.
+
+## OAuth read-side integration candidate — still NOT ACTIVATED
+
+This gate extends the prior PG18 v4 control-plane candidate with
+pod-provider/backend/sql/paper-atproto-canonical-authority-v5-oauth-current.sql.
+The new SECURITY DEFINER current-epoch function returns a revision only if
+the specified OAuth grant ID, scope digest, owner WebID, app mapping,
+managed identity, and independently attested native SAI revision agree.
+It gives only the restricted OAuth reader role EXECUTE; neither the
+issuer nor the reader can directly SELECT the authority table.
+
+pod-provider/backend/candidates/oauth-pg-epoch-reader.js tests this
+function through a real isolated PostgreSQL LOGIN with re-audited role
+membership, function EXECUTE privileges, direct-table denials and
+a server-configured exact client-ID to native SAI application mapping.
+The browser never supplies or chooses the SAI application URI.
+
+The actual oauth-code-store, oauth-token and oauth-refresh-session
+handlers now have a disposable test-only PG admission boundary in
+backend/utils/oauth-pg-epoch-policy.js:
+- Fresh authorization codes carry the PG revision; old/missing-epoch
+  codes cannot exchange for signed credentials while the candidate is on.
+- Signed access JWTs include oauth_pg_revision; introspection checks
+  the live Redis consent, exact signed epoch and fresh PG state.
+- Newly encrypted refresh-token families contain the exact epoch,
+  and issuance/rotation/introspection checks a fresh PG decision.
+  If PG is unavailable, missing, restored behind the expected
+  generation or lacks attested native SAI approval, the action fails
+  closed rather than trusting a restored Redis snapshot.
+- The existing PDS bridge calls real JWT introspection on initial
+  authorization and again before each write, so it inherits this
+  read-side fence. The PG write-time lock is not wired to the actual
+  signed-repository commit yet.
+
+These code paths are callable only when ALL of NODE_ENV=test,
+PAPER_OAUTH_PG_EPOCH_DISPOSABLE=confirmed,
+PAPER_OAUTH_PG_RESTORE_DISPOSABLE=confirmed, and
+PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE=confirmed are set. If the
+candidate flag is set outside this fixture context it rejects
+authorization; without it the existing release-closed OAuth behavior
+is unchanged. No production issuer/reader credential is provisioned.
+This is NOT an authorization to enable new production signups.
+
+The disposable PG18+Redis 8.2 CI proof now invokes the real
+authorization-code exchange, signed JWT issuance/introspection, encrypted
+refresh issue/introspection/rotation, PG reader role admission and
+Redis binary DUMP/RESTORE after an owner revocation. It separately
+tests new PG reapproval, a stale pre-revocation authorization code,
+and deletion of the native SAI grant. Existing default-mode
+OAuth/DPoP proofs still run with the candidate disabled.
+
+STILL BLOCKING RELEASE: The owner-authenticated issuer and revoker
+are not wired to a live browser coordinator, PG epoch/Redis upsert and
+native SAI consent are not yet atomically coordinated, the real PDS
+writer must acquire the PG revision lock in its commit transaction,
+and independent monotonic recovery authority across PostgreSQL PITR
+is absent. An actual multi-cell provider and signed PDS positive
+signup, restorable backup, and failover acceptance must precede
+any production activation. See federation issue #186.

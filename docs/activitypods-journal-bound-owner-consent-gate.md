@@ -415,3 +415,41 @@ owner-authenticated grant issuance and revocation coordinator, separate
 PG PITR anti-rollback witness, and hosted cross-protocol positive signup
 remain hard blockers under federation issue #186. Never widen a runtime
 credential grant to avoid a failing transaction-lock proof.
+
+## OAuth owner-session issuance — PG v7 candidate (nonactivated)
+
+The PostgreSQL 18 SQL migration
+`pod-provider/backend/sql/paper-atproto-canonical-authority-v7-session-oauth.sql`
+removes the restricted OAuth issuer/revoker roles' ability to invoke the
+old caller-supplied owner/client functions directly. Instead
+`issue_session_oauth_generation` and `revoke_session_oauth_generation`
+derive the account, WebID, managed DID, client ID, SAI app and its revision
+from the existing v3 owner-bound signup reservation / immutable HMAC
+journal. The only caller-supplied bearer is the SHA-256 digest of a
+verified, unexpired 10-minute owner enrollment token. The SQL function
+resolves that digest through the real signup operation and reservation
+and locks the canonical consent before making a generation CAS.
+
+This is deliberately scoped to the **first newly provisioned Paper
+account** and a narrow `atproto` / feed-post create scope. No legacy
+account migration, general long-lived OAuth session approval, or
+owner-selectable third-party scopes are made legal by this migration.
+The browser authentication and native SAI independent readback must
+already have succeeded. Existing post-enrollment user revocation needs
+a separate verified owner session; an expired enrollment token must
+fail closed, not silently extend authorization.
+
+The disposable journal-bound PG18 test loads v7 and verifies that
+unprivileged issuer/revoker logins cannot call raw owner-selectable
+functions, cannot cross owners or origins, cannot grant before native
+SAI attestation, cannot replay an old epoch, cannot expand scopes,
+cannot mint after session expiry, and must use a fresh epoch after
+revocation. All procedures are nonactivated and no runtime LOGIN is
+provisioned. The PG18 / Redis signed JWT test additionally checks that
+a direct access-token signing helper cannot launder an unversioned
+session into the current active epoch.
+
+The independent restore witness, full post-signup OAuth browser
+sessions/revocation, truly hosted signed PDS and cross-protocol
+positive owner signup remain open P0 gates. This candidate alone
+does NOT unlock the release.

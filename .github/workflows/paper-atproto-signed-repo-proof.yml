@@ -6,6 +6,7 @@ on:
       - '.github/workflows/paper-atproto-signed-repo-proof.yml'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/**'
       - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v6-repo-writer-oauth-lock.sql'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v7-session-oauth.sql'
   workflow_dispatch:
 
 # Never accumulate an unbounded queue of expensive PG/Jena and backend builds

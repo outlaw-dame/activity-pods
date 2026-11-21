@@ -26,11 +26,75 @@ export async function createDisposableJournalBoundSaiAttestor({
  pool,readNativeSai,config,fixtureOnly=false
 }={}){
  disposable();
- if(fixtureOnly!==true||typeof pool?.query!=='function'||
+ if(fixtureOnly!==true||typeof pool?.connect!=='function'||
    typeof readNativeSai!=='function')fail('JOURNAL_SAI_CONFIGURATION_INVALID');
+ const borrow=()=>borrowFromPool(pool);
+ const initial=await borrow();
+ try{
+  await admission(initial);
+ }finally{initial.release();}
+ const inspect=async()=>{
+  disposable();
+  return verifyNativeSaiEvidence(await readNativeSai(config),config);
+ };
+ return Object.freeze({
+  inspect,
+  async attest({reservationId,operationId}={}){
+   disposable();
+   if(!UUID.test(reservationId||'')||!UUID.test(operationId||'')){
+    fail('JOURNAL_SAI_OPERATION_INVALID');
+   }
+   const ids=Object.freeze({reservationId,operationId});
+   const client=await borrow();
+   let discard=false;
+   try{
+    await admission(client);
+    const before=await inspect();
+    await queryBool(client,'attest_bound_owner_consent',ids,before);
+    const after=await inspect();
+    if(before.grant!==after.grant||before.registration!==after.registration||
+       !crypto.timingSafeEqual(before.digest,after.digest)){
+      fail('JOURNAL_SAI_RDF_CHANGED');
+    }
+    await queryBool(client,'confirm_bound_owner_consent',ids,after);
+    return Object.freeze({attested:true,grantUri:after.grant,
+      registrationUri:after.registration,evidenceSha256:after.digest.toString('hex'),
+      status:'evidence_only',productionReady:false});
+   }catch(error){
+    discard=true;
+    if(typeof error?.code==='string'&&error.code.startsWith('JOURNAL_SAI_'))throw error;
+    if(error?.code==='SAI_ACTIVATION_EVIDENCE_INVALID' ||
+       error?.code==='SAI_ACTIVATION_NOT_RELEASED')throw error;
+    fail('JOURNAL_SAI_STORAGE_OR_READBACK_UNAVAILABLE');
+   }finally{client.release(discard);}
+  }
+ });
+}
+
+async function borrowFromPool(pool){
+ let expired=false,timer;
+ const pending=Promise.resolve().then(()=>pool.connect()).then(client=>{
+  if(expired){client?.release?.(true);fail('JOURNAL_SAI_PG_CONNECTION_UNAVAILABLE');}
+  if(!client||typeof client.query!=='function'||typeof client.release!=='function'){
+   fail('JOURNAL_SAI_PG_CONNECTION_UNAVAILABLE');
+  }
+  return client;
+ });
+ try{
+  return await Promise.race([pending,new Promise((_,reject)=>{
+   timer=setTimeout(()=>{
+    expired=true;
+    reject(Object.assign(new Error('Restricted PG lease timeout'),
+      {code:'JOURNAL_SAI_PG_CONNECTION_UNAVAILABLE'}));
+   },3500);
+  })]);
+ }finally{clearTimeout(timer);}
+}
+
+async function admission(client){
  let inspection;
  try{
-  inspection=await pool.query(
+  inspection=await client.query(
    "SELECT current_setting('server_version_num')::integer AS version,"+
    " current_user=session_user AS own_login,"+
    " r.rolcanlogin AND NOT (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR"+
@@ -67,40 +131,13 @@ export async function createDisposableJournalBoundSaiAttestor({
     v.memberships!==1||v.unsafe_memberships!==0||v.parent_memberships!==0){
    fail('JOURNAL_SAI_ATTESTOR_ROLE_UNSAFE');
  }
- const inspect=async()=>{
-  disposable();
-  return verifyNativeSaiEvidence(await readNativeSai(config),config);
- };
- async function queryBool(name,ids,proof){
-  const reply=await pool.query(
-   'SELECT paper_atproto_authority.'+name+
-    '($1::uuid,$2::uuid,$3::text,$4::text,$5::bytea) AS accepted',
-   [ids.reservationId,ids.operationId,proof.registration,proof.grant,proof.digest]);
-  if(reply.rowCount!==1||reply.rows[0]?.accepted!==true){
-   fail('JOURNAL_SAI_SCOPE_STALE_OR_REVOKED');
-  }
+}
+async function queryBool(client,name,ids,proof){
+ const reply=await client.query(
+  'SELECT paper_atproto_authority.'+name+
+   '($1::uuid,$2::uuid,$3::text,$4::text,$5::bytea) AS accepted',
+  [ids.reservationId,ids.operationId,proof.registration,proof.grant,proof.digest]);
+ if(reply.rowCount!==1||reply.rows[0]?.accepted!==true){
+  fail('JOURNAL_SAI_SCOPE_STALE_OR_REVOKED');
  }
- return Object.freeze({
-  inspect,
-  async attest({reservationId,operationId}={}){
-   disposable();
-   if(!UUID.test(reservationId||'')||!UUID.test(operationId||'')){
-    fail('JOURNAL_SAI_OPERATION_INVALID');
-   }
-   const ids=Object.freeze({reservationId,operationId});
-   const before=await inspect();
-   await queryBool('attest_bound_owner_consent',ids,before);
-   // An attestor's first HTTP read must never be trusted as a long-lived
-   // permission cache. A changed grant, rights or registration denies.
-   const after=await inspect();
-   if(before.grant!==after.grant||before.registration!==after.registration||
-     !crypto.timingSafeEqual(before.digest,after.digest)){
-    fail('JOURNAL_SAI_RDF_CHANGED');
-   }
-   await queryBool('confirm_bound_owner_consent',ids,after);
-   return Object.freeze({attested:true,grantUri:after.grant,
-     registrationUri:after.registration,evidenceSha256:after.digest.toString('hex'),
-     status:'evidence_only',productionReady:false});
-  }
- });
 }

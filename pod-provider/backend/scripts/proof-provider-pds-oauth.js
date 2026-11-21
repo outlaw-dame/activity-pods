@@ -72,19 +72,34 @@ async function main(){
    issuerJwk.alg='ES256';pubJwk.alg='ES256';
    const issuer='https://paper.example.org';
    const tokenState={settings:{issuer,audience:origin,accessTtlSec:3600}};
-   const jwkCtx={call:async name=>{
-     assert.equal(name,'jwk.get');
-     return {privateJwk:issuerJwk,publicJwk:pubJwk};
+   let activeGrantId;
+   const jwkCtx={call:async(name,args)=>{
+     if(name==='jwk.get')return {privateJwk:issuerJwk,publicJwk:pubJwk};
+     if(name==='oauth-consent.get'){
+       return oauthConsent.actions.get.handler.call(oauthState,{params:args});
+     }
+     assert.fail('Unexpected JWT authority '+name);
    }};
    const issue=async(scope=allowedScope,client=clientId,keyThumbprint=jkt,
      audienceOverride=origin,issuerOverride=issuer)=>{
      const session={
        sub:did,canonicalAccountId:webId,clientId:client,scope,
-       dpopJkt:keyThumbprint
+       consentGrantId:activeGrantId,dpopJkt:keyThumbprint
      };
-     return oauthToken.methods.issueAccessToken.call({
-       settings:{issuer:issuerOverride,audience:audienceOverride,accessTtlSec:3600}
-     },session,jwkCtx);
+     if(scope===allowedScope&&client===clientId&&
+        issuerOverride===issuer&&audienceOverride===origin){
+       return oauthToken.methods.issueAccessToken.call({
+         settings:{issuer:issuerOverride,audience:audienceOverride,accessTtlSec:3600}
+       },session,jwkCtx);
+     }
+     // Negative JWT fixtures are signed but can no longer be minted by the
+     // production issuer because their scope/client/issuer is unauthorized.
+     return new SignJWT({
+       scope,client_id:client,canonical_account_id:webId,
+       consent_grant_id:activeGrantId,cnf:{jkt:keyThumbprint}
+     }).setProtectedHeader({alg:'ES256',typ:'at+jwt'})
+       .setIssuer(issuerOverride).setAudience(audienceOverride).setSubject(did)
+       .setIssuedAt().setExpirationTime('15m').sign(issuerKey);
    };
    const introspect=token=>oauthToken.actions.introspectAccessToken.handler.call(
      tokenState,{params:{token},call:jwkCtx.call});
@@ -106,9 +121,10 @@ async function main(){
    };
    const readCanonicalGrant=async({owner,app})=>
      owner===pg.owner&&app===pg.app?{...pg}:null;
-   await oauthConsent.actions.upsert.handler.call(oauthState,{
+   const initialGrant=await oauthConsent.actions.upsert.handler.call(oauthState,{
      params:{canonicalAccountId:webId,clientId,scope:allowedScope}
    });
+   activeGrantId=initialGrant.grantId;
    let introspections=0,proofVerifications=0,grantReads=0;
    const call=async(name,args)=>{
      if(name==='oauth-token.introspectAccessToken'){
@@ -362,6 +378,20 @@ async function main(){
    await error(auth.recheck(),'PDS_OAUTH_NOT_AUTHORIZED');
    await error(candidate.authorize(params(token,await signedProof())),
      'PDS_OAUTH_NOT_AUTHORIZED');
+
+   const renewed=await oauthConsent.actions.upsert.handler.call(oauthState,{
+     params:{canonicalAccountId:webId,clientId,scope:allowedScope}
+   });
+   assert.notEqual(renewed.grantId,activeGrantId);
+   activeGrantId=renewed.grantId;
+   assert.equal((await introspect(token)).active,false,
+     'Old JWT cannot resurrect on a newly approved OAuth grant');
+   await error(candidate.authorize(params(token,await signedProof())),
+     'PDS_OAUTH_NOT_AUTHORIZED');
+   const renewedToken=await issue();
+   assert.equal((await introspect(renewedToken)).active,true);
+   assert.equal((await candidate.authorize(params(renewedToken,
+     await signedProof(renewedToken)))).consentRevision,'3');
 
    // Atomic across replicas: exactly one can consume the minted nonce.
    const sameNonce=await nonce();

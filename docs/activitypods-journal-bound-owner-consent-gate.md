@@ -135,3 +135,57 @@ for the current candidate and the two authoritative repositories only:
 `outlaw-dame/mastopod-federation-architecture` (federation/staging).
 Preserve the staging source lock until this PR is merged and its
 production-mode **negative-release** deployment check has passed.
+
+
+## OAuth / PDS credential generation hardening (PR #257 candidate)
+
+**Nonactivated security integration.** This change does not deploy a signed
+production PDS or open either new-account signup fuse. It hardens the OAuth
+credential lifecycle for existing candidate owner-consent and PDS flows.
+
+- The owner-approved OAuth consent has a random 192-bit generation
+  (\`grantId\`). The owner/client consent key is a domain-separated SHA-256
+  of the exact URL pair, not a colon-concatenated string, preventing URL
+  delimiter collisions and avoiding WebIDs in key listings.
+- Authorization codes are issued with the exact generation and atomically
+  consumed once using Redis 8.2 \`GETDEL\`. Old pre-generation codes are
+  intentionally denied. A code consumed after its owner's revoke/reapprove
+  can no longer mint tokens on the old generation.
+- Access JWTs carry \`consent_grant_id\`. Actual provider
+  \`oauth-token.introspectAccessToken\` and issuance reread the current
+  consent. Only a matching active owner/client/scope/grant is valid. Paper's
+  PDS DPoP bridge checks the same generation before and after signed writes.
+  A fresh reapproval never reactivates an old signed JWT.
+- Refresh-token issue and rotation use atomic Redis scripts to check the
+  same current generation, DPoP key, revocation marker, encrypted previous
+  record and bounded family size. Exactly one competing rotation succeeds.
+  A competing replay marks the family revoked so even the apparent winner's
+  successor is denied.
+- A refresh-family revocation writes a durable marker in O(1) instead of
+  decrypting/updating every family token. Index size is capped at 512 and
+  tokens expire under configured TTLs. Exhausting the cap requires a new
+  owner authorization, not silent pruning of live token identifiers.
+- Redis services now await connection readiness before accepting commands.
+  Offline command queuing and automatic resend of unacknowledged operations
+  are disabled. Lost command ACKs fail closed. A unique private 32-byte
+  refresh AES-GCM key is required at production service startup; the
+  historical example key is rejected.
+- Live disposable Redis 8.2 tests:
+  \`pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js\`
+  and \`proof-provider-pds-oauth.js\`, run by
+  \`.github/workflows/paper-oauth-consent-epoch-proof.yml\`.
+  Include two independent connections, code double-redeem, stale JWT and
+  code after reapproval, refresh CAS/replay/revocation, family capacity,
+  signed DPoP, nonce replay and key-configuration denials.
+
+**Important remaining risks and deployment tasks:** Redis restoration could
+roll back a revocation or grant generation without a separate durable
+PostgreSQL restore epoch. Before enabling production, implement and test a
+restore-aware token-epoch fence across PostgreSQL and Redis and prove
+replica failover/recovery, rotation-key migration, maximum TTL behavior and
+OIDC-provider (Solid-OIDC) session/grant revocation for Paper independently.
+Run positive hosted PDS signed-write, real new-account signup and independent
+security review; none is established by this disposable proof. Promotion of
+legacy unversioned credentials is prohibited: affected clients must
+reauthorize with owner consent. Record reviewed CI and source SHA before
+considering any release change.

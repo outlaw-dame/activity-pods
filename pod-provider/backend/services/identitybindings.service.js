@@ -31,8 +31,15 @@ const PREDICATES = {
   updatedAt: `${APODS}updatedAt`
 };
 
+// Only these service-built index requests use the separate disposable index.
+const localIndex = require('../candidates/local-binding-index').createLocalBindingIndex();
+function indexCall(ctx, action, params) {
+  return localIndex ? localIndex.request(action, params) : ctx.call(action, params);
+}
+
 module.exports = {
   name: 'identitybindings',
+  ...(localIndex && { started: () => localIndex.assertIsolated() }),
   mixins: [ControlledContainerMixin],
   settings: {
     path: '/identity-bindings',
@@ -493,7 +500,7 @@ module.exports = {
 
       let rows;
       try {
-        rows = await ctx.call('triplestore.query', {
+        rows = await indexCall(ctx, 'triplestore.query', {
           query: `
             PREFIX apods: <${APODS}>
             SELECT ?canonicalAccountId
@@ -588,7 +595,7 @@ module.exports = {
 
       const insertBody = `${triples.join('\n')}\n.`;
 
-      await ctx.call('triplestore.update', {
+      await indexCall(ctx, 'triplestore.update', {
         query: `
           PREFIX apods: <${APODS}>
           DELETE {
@@ -609,7 +616,7 @@ ${insertBody}
     async _removeBindingIndex(ctx, canonicalAccountId) {
       if (!canonicalAccountId) return;
       const indexUri = this._bindingIndexUri(canonicalAccountId);
-      await ctx.call('triplestore.update', {
+      await indexCall(ctx, 'triplestore.update', {
         query: `
           DELETE { <${indexUri}> ?p ?o . }
           WHERE  { <${indexUri}> ?p ?o . }
@@ -666,7 +673,7 @@ ${insertBody}
     },
 
     async _queryBindingsWithSparql(ctx, { cursor = null, limit = 101 } = {}) {
-      const results = await ctx.call('triplestore.query', {
+      const results = await indexCall(ctx, 'triplestore.query', {
         query: buildIndexPageQuery({ cursor, limit }),
         dataset: 'settings',
         webId: 'system'

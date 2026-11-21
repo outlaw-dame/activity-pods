@@ -63,7 +63,7 @@ function scope(p,{requireLeaseOwner=true}={}){
   }
   return p;
 }
-function one(rows,p){
+export function verifyProtectedBindingTerms(rows,p){
   if(!Array.isArray(rows)||rows.length!==PREDICATES.length)deny('PROTECTED_RDF_CARDINALITY_INVALID');
   const values=new Map();
   for(const row of rows){
@@ -144,7 +144,7 @@ async function boundedRead(response){
   catch{deny('PROTECTED_RDF_HTTP_INVALID');}
 }
 export function makeDisposableProtectedFusekiReader({
-  origin,password,username='fixture-attestor'
+  origin,password,username='fixture-attestor',bootstrapDid
 }={}){
   if(!enabled()||origin!=='http://127.0.0.1:3041'||
      username!=='fixture-attestor'||password!=='fixture-attestor-only'){
@@ -153,8 +153,10 @@ export function makeDisposableProtectedFusekiReader({
   // Explicit class filter prevents extra legitimate rdf:types from
   // affecting the bounded cardinality test. Missing or mismatched binding
   // class still results in one absent required row, and fails closed.
+  if(bootstrapDid!==undefined && !DID.test(bootstrapDid))deny();
+  const subject=bootstrapDid===undefined?SUBJECT:'urn:paper:bootstrap:'+bootstrapDid;
   const query='SELECT ?p ?o WHERE { VALUES ?p { '+
-    PREDICATES.map(p=>'<'+p+'>').join(' ')+' } <'+SUBJECT+
+    PREDICATES.map(p=>'<'+p+'>').join(' ')+' } <'+subject+
     '> ?p ?o . FILTER(?p != <'+RDF_TYPE+'> || ?o = <'+BINDING_TYPE+
     '>) } LIMIT 16';
   const credential='Basic '+Buffer.from(username+':'+password).toString('base64');
@@ -193,12 +195,12 @@ export async function createIndependentProtectedRdfAttestor({
       if(!enabled())deny('PROTECTED_RDF_READER_NOT_RELEASED');
       const p=scope({...payload,appUri,grantUri,consentRevision},
         {requireLeaseOwner:false});
-      return one(await readProtectedRdf(),p);
+      return verifyProtectedBindingTerms(await readProtectedRdf(),p);
     },
     async attest(payload){
       if(!enabled())deny('PROTECTED_RDF_READER_NOT_RELEASED');
       const p=scope({...payload,appUri,grantUri,consentRevision});
-      const hash=one(await readProtectedRdf(),p);
+      const hash=verifyProtectedBindingTerms(await readProtectedRdf(),p);
       const r=await pool.query(
         'SELECT paper_atproto_repo_proof.attest_protected_rdf('+
         '$1,$2,$3::uuid,$4::bigint,$5,$6,$7,$8::bigint,$9,$10,$11::bigint,$12::bytea) AS accepted',

@@ -84,12 +84,14 @@ RETURNS TABLE(operation_id uuid,app_client_id text,webid text,username text,app_
   requirements jsonb,enrollment_state text,selection jsonb,registration_uri text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
   SELECT s.operation_id,s.app_client_id,a.webid,a.username_key,s.enrollment_app_uri,s.enrollment_return_uri,
-    s.enrollment_requirements,s.enrollment_state,s.enrollment_selection,s.enrollment_registration_uri
+    s.enrollment_requirements,CASE WHEN s.state='ready' THEN 'owner_ready' ELSE s.enrollment_state END,s.enrollment_selection,s.enrollment_registration_uri
   FROM paper_account_candidate.signup_operations s
   JOIN paper_account_candidate.accounts a ON a.provider_id=s.provider_id AND a.account_id=s.account_id
   WHERE s.provider_id=p_provider AND s.enrollment_token_hash=p_token
     AND s.enrollment_origin=p_origin AND s.enrollment_expires_at>statement_timestamp()
-    AND s.state IN ('reconciliation_required','evidence_sealed') AND a.state='provisioning';
+    AND ((s.state IN ('reconciliation_required','evidence_sealed') AND a.state='provisioning')
+      OR (s.state='ready' AND a.state='ready' AND s.completion_grant_uri IS NULL
+        AND s.enrollment_state='consent_recorded' AND s.completion_account_generation=a.generation));
 $$;
 
 -- Claim BEFORE any native SAI mutation. A timeout/crash never resets this state.

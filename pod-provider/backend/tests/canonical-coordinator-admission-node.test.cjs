@@ -36,7 +36,10 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     const files = [
       ...['v1','v2-signup-ledger','v3-evidence-seal','v4-atomic-completion','v6-enrollment'].map(v => '../sql/paper-account-postgres-candidate-' + v + '.sql'),
       '../sql/paper-browser-signup-transaction.sql', '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
-      ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql')
+      ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff','pg-dataset-admin-claim'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql'),
+      '../sql/paper-provider-genesis-readback.sql', '../sql/paper-provider-genesis-projection.sql', '../sql/paper-provider-genesis-hosting.sql',
+      '../sql/paper-provider-genesis-sealer.sql', '../sql/paper-local-native-auth.sql',
+      '../sql/paper-provider-owner-activation.sql'
     ];
     for (const file of files) {
       const sql = await fs.readFile(path.join(__dirname, file), 'utf8');
@@ -203,6 +206,7 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       if (action === 'auth.account.findByWebId') {
         return { webId, username: first.input.username, signupReservationId: pendingReservation };
       }
+      if (action === 'auth-agent.registerApp') return webId+'/registration';
       assert.equal(action, 'identitybindings.getByCanonicalAccountId');
       return { webId, activityPubActorId: webId, atprotoManaged: true, repoInitialized: true,
         atSigningKeyRef: 'signing-ref', atRotationKeyRef: 'rotation-ref', repoRootCid: 'test-root', repoRev: 'test-rev',
@@ -285,6 +289,88 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       { code: '42501' });
     await assert.rejects(handoff(input));
     await assert.rejects(handoffPool.query('SELECT * FROM paper_account_candidate.accounts'), { code: '42501' });
+
+    // Complete the SQL prerequisites with fixture blocks. Separate signed-CAR
+    // verification runs against the reference PLC in the browser rehearsal.
+    const bootstrapReader = await runtime('paper_provider_genesis_reader');
+    const projector = await runtime('paper_provider_genesis_projector');
+    const attestor = await runtime('paper_provider_genesis_attestor');
+    const did = 'did:plc:' + 'a'.repeat(24);
+    const head = 'bafyre' + 'b'.repeat(53), rootCid = 'bafyre' + 'c'.repeat(53);
+    const rev = '3aaaaaaaaaaaa';
+    const bootstrapScope = [first.fence.reservationId, admitted.operationId, did];
+    const readGenesis = 'SELECT * FROM paper_account_reservation_proof.read_provider_genesis($1,$2,$3)';
+    const claimGenesis = 'SELECT * FROM paper_account_reservation_proof.claim_provider_genesis($1,$2,$3,$4)';
+    const ackGenesis = 'SELECT paper_account_reservation_proof.ack_provider_genesis($1,$2,$3,$4,$5,$6,$7) AS applied';
+    await owner.query("INSERT INTO paper_dataset_admin_proof.claims(dataset,owner_webid,reservation_id,signed_ticket_sha256,state,completed_at) VALUES ($1,$2,$3,$4,'created',now())",
+      [first.input.username,webId,bootstrapScope[0],crypto.randomBytes(32)]);
+    await owner.query('INSERT INTO paper_atproto_repo_proof.repos(account_id,did,head_cid,root_cid,rev) VALUES ($1,$2,$3,$4,$5)',[webId,did,head,rootCid,rev]);
+    await owner.query('INSERT INTO paper_atproto_repo_proof.blocks(did,cid,block) VALUES ($1,$2,$4),($1,$3,$4)',[did,head,rootCid,Buffer.from([1])]);
+    await owner.query("INSERT INTO paper_atproto_repo_proof.native_event_outbox(did,commit_cid,rev,kind) VALUES ($1,$2,$3,'at.commit.v1')",[did,head,rev]);
+    await owner.query('INSERT INTO paper_atproto_repo_proof.rdf_projection_jobs(account_id,did,head_cid,root_cid,rev) VALUES ($1,$2,$3,$4,$5)',[webId,did,head,rootCid,rev]);
+    assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,0,'unconsented bootstrap denied');
+    const consent=await enrollment.schema.actions.consent.handler({
+      meta:{ enrollmentCookie:cookies[0].split(';')[0], enrollmentOrigin:providerId },
+      params:{ csrfToken:session.csrfToken, approve:true, selected:[appClientId+'#profile'] }
+    });
+    assert.equal(consent.state,'consent_recorded');
+    assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rows[0].webid,webId);
+    assert.equal((await bootstrapReader.query(readGenesis,[crypto.randomUUID(),...bootstrapScope.slice(1)])).rowCount,0);
+    await assert.rejects(bootstrapReader.query('SELECT * FROM paper_atproto_repo_proof.blocks'),{code:'42501'});
+    const hostedScope = 'SELECT * FROM paper_account_reservation_proof.hosted_genesis_scope($1)';
+    assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,0);
+    const leaseArgs=[...bootstrapScope,head];
+    const leases=await Promise.all([projector.query(claimGenesis,leaseArgs),projector.query(claimGenesis,leaseArgs)]);
+    assert.equal(leases.reduce((count,result)=>count+result.rowCount,0),1);
+    const {lease_owner,lease_epoch}=leases.flatMap(result=>result.rows)[0];
+    const ackArgs=[...leaseArgs,lease_owner,lease_epoch,crypto.randomBytes(32)];
+    await assert.rejects(projector.query(ackGenesis,ackArgs),{code:'42501'});
+    assert.equal((await attestor.query(ackGenesis,[...leaseArgs,crypto.randomUUID(),lease_epoch,ackArgs[6]])).rows[0].applied,false);
+    assert.equal((await attestor.query(ackGenesis,ackArgs)).rows[0].applied,true);
+    assert.equal((await attestor.query(ackGenesis,ackArgs)).rows[0].applied,false);
+    assert.equal((await owner.query('SELECT count(*)::int AS n FROM paper_atproto_authority.consents')).rows[0].n,0);
+
+    const hosted = (await bootstrapReader.query(hostedScope,[did])).rows;
+    assert.equal(hosted.length, 1);
+    assert.equal(hosted[0].operation_id,admitted.operationId);
+    assert.equal(hosted[0].lease_epoch,lease_epoch);
+    assert.deepEqual(hosted[0].rdf_digest,ackArgs[6]);
+    const sealer = await runtime('paper_provider_genesis_sealer');
+    await assert.rejects(sealer.query("UPDATE paper_account_candidate.accounts SET changed_at=clock_timestamp() WHERE account_id=$1",[admitted.accountId]),{code:'42501'});
+    await assert.rejects(sealer.query("UPDATE paper_account_candidate.signup_operations SET state='ready' WHERE operation_id=$1",[admitted.operationId]),{code:'42501'});
+    const seal = "UPDATE paper_account_candidate.signup_operations SET state='evidence_sealed',generation=generation+1,evidence_digest=$2,evidence_commit_cid=$3,evidence_root_cid=$4,evidence_rev=$5,evidence_fence=$6,evidence_account_generation=2,evidence_sealed_at=clock_timestamp() WHERE operation_id=$1";
+    const sealArgs = [admitted.operationId,crypto.randomBytes(32),head,rootCid,rev,lease_epoch];
+    await assert.rejects(sealer.query(seal,[...sealArgs.slice(0,-1),Number(lease_epoch)+1]),{code:'42501'});
+    assert.equal((await sealer.query(seal,sealArgs)).rowCount,1);
+    assert.equal((await owner.query('SELECT state FROM paper_account_candidate.accounts WHERE account_id=$1',[admitted.accountId])).rows[0].state,'provisioning');
+    const activator = await runtime('paper_provider_owner_activator');
+    const native = await runtime('paper_private_auth_runtime');
+    const discover = 'SELECT * FROM paper_account_reservation_proof.provider_owner_scope($1,$2)';
+    assert.equal((await bootstrapReader.query(discover,[bootstrapScope[0],webId])).rows[0].operation_id,admitted.operationId);
+    assert.equal((await bootstrapReader.query(discover,[crypto.randomUUID(),webId])).rowCount,0);
+    const activate = 'SELECT paper_account_reservation_proof.activate_provider_owner($1,$2,$3,$4,$5,$6,$7,$8) AS ok';
+    const args = [bootstrapScope[0], admitted.operationId, webId, did, head, rootCid, rev, lease_epoch];
+    const ready = 'SELECT paper_private_auth.owner_ready($1,$2,$3) AS ok';
+    const ownerArgs = [bootstrapScope[0],webId,first.input.username];
+    assert.equal((await activator.query(activate,args)).rows[0].ok,false,'missing private owner');
+    await owner.query('INSERT INTO paper_private_auth.accounts(id,data) VALUES($1,$2)',[crypto.randomUUID(),
+      {username:first.input.username,webId,signupReservationId:bootstrapScope[0]}]);
+    assert.equal((await native.query(ready,ownerArgs)).rows[0].ok,false);
+    assert.equal((await activator.query(activate,[...args.slice(0,-1),Number(lease_epoch)+1])).rows[0].ok,false);
+    await assert.rejects(native.query(activate,args),{code:'42501'});
+    await assert.rejects(activator.query('SELECT * FROM paper_private_auth.accounts'),{code:'42501'});
+    const results=await Promise.all([activator.query(activate,args),activator.query(activate,args)]);
+    assert.ok(results.every(result=>result.rows[0].ok===true));
+    assert.equal((await native.query(ready,ownerArgs)).rows[0].ok,true);
+    assert.equal((await native.query(ready,[crypto.randomUUID(),...ownerArgs.slice(1)])).rows[0].ok,false);
+    assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,1);
+    assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,1);
+    const completed=await owner.query('SELECT state,generation FROM paper_account_candidate.accounts WHERE account_id=$1',[admitted.accountId]);
+    assert.equal(completed.rows[0].state,'ready');
+    assert.equal(Number(completed.rows[0].generation),3,'concurrent activation commits once');
+    await owner.query("UPDATE paper_atproto_repo_proof.native_event_outbox SET blocked_at=clock_timestamp() WHERE did=$1",[did]);
+    assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,0);
+    assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,0);
 
     const drift = await reserve();
     await owner.query(`GRANT SELECT(webid) ON paper_account_candidate.accounts TO ${logins[2]}`);

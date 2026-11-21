@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import urlJoin from 'url-join';
-import { useDataProvider, useLocaleState, useTranslate, useLogin, useNotify } from 'react-admin';
+import { useLocaleState, useTranslate, useLogin, useNotify } from 'react-admin';
 import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -148,10 +148,26 @@ function resolvePostLoginTarget(value) {
 
 // ─── Sign-Up form ─────────────────────────────────────────────────────────────
 
+async function finishInteraction(interactionId, token) {
+  const response = await fetch(urlJoin(CONFIG.BACKEND_URL, '.oidc/login-completed'), {
+    method: 'POST', credentials: 'include', redirect: 'error', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+    body: JSON.stringify({ interactionId }), signal: AbortSignal.timeout(10000)
+  });
+  if (!response.ok) throw new Error('Provider login could not be completed');
+  const { returnTo } = await response.json();
+  const backend = new URL(CONFIG.BACKEND_URL);
+  const resume = new URL(returnTo);
+  if (resume.origin !== backend.origin || resume.username || resume.password ||
+      !resume.pathname.startsWith(new URL('.oidc/auth/', backend).pathname)) {
+    throw new Error('Invalid provider resume URL');
+  }
+  return resume.href;
+}
+
 const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransaction }) => {
   const [locale] = useLocaleState();
   const translate = useTranslate();
-  const dataProvider = useDataProvider();
   const notify = useNotify();
   const loginHref = `/login${
     interactionId || redirectTarget
@@ -175,15 +191,6 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
   const [suggestions, setSuggestions] = useState([]);
   const abortRef = useRef(null);
 
-  const finishInteraction = useCallback(async () => {
-    if (interactionId) {
-      await dataProvider.fetch(urlJoin(CONFIG.BACKEND_URL, '.oidc/login-completed'), {
-        method: 'POST',
-        body: JSON.stringify({ interactionId }),
-        headers: new Headers({ 'Content-Type': 'application/json' })
-      });
-    }
-  }, [interactionId, dataProvider]);
 
   // ── Debounced real-time availability check ────────────────────────────────
   useEffect(() => {
@@ -311,7 +318,7 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
 
       const data = await res.json().catch(() => null);
       if (res.status === 202 && data?.state === 'awaiting_consent') {
-        window.location.assign('/login?enrollment=1');
+        window.location.assign(interactionId ? '/login?enrollment=1&resume=1' : '/login?enrollment=1');
         return;
       }
       const { token, webId } = data || {};
@@ -325,8 +332,7 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
       if (token) localStorage.setItem('token', token);
       if (webId) localStorage.setItem('webId', webId);
 
-      await finishInteraction();
-      const redirectParam = new URLSearchParams(window.location.search).get('redirect') || '/network';
+      const redirectParam = interactionId ? await finishInteraction(interactionId, token) : redirectTarget || '/network';
       window.location.href = `/initialize?redirect=${encodeURIComponent(redirectParam)}`;
     } catch (err) {
       notify('app.notification.signup_network_error', { type: 'error' });
@@ -484,7 +490,6 @@ const SignUpForm = ({ onSignup, interactionId, redirectTarget, verifiedTransacti
 const LogInForm = ({ onLogin, interactionId, redirectTarget }) => {
   const login = useLogin();
   const notify = useNotify();
-  const dataProvider = useDataProvider();
   const navigate = useNavigate();
 
   const [identifier, setIdentifier] = useState('');
@@ -516,15 +521,6 @@ const LogInForm = ({ onLogin, interactionId, redirectTarget }) => {
     ...(redirectTarget ? { redirect: redirectTarget } : {})
   }).toString()}`;
 
-  const finishInteraction = useCallback(async () => {
-    if (interactionId) {
-      await dataProvider.fetch(urlJoin(CONFIG.BACKEND_URL, '.oidc/login-completed'), {
-        method: 'POST',
-        body: JSON.stringify({ interactionId }),
-        headers: new Headers({ 'Content-Type': 'application/json' })
-      });
-    }
-  }, [interactionId, dataProvider]);
 
   const handleSubmit = async (e, options = {}) => {
     e.preventDefault();
@@ -538,11 +534,22 @@ const LogInForm = ({ onLogin, interactionId, redirectTarget }) => {
     try {
       const redirectTargetResolved = resolvePostLoginTarget(options.redirectAfterLogin || redirectTarget || '/network');
       const normalizedIdentifier = normalizeIdentifier(identifier);
+      if (interactionId) {
+        const response = await fetch(urlJoin(CONFIG.BACKEND_URL, 'auth/login'), {
+          method: 'POST', credentials: 'include', cache: 'no-store', redirect: 'error',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: normalizedIdentifier, password }), signal: AbortSignal.timeout(10000)
+        });
+        if (!response.ok) throw new Error('Provider login failed');
+        const { token } = await response.json();
+        if (typeof token !== 'string' || !token) throw new Error('Provider credential missing');
+        window.location.assign(await finishInteraction(interactionId, token));
+        return;
+      }
       await login(
         { username: normalizedIdentifier, password },
         redirectTargetResolved.mode === 'internal' ? redirectTargetResolved.url : '/network'
       );
-      await finishInteraction();
       if (redirectTargetResolved.mode === 'external') {
         window.location.href = redirectTargetResolved.url;
       } else {
@@ -567,7 +574,10 @@ const LogInForm = ({ onLogin, interactionId, redirectTarget }) => {
       localStorage.setItem('token', token);
       localStorage.setItem('webId', webId);
 
-      await finishInteraction();
+      if (interactionId) {
+        window.location.assign(await finishInteraction(interactionId, token));
+        return;
+      }
       const redirectTargetResolved = resolvePostLoginTarget(redirectTarget || '/network');
       window.location.href = redirectTargetResolved.url;
     } catch (err) {
@@ -733,7 +743,7 @@ const LoginPage = () => {
   const isSignup = searchParams.get('signup') !== null;
   const redirectTarget = searchParams.get('redirect') || '/network';
 
-  if (searchParams.get('enrollment') === '1') return <PageShell titleKey="app.titles.signup"><SignupConsent /></PageShell>;
+  if (searchParams.get('enrollment') === '1') return <PageShell titleKey="app.titles.signup"><SignupConsent resumeInteraction={searchParams.get('resume') === '1'} /></PageShell>;
 
   return isSignup ? (
     <SignUpForm verifiedTransaction={searchParams.get('verified_signup') === '1'} interactionId={interactionId} redirectTarget={redirectTarget} />

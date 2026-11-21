@@ -45,6 +45,6 @@ function createLocalSignupApp(port = 3443) {
       verifyDocument(appUri, oidcDocument, { JsonLdContext: 'https://www.w3.org/ns/solid/oidc-context.jsonld' })]);
     return { required: [...required], optional: [], revision };
   }
-  return Object.freeze({ origin, appUri, returnUri, appDocument, needDocument, oidcDocument, loadRequirements });
+  return Object.freeze({ origin, appUri, returnUri, groupUri, requiredRights: Object.freeze(required), appDocument, needDocument, oidcDocument, loadRequirements });
 }
 module.exports = { createLocalSignupApp };

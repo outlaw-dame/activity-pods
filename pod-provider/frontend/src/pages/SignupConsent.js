@@ -24,7 +24,7 @@ async function request(path, body, signal) {
   return response.json();
 }
 
-export default function SignupConsent() {
+export default function SignupConsent({ resumeInteraction = false }) {
   const [session, setSession] = useState({ state: 'loading' });
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -40,6 +40,29 @@ export default function SignupConsent() {
       });
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (session.state !== 'consent_recorded') return undefined;
+    const controller = new AbortController();
+    let timer;
+    let attempts = 0;
+    const check = async () => {
+      try {
+        const result = await request('status', {}, AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]));
+        if (controller.signal.aborted) return;
+        if (result.state !== 'consent_recorded') {
+          setSession(result);
+          return;
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+      }
+      if (++attempts < 12) timer = setTimeout(check, Math.min(1000 * 2 ** attempts, 10000));
+      else setSession({ state: 'unavailable' });
+    };
+    timer = setTimeout(check, 1000);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [session.state]);
 
   const decide = async approve => {
     if (submitted.current) return;
@@ -61,6 +84,11 @@ export default function SignupConsent() {
     }
   };
 
+  if (session.state === 'owner_ready') {
+    const href = resumeInteraction ? urlJoin(CONFIG.BACKEND_URL, '.oidc/login-completed?enrolled=1') : '/login';
+    return <Stack spacing={2}><Typography role="status">Your account is ready.</Typography>
+      <Button href={href} variant="contained">Continue to sign in</Button></Stack>;
+  }
   if (session.state !== 'awaiting_consent') {
     return <Typography role="status">{messages[session.state] || messages.unavailable}</Typography>;
   }

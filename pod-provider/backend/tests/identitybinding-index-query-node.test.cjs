@@ -18,6 +18,7 @@ function serviceModule() {
   const module = { exports: {} };
   const file = path.join(__dirname, '..', 'services', 'identitybindings.service.js');
   const imported = {
+    '../candidates/local-binding-index': { createLocalBindingIndex: () => undefined },
     'url-join': (...parts) => parts.join('/'),
     '@semapps/ldp': { ControlledContainerMixin: {} },
     '@semapps/mime-types': { MIME_TYPES: { JSON: 'application/json' } },

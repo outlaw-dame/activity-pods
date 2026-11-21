@@ -9,7 +9,17 @@ module.exports = {
   name: 'unified-account-api',
   dependencies: ['api', 'provider-capabilities', 'unified-account'],
 
+  created() {
+    if (process.env.PAPER_LOCAL_BROWSER_CONFIG !== undefined) {
+      this.localBrowserRuntime = require('../candidates/local-browser-provider-runtime')
+        .createLocalBrowserRuntime(this, process.env.PAPER_LOCAL_BROWSER_CONFIG);
+    }
+  },
+  async stopped() {
+    await this.localBrowserRuntime?.close();
+  },
   async started() {
+    await this.localBrowserRuntime?.start();
     await this.broker.call('api.addRoute', {
       route: {
         path: '/',

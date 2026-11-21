@@ -25,6 +25,32 @@ function invalid() {
   throw new MoleculerError('OAuth consent generation is no longer authorized',
     400,'INVALID_GRANT');
 }
+// A separate restore-witness is mandatory whenever this isolated candidate
+// is deliberately enabled. The second PG cluster is NOT an alternate
+// issuer or identity authority. It may only deny epochs missing its current
+// sealed, immutable receipt. A disconnected/stale witness never falls back
+// to Redis or primary PG alone.
+function witnessEnabled() {
+  const value=process.env.PAPER_OAUTH_WITNESS_DISPOSABLE;
+  if(value===undefined)return false;
+  if(value!=='confirmed'||!enabled())
+    throw new MoleculerError('Independent OAuth witness is unavailable',
+      503,'PG_OAUTH_WITNESS_NOT_RELEASED');
+  return true;
+}
+async function requireWitness(ctx,record,epoch){
+  if(!witnessEnabled())return;
+  if(!validEpoch(epoch))invalid();
+  let approved;
+  try {
+    approved=await ctx.call('oauth-witness-epoch.verify',{
+      canonicalAccountId:record.canonicalAccountId,
+      clientId:record.clientId,consentGrantId:record.consentGrantId,
+      oauthPgRevision:epoch
+    });
+  }catch{invalid();}
+  if(approved!==true)invalid();
+}
 function validEpoch(value) {
   return typeof value==='string'&&EPOCH.test(value)&&BigInt(value)<=MAX;
 }
@@ -49,6 +75,7 @@ async function current(ctx,p) {
   try { revision=await ctx.call('oauth-pg-epoch.current',record); }
   catch { invalid(); }
   if(!validEpoch(revision))invalid();
+  await requireWitness(ctx,record,revision);
   return revision;
 }
 // Each minted refresh, rotated refresh and access-token introspection must
@@ -63,6 +90,7 @@ async function verify(ctx,p) {
       {...record,oauthPgRevision:p.oauthPgRevision});
   } catch { invalid(); }
   if(granted!==true)invalid();
+  await requireWitness(ctx,record,p.oauthPgRevision);
   return true;
 }
 module.exports={ enabled,current,verify,validEpoch };

@@ -133,3 +133,44 @@ new account WebID/Solid/ActivityPub/PDS signed write and remote
 readback through the released provider stack. Record exact immutable
 source SHAs, private-role grants, host restart outcomes and recovery
 evidence before considering `release=OPEN`.
+
+## Disposable read-side integration into the actual OAuth handlers
+
+The optional, **test-only** `PAPER_OAUTH_WITNESS_DISPOSABLE=confirmed`
+gate in `oauth-pg-epoch-policy.js` requires a fresh independent
+`oauth-witness-epoch.verify` decision **in addition to** canonical
+PG consent generation and Redis state on each real authorization
+code issue/redeem, signed JWT issuance/introspection, refresh
+issuance/rotation/introspection and protected PDS OAuth admission.
+If the witness is absent, unreachable, unsealed or behind the
+current PG generation, authorization rejects; there is no cached
+positive result and no fallback to the primary account database.
+Candidate is entirely disabled in production and refuses partial
+test-only activation.
+
+`pod-provider/backend/candidates/oauth-external-witness-reader.js`
+connects to an **independently authenticated PG18 witness LOGIN**.
+It revalidates the actual reader role, denies unexpected role
+memberships and every table/issuer/revoker/attestor privilege,
+checks an exact allowlisted HTTPS OAuth client ID, hashes the grant
+ID, and executes only the current sealed witness verification
+function. The ordinary provider, Pod, Jena user, PostgreSQL account
+issuer and OAuth revoker do not receive this connection.
+
+The two-physical-PG18 + Redis8.2 CI proof now invokes the real
+`oauth-token.issueAccessToken` and actual signed-JWT
+`introspectAccessToken`, checking that witness unavailability and
+unsealed grants fail even with a valid primary PG revision and a
+previously approved Redis grant. A simulated old primary PG row
+and real Redis binary DUMP/RESTORE cannot reactivate an unexpired
+signed JWT; new owner consent must use a fresh revision and be
+independently sealed before signing succeeds.
+
+**Remaining unimplemented:** A WORM-backed witness itself must
+verify independent immutable high-water after *its own* PITR,
+and PDS signing must coordinate witness revocation with its same-PG
+commit lock so no write can linearize after an acknowledged
+external witness revocation. A separate writer/witness lock lease
+or comparably rigorous commit protocol must be verified under
+crashes, partitions and backup restore. A passing two-PG SQL test
+does not eliminate these blockers or permit production release.

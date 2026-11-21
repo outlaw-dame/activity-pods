@@ -20,9 +20,9 @@ if(process.env.NODE_ENV!=='test'||
 }
 const ns='paper:epoch-proof:'+crypto.randomBytes(10).toString('hex');
 const clients=[new Redis(url,{enableOfflineQueue:false,autoResendUnfulfilledCommands:false,
-  maxRetriesPerRequest:1,connectTimeout:2500}),
+  maxRetriesPerRequest:1,connectTimeout:2500,lazyConnect:true}),
  new Redis(url,{enableOfflineQueue:false,autoResendUnfulfilledCommands:false,
-  maxRetriesPerRequest:1,connectTimeout:2500})];
+  maxRetriesPerRequest:1,connectTimeout:2500,lazyConnect:true})];
 const [one,two]=clients;
 const webId='https://paper.example.org/owners/oauth-epoch';
 const clientId='https://client.paper.example.org/oauth';
@@ -71,7 +71,8 @@ function refused(promise,codeName){
  return assert.rejects(promise,e=>e?.type===codeName||e?.code===codeName);
 }
 async function cleanup(){
- for(const redis of clients){
+ for(const redis of [one]){
+  if(redis.status!=='ready')return;
   let cursor='0',pages=0;
   do{
    if(++pages>128)throw Error('OAuth cleanup key scan limit exceeded');
@@ -83,7 +84,13 @@ async function cleanup(){
  }
 }
 async function main(){
- await Promise.all(clients.map(c=>c.ping()));
+ // With offline queue disabled, a command before READY must fail rather
+ // than queue. Make readiness explicit; do not retry a write on reconnect.
+ await Promise.all(clients.map(async c=>{
+  await c.connect();
+  assert.equal(c.status,'ready');
+  assert.equal(await c.ping(),'PONG');
+ }));
  const info=String(await one.info('server'));
  assert.match(info,/redis_version:8\.2\./u,'Require real Redis 8.2');
  const {privateKey,publicKey}=await generateKeyPair('ES256');
@@ -223,7 +230,10 @@ async function main(){
  catch(error){process.exitCode=1;console.error(error?.stack||String(error))}
  finally{
   try{await cleanup()}catch(e){process.exitCode=1;console.error('Own-key cleanup failed',e?.message)}
-  await Promise.allSettled(clients.map(c=>c.quit()));
+  await Promise.allSettled(clients.map(async c=>{
+   if(c.status==='ready')await c.quit();
+   else c.disconnect();
+  }));
   clearTimeout(watchdog);
  }
 })();

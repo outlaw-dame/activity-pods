@@ -54,10 +54,28 @@ test('Paper checks current required SAI rights on each request', async () => {
     } finally { process.env.PAPER_LOCAL_BROWSER_CONFIG=localConfig; }
     await update('DELETE',optional);
     assert.equal(await check(),true);
-    await update('DELETE',required);
-    assert.equal(await check(),false);
-    await update('INSERT',required);
-    assert.equal(await check(),true);
+    // Every required right is independently necessary; restoring it must
+    // restore access without recreating the registration or owner session.
+    for (const right of ['CreateGroup', 'ManageMembers', 'ReadGroups']) {
+      const triple = `${grant} apods:hasSpecialRights apods:${right} .`;
+      await update('DELETE', triple);
+      assert.equal(await check(), false, `missing required right: ${right}`);
+      await update('INSERT', triple);
+      assert.equal(await check(), true, `restored required right: ${right}`);
+    }
+    // Deleting the grant's owner link or application target must deny Paper
+    // even if its registration, right triples and access-need group remain.
+    for (const triple of [
+      `${grant} i:grantedBy <${owner}> .`,
+      `${grant} i:grantee <${app.appUri}> .`,
+      `${registration} i:registeredBy <${owner}> .`,
+      `${registration} i:registeredAgent <${app.appUri}> .`
+    ]) {
+      await update('DELETE', triple);
+      assert.equal(await check(), false);
+      await update('INSERT', triple);
+      assert.equal(await check(), true);
+    }
     await update('DELETE',membership);
     assert.equal(await check(),false);
     await update('INSERT',membership);

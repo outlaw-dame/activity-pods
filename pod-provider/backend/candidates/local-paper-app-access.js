@@ -41,4 +41,29 @@ async function paperAppAccess(broker, owner, clientId, issuer) {
   } catch { return false; }
 }
 
-module.exports = { paperAppAccess };
+// oidc-provider may reuse an existing browser session without another login
+// interaction. Enforce current SAI consent at both account-claims issuance and
+// that session's existing-grant admission; neither path caches a permission.
+function installPaperOidcAdmission(config, { broker, issuer, AccessDenied }) {
+  if (!config || typeof config.findAccount !== 'function' ||
+      typeof config.loadExistingGrant !== 'function' || typeof AccessDenied !== 'function') {
+    throw new TypeError('Invalid OIDC admission integration');
+  }
+  const requireAccess = async (owner, clientId) => {
+    if (!await paperAppAccess(broker, owner, clientId, issuer)) {
+      throw new AccessDenied('The owner has not granted the required application access');
+    }
+  };
+  const findAccount = config.findAccount;
+  const loadExistingGrant = config.loadExistingGrant;
+  config.findAccount = async (ctx, owner, token) => {
+    await requireAccess(owner, ctx.oidc.client?.clientId ?? token?.clientId);
+    return findAccount(ctx, owner, token);
+  };
+  config.loadExistingGrant = async ctx => {
+    await requireAccess(ctx.oidc.session?.accountId, ctx.oidc.client?.clientId);
+    return loadExistingGrant(ctx);
+  };
+}
+
+module.exports = { paperAppAccess, installPaperOidcAdmission };

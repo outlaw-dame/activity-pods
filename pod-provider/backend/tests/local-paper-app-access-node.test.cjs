@@ -2,7 +2,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {randomBytes} = require('node:crypto');
-const {paperAppAccess} = require('../candidates/local-paper-app-access');
+const {paperAppAccess, installPaperOidcAdmission} = require('../candidates/local-paper-app-access');
 const {createLocalSignupApp} = require('../candidates/local-signup-app');
 const {localPodData} = require('../candidates/local-pod-data');
 
@@ -30,6 +30,22 @@ test('Paper checks current required SAI rights on each request', async () => {
     return request('query',params.query);
   }};
   const check = () => paperAppAccess(broker, owner, app.appUri, issuer);
+  const invoked = { account: 0, existingGrant: 0 };
+  class AccessDenied extends Error {}
+  const config = {
+    async findAccount(_ctx, subject) {
+      invoked.account++;
+      return { accountId: subject };
+    },
+    async loadExistingGrant() {
+      invoked.existingGrant++;
+      return 'retained';
+    }
+  };
+  installPaperOidcAdmission(config, { broker, issuer, AccessDenied });
+  const session = { oidc: { client: { clientId: app.appUri }, session: { accountId: owner } } };
+  const independentSession = { oidc: { client: { clientId: 'https://independent.example/client' },
+    session: { accountId: owner } } };
   const id = randomBytes(12).toString('hex');
   const uri = suffix => '<urn:test:'+id+':'+suffix+'>';
   const grant = uri('grant'), registration = uri('registration'), registry = uri('registry');
@@ -46,6 +62,8 @@ test('Paper checks current required SAI rights on each request', async () => {
   try {
     await update('INSERT', facts);
     assert.equal(await check(),true);
+    assert.equal((await config.findAccount(session,owner)).accountId,owner);
+    assert.equal(await config.loadExistingGrant(session),'retained');
     assert.equal(await paperAppAccess(broker,owner,app.appUri,'https://other.example/'),false);
     const localConfig=process.env.PAPER_LOCAL_BROWSER_CONFIG;
     try {
@@ -60,8 +78,20 @@ test('Paper checks current required SAI rights on each request', async () => {
       const triple = `${grant} apods:hasSpecialRights apods:${right} .`;
       await update('DELETE', triple);
       assert.equal(await check(), false, `missing required right: ${right}`);
+      if (right === 'ReadGroups') {
+        const before = { ...invoked };
+        await assert.rejects(config.findAccount(session,owner), AccessDenied);
+        await assert.rejects(config.loadExistingGrant(session), AccessDenied);
+        assert.deepEqual(invoked,before,'Revoked Paper must not issue claims or reuse a grant');
+        // Other applications still use the Pod owner's independent session.
+        assert.equal(await config.loadExistingGrant(independentSession),'retained');
+      }
       await update('INSERT', triple);
       assert.equal(await check(), true, `restored required right: ${right}`);
+      if (right === 'ReadGroups') {
+        assert.equal((await config.findAccount(session,owner)).accountId,owner);
+        assert.equal(await config.loadExistingGrant(session),'retained');
+      }
     }
     // Deleting the grant's owner link or application target must deny Paper
     // even if its registration, right triples and access-need group remain.

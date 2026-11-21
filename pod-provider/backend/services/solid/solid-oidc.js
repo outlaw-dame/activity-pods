@@ -10,7 +10,7 @@ const CONFIG = require('../../config/config');
 const { verifySolidDpop } = require('../../utils/solid-dpop-verifier');
 const { allowedOrigin } = require('../../config/oidc-cors-policy');
 
-const { paperAppAccess } = require('../../candidates/local-paper-app-access');
+const { paperAppAccess, installPaperOidcAdmission } = require('../../candidates/local-paper-app-access');
 
 const localSignupApp = require('../../candidates/local-signup-app').createLocalSignupApp();
 const validatedRequests = new WeakMap();
@@ -39,14 +39,12 @@ module.exports = {
 
     const config = baseConfig(this.settings, privateJwk);
 
-    const findAccount = config.findAccount;
-    // This hook also runs when exchanging an authorization or refresh token.
-    config.findAccount = async (ctx, owner, token) => {
-      if (!await paperAppAccess(this.broker, owner, ctx.oidc.client?.clientId ?? token?.clientId, this.settings.baseUrl)) {
-        throw new errors.AccessDenied('The owner has not granted the required application access');
-      }
-      return findAccount(ctx, owner, token);
-    };
+    // A remembered owner session can bypass the interactive login prompt.
+    // Check both account-claims issuance and the existing-grant path against
+    // the current native SAI registration, never against a cached grant.
+    installPaperOidcAdmission(config, {
+      broker: this.broker, issuer: this.settings.baseUrl, AccessDenied: errors.AccessDenied
+    });
 
     const redisClient = new Redis(this.settings.redisUrl, { keyPrefix: 'oidc:' });
     config.adapter = name => new RedisAdapter(name, redisClient);

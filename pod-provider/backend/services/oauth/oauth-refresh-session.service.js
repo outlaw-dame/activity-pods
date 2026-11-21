@@ -5,7 +5,7 @@ const { randomToken, nowEpochSec, parseIntWithBounds } = require('../../utils/oa
 const {
   ISSUE_REFRESH, ROTATE_REFRESH, FAMILY_MAX_TOKENS,
   REVOKE_TTL_EXTRA_SECONDS, ID, CONSENT_ID, consentKey
-} = require('./oauth-refresh-atomic-policy');
+} = require('../../utils/oauth-refresh-atomic-policy');
 
 function invalid(code='INVALID_GRANT'){
   throw new MoleculerError('Refresh token is invalid or no longer authorized',

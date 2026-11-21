@@ -10,7 +10,7 @@ const consent=require('../services/oauth/oauth-consent.service');
 const code=require('../services/oauth/oauth-code-store.service');
 const refresh=require('../services/oauth/oauth-refresh-session.service');
 const access=require('../services/oauth/oauth-token.service');
-const {FAMILY_MAX_TOKENS,consentKey}=require('../services/oauth/oauth-refresh-atomic-policy');
+const {FAMILY_MAX_TOKENS,consentKey}=require('../utils/oauth-refresh-atomic-policy');
 
 const url='redis://127.0.0.1:6398';
 if(process.env.NODE_ENV!=='test'||

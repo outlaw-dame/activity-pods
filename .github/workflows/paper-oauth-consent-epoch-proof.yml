@@ -9,7 +9,7 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-authorization.service.js'
       - 'pod-provider/backend/services/oauth/oauth-token.service.js'
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
-      - 'pod-provider/backend/services/oauth/oauth-refresh-atomic-policy.js'
+      - 'pod-provider/backend/utils/oauth-refresh-atomic-policy.js'
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
@@ -72,7 +72,21 @@ jobs:
           node --check pod-provider/backend/services/oauth/oauth-authorization.service.js
           node --check pod-provider/backend/services/oauth/oauth-token.service.js
           node --check pod-provider/backend/services/oauth/oauth-refresh-session.service.js
-          node --check pod-provider/backend/services/oauth/oauth-refresh-atomic-policy.js
+          node --check pod-provider/backend/utils/oauth-refresh-atomic-policy.js
+          # Moleculer's fabric recursively loads every .js file in
+          # services/!(utils)/**/*.js as a service schema. Helpers must
+          # not be placed under services/oauth or provider startup fails.
+          node - <<'NODE'
+          const fs=require('node:fs');
+          const dir='pod-provider/backend/services/oauth';
+          const offenders=fs.readdirSync(dir).filter(name=>
+            name.endsWith('.js') && !name.endsWith('.service.js'));
+          if(offenders.length)throw Error('OAuth helper in auto-loaded service directory');
+          const policy=require('./pod-provider/backend/utils/oauth-refresh-atomic-policy');
+          if(typeof policy.ISSUE_REFRESH!=='string'||
+             typeof policy.ROTATE_REFRESH!=='string')throw Error('OAuth Redis policy missing');
+          console.log('PASS: OAuth utilities excluded from Moleculer recursive service loader');
+          NODE
           node --check pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js
           node --check pod-provider/backend/scripts/proof-provider-pds-oauth.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs

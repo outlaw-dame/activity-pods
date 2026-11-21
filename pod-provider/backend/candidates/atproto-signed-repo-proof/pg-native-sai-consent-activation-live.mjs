@@ -164,9 +164,19 @@ async function run(){
     assert.equal(Buffer.compare(row.grant_proof_sha256,proofC.digest),0);
     // Race current revocation with a late attestor: only a blocked row can
     // survive and neither repeated activation nor stale tickets revive it.
-    const rev=await api.revoke({owner:third.owner,app:third.app,
-      grantUri:third.grant,expectedRevision:'1'});
-    assert.deepEqual(rev,{state:'blocked',revision:'2'});
+    const otherRevoker=createCanonicalAtprotoPgAuthority({pool:revoker2});
+    const revocations=await Promise.allSettled([
+      api.revoke({owner:third.owner,app:third.app,
+        grantUri:third.grant,expectedRevision:'1'}),
+      otherRevoker.revoke({owner:third.owner,app:third.app,
+        grantUri:third.grant,expectedRevision:'1'})
+    ]);
+    assert.equal(revocations.filter(x=>x.status==='fulfilled').length,1,
+      'Two independent PostgreSQL workers must have exactly one revocation winner');
+    assert.equal(revocations.filter(x=>x.status==='rejected'&&
+      x.reason?.code==='ATPROTO_PG_AUTHORITY_STALE').length,1);
+    assert.deepEqual(revocations.find(x=>x.status==='fulfilled').value,
+      {state:'blocked',revision:'2'});
     assert.equal(await invoke(attestor2,'attest',proofC),false);
     await assert.rejects(api.verifyActiveGrant({
       owner:third.owner,app:third.app,grantUri:third.grant,did:third.did,

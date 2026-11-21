@@ -95,6 +95,7 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.mjs
           node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/account-reservation-authority.mjs
@@ -205,6 +206,13 @@ jobs:
         run: |
           set -euo pipefail
           node backend/candidates/atproto-signed-repo-proof/protected-rdf-attested-live.mjs prepare
+
+      - name: Prove native owner attestor refuses contradictory RDF and unsafe SQL roles
+        env:
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node --test backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
 
       - name: Reserve a native owner SAI grant and independently read protected Jena
         env:

@@ -73,6 +73,9 @@ jobs:
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-lease-ticket-canonical-gate.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-native-sai-consent-activation-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-login.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-exact-runtime-privileges.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/pg-restricted-writer-live.test.mjs
@@ -152,6 +155,15 @@ jobs:
         run: |
           set -euo pipefail
           node pod-provider/backend/candidates/atproto-signed-repo-proof/pg-canonical-authority-live.mjs
+
+      - name: Validate native SAI evidence parser and attestor deny-by-default
+        env:
+          NODE_ENV: test
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+          ATPROTO_FUSEKI_ISOLATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node --test pod-provider/backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
 
       - name: Prove initial native-SAI consent admission and immutable PG revocation
         env:

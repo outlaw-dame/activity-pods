@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/paper-oauth-consent-epoch-proof.yml'
+      - 'pod-provider/backend/services/oauth/oauth-api.service.js'
       - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
       - 'pod-provider/backend/services/oauth/oauth-consent-challenge.service.js'
       - 'pod-provider/backend/services/oauth/oauth-par.service.js'
@@ -15,6 +16,7 @@ on:
       - 'pod-provider/backend/utils/oauth-refresh-atomic-policy.js'
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js'
+      - 'pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
   push:
@@ -24,6 +26,7 @@ on:
       - 'pod-provider/backend/services/oauth/**'
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js'
+      - 'pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
   workflow_dispatch:
@@ -72,6 +75,7 @@ jobs:
       - name: Syntax-check OAuth, replay and PDS authority
         run: |
           set -euo pipefail
+          node --check pod-provider/backend/services/oauth/oauth-api.service.js
           node --check pod-provider/backend/services/oauth/oauth-consent.service.js
           node --check pod-provider/backend/services/oauth/oauth-consent-challenge.service.js
           node --check pod-provider/backend/services/oauth/oauth-par.service.js
@@ -97,12 +101,17 @@ jobs:
           NODE
           node --check pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js
           node --check pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js
+          node --check pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js
           node --check pod-provider/backend/scripts/proof-provider-pds-oauth.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs
       - name: Install exact locked backend runtime without package scripts
         run: |
           set -euo pipefail
           npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Verify production OAuth browser session signing and malformed cookie safety
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js
       - name: Verify Redis 8.2 single-use PAR, consent challenge and DPoP nonce
         run: |
           set -euo pipefail

@@ -38,6 +38,18 @@ module.exports = {
     )
   },
 
+  created() {
+    // A predictable fallback would let an attacker forge an OAuth browser
+    // session for any WebID if the provider was started without a secret.
+    // Existing strong ACTIVITYPODS_TOKEN secrets remain compatible.
+    const secret = String(this.settings.sessionSecret || '');
+    if (process.env.NODE_ENV === 'production' &&
+        (secret === 'dev-oauth-session-secret' ||
+         Buffer.byteLength(secret, 'utf8') < 32)) {
+      throw new Error('OAuth browser sessions require a private 32-byte signing secret');
+    }
+  },
+
   async started() {
     await this.broker.call('api.addRoute', {
       route: {
@@ -565,13 +577,19 @@ module.exports = {
 
     getSession(ctx) {
       const raw = this.getCookie(ctx, this.settings.sessionCookieName);
-      if (!raw) return null;
-      const [payload, sig] = String(raw).split('.');
-      if (!payload || !sig) return null;
+      // Only the exact two-segment HMAC token format is valid. The SHA-256
+      // base64url MAC has exactly 43 ASCII characters. A malformed or
+      // wrong-length signature must be denied before timingSafeEqual (which
+      // otherwise throws for unequal buffer lengths).
+      if (typeof raw !== 'string' || raw.length > 4096) return null;
+      const segments = raw.split('.');
+      if (segments.length !== 2) return null;
+      const [payload, sig] = segments;
+      if (!payload || !/^[A-Za-z0-9_-]{43}$/u.test(sig)) return null;
       const expected = this.signSessionPayload(payload);
-      if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
-        return null;
-      }
+      if (!crypto.timingSafeEqual(
+        Buffer.from(sig, 'ascii'), Buffer.from(expected, 'ascii')
+      )) return null;
       let decoded;
       try {
         decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
@@ -670,13 +688,20 @@ module.exports = {
 
     parseCookies(ctx) {
       const cookieHeader = ctx.meta?.$headers?.cookie || ctx.meta?.$headers?.Cookie;
-      const cookies = {};
+      const cookies = Object.create(null);
       if (!cookieHeader || typeof cookieHeader !== 'string') return cookies;
       for (const part of cookieHeader.split(';')) {
         const [rawKey, ...rest] = part.split('=');
         const key = String(rawKey || '').trim();
-        if (!key) continue;
-        cookies[key] = decodeURIComponent(rest.join('=').trim());
+        if (!key || key.length > 128) continue;
+        const encoded = rest.join('=').trim();
+        if (encoded.length > 4096) continue;
+        try {
+          cookies[key] = decodeURIComponent(encoded);
+        } catch {
+          // An untrusted malformed percent escape must not turn every OAuth
+          // route into HTTP 500 or invalidate other well-formed cookies.
+        }
       }
       return cookies;
     },

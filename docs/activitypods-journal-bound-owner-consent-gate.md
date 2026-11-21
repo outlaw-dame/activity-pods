@@ -232,3 +232,32 @@ the existing OAuth refresh/DPoP acceptance independently.
 This is a nonactivated security hardening gate. It does not provide the
 outstanding PostgreSQL restore-epoch fence, protected owner SAI
 deployment, hosted PDS, or positive production signup readiness.
+
+## OAuth owner browser-session cookie hardening (2026-11-21 candidate)
+
+The login/authorization HTTP service previously accepted the fixed
+`dev-oauth-session-secret` HMAC fallback even when `NODE_ENV=production`
+if both `OAUTH_SESSION_SECRET` and `ACTIVITYPODS_TOKEN` were unset.
+This would permit forging a WebID-bearing owner browser session and is
+a **production authentication boundary**, not a cosmetic cookie concern.
+The provider now fails startup in production unless the configured
+session-signing secret is private and at least 32 UTF-8 bytes. Staging
+already provisions a unique owner-private `ACTIVITYPODS_TOKEN`.
+
+In addition, malformed attacker-controlled cookies previously could raise
+uncaught `URIError` during `decodeURIComponent` or a length exception
+during `crypto.timingSafeEqual`. The cookie parser now skips malformed
+values; the owner-session verifier requires an exactly two-part token with
+a bounded length and a 43-character SHA-256 base64url MAC before its
+constant-time comparison. The cookie parser uses a no-prototype key map.
+Invalid cookies always yield absent user authentication rather than
+unhandled exceptions or partial approvals.
+
+`pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js`
+proves a legitimate session roundtrip, malformed and oversized signatures,
+appended token segments, malformed URI percent encodings, valid sessions
+alongside unrelated invalid cookies, and missing/weak production secret
+startup denials. The pinned OAuth proof workflow runs this offline
+test plus all live Redis consent/refresh and signed PDS OAuth checks.
+This remains nonactivated; owner-consented positive production signup
+and the restore-aware PostgreSQL/OAuth generation fence remain closed.

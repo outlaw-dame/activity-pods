@@ -96,6 +96,9 @@ jobs:
           node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.mjs
           node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-attested-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/native-sai-pg-consent-attestor.test.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/pg-journal-bound-sai-live.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.mjs
+          node --check backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission.mjs
           node --check backend/candidates/atproto-signed-repo-proof/provider-storage-credential-admission-live.mjs
           node --check backend/candidates/atproto-signed-repo-proof/account-reservation-authority.mjs
@@ -152,6 +155,16 @@ jobs:
           set -euo pipefail
           npm ci --prefix backend --ignore-scripts --no-audit --no-fund
           npm ci --prefix backend/candidates/atproto-signed-repo-proof --ignore-scripts --no-audit --no-fund
+
+      - name: Prove journal-bound native SAI on actual isolated Jena and PostgreSQL 18
+        env:
+          PAPER_JOURNAL_BOUND_SAI_DISPOSABLE: confirmed
+          PAPER_JOURNAL_BOUND_SAI_JENA: confirmed
+          ATPROTO_SAI_ACTIVATION_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node --test backend/candidates/atproto-signed-repo-proof/journal-bound-sai-pg-attestor.test.mjs
+          node backend/candidates/atproto-signed-repo-proof/pg-journal-bound-sai-live.mjs
 
       - name: Verify native private account signup with an isolated login
         env:

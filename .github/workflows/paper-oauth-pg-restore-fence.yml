@@ -7,12 +7,24 @@ on:
       - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v1.sql'
       - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v2-owner-consent.sql'
       - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v5-oauth-current.sql'
+      - 'pod-provider/backend/candidates/oauth-pg-epoch-reader.js'
+      - 'pod-provider/backend/utils/oauth-pg-epoch-policy.js'
+      - 'pod-provider/backend/services/oauth/oauth-token.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
   push:
     branches: [master]
     paths:
       - '.github/workflows/paper-oauth-pg-restore-fence.yml'
       - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'
+      - 'pod-provider/backend/sql/paper-atproto-canonical-authority-v5-oauth-current.sql'
+      - 'pod-provider/backend/candidates/oauth-pg-epoch-reader.js'
+      - 'pod-provider/backend/utils/oauth-pg-epoch-policy.js'
+      - 'pod-provider/backend/services/oauth/oauth-token.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
   workflow_dispatch:
 
@@ -53,6 +65,7 @@ jobs:
     env:
       NODE_ENV: test
       PAPER_OAUTH_PG_RESTORE_DISPOSABLE: confirmed
+      PAPER_OAUTH_PG_EPOCH_DISPOSABLE: confirmed
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
@@ -69,9 +82,15 @@ jobs:
         run: |
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
+          node --check pod-provider/backend/candidates/oauth-pg-epoch-reader.js
+          node --check pod-provider/backend/utils/oauth-pg-epoch-policy.js
+          node --check pod-provider/backend/services/oauth/oauth-token.service.js
+          node --check pod-provider/backend/services/oauth/oauth-refresh-session.service.js
+          node --check pod-provider/backend/services/oauth/oauth-code-store.service.js
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql
           grep -q 'FOR SHARE OF e,s,i' pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql
-          if grep -R -n 'paper-atproto-canonical-authority-v4-oauth-generations.sql' pod-provider/backend/services; then
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-atproto-canonical-authority-v5-oauth-current.sql
+          if grep -R -nE 'paper-atproto-canonical-authority-v[45]-oauth-.*\.sql' pod-provider/backend/services; then
             echo '::error::OAuth PG candidate must not be loaded into production services'
             exit 1
           fi

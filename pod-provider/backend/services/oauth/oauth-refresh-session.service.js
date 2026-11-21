@@ -6,6 +6,7 @@ const {
   ISSUE_REFRESH, ROTATE_REFRESH, FAMILY_MAX_TOKENS,
   REVOKE_TTL_EXTRA_SECONDS, ID, CONSENT_ID, consentKey
 } = require('../../utils/oauth-refresh-atomic-policy');
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 function invalid(code='INVALID_GRANT'){
   throw new MoleculerError('Refresh token is invalid or no longer authorized',
@@ -59,13 +60,17 @@ module.exports = {
         scope: { type: 'string', min: 1 },
         consentGrantId: { type: 'string', pattern: '^[A-Za-z0-9_-]{32}$' },
         dpopJkt: { type: 'string', min: 8 },
-        familyId: { type: 'string', optional: true }
+        familyId: { type: 'string', optional: true },
+        oauthPgRevision: { type: 'string', optional: true }
       },
       async handler(ctx) {
         const p=ctx.params;
         if(!CONSENT_ID.test(p.consentGrantId||'')||
            (p.familyId!==undefined&&!ID.test(p.familyId))||
            p.scope.length>8192)invalid();
+        // No refresh family may be created from an old Redis snapshot,
+        // unversioned consent or a temporarily unavailable PG authority.
+        await pgEpoch.verify(ctx,p);
         const refreshToken=randomToken(32);
         const tokenId=randomToken(18);
         const familyId=p.familyId||randomToken(18);
@@ -75,6 +80,7 @@ module.exports = {
           canonicalAccountId:p.canonicalAccountId,
           clientId:p.clientId,scope:p.scope,
           consentGrantId:p.consentGrantId,dpopJkt:p.dpopJkt,
+          ...(pgEpoch.enabled()?{oauthPgRevision:p.oauthPgRevision}:{}),
           active:true,createdAt:now,expiresAt:now+this.settings.ttlSec
         };
         const result=await this.redis.eval(ISSUE_REFRESH,5,
@@ -117,6 +123,9 @@ module.exports = {
           invalid('REFRESH_TOKEN_REPLAY_DETECTED');
         }
         if(old.dpopJkt!==p.dpopJkt)invalid('INVALID_DPOP_PROOF');
+        // Before the destructive Redis CAS, verify the original encrypted
+        // epoch directly against primary PG. Restored refresh families fail.
+        await pgEpoch.verify(ctx,old);
         const now=nowEpochSec(),ttl=this.settings.ttlSec;
         const refreshToken=randomToken(32),newId=randomToken(18);
         const next={
@@ -124,6 +133,7 @@ module.exports = {
           canonicalAccountId:old.canonicalAccountId,
           clientId:old.clientId,scope:old.scope,
           consentGrantId:old.consentGrantId,dpopJkt:old.dpopJkt,
+          ...(pgEpoch.enabled()?{oauthPgRevision:old.oauthPgRevision}:{}),
           active:true,createdAt:now,expiresAt:now+ttl
         };
         const consumed={...old,active:false,rotatedAt:now};
@@ -149,7 +159,8 @@ module.exports = {
           tokenId:newId,familyId:old.familyId,expiresIn:ttl,
           did:old.did,canonicalAccountId:old.canonicalAccountId,
           clientId:old.clientId,scope:old.scope,
-          consentGrantId:old.consentGrantId
+          consentGrantId:old.consentGrantId,
+          ...(pgEpoch.enabled()?{oauthPgRevision:old.oauthPgRevision}:{})
         };
       }
     },
@@ -186,16 +197,21 @@ module.exports = {
         ]);
         let consent;
         try{consent=consentRaw?JSON.parse(consentRaw):null;}catch{consent=null;}
-        const active=r.active===true&&r.expiresAt>nowEpochSec()&&
+        let active=r.active===true&&r.expiresAt>nowEpochSec()&&
           blocked===0&&consent?.revoked===false&&
           consent?.grantId===r.consentGrantId&&
           consent?.canonicalAccountId===r.canonicalAccountId&&
           consent?.clientId===r.clientId&&consent?.scope===r.scope;
+        if(active&&pgEpoch.enabled()){
+          try { await pgEpoch.verify(ctx,r); }
+          catch { active=false; }
+        }
         return {
           active,tokenId:r.tokenId,familyId:r.familyId,
           did:r.did,canonicalAccountId:r.canonicalAccountId,
           clientId:r.clientId,scope:r.scope,expiresAt:r.expiresAt,
-          consentGrantId:r.consentGrantId
+          consentGrantId:r.consentGrantId,
+          ...(pgEpoch.enabled()?{oauthPgRevision:r.oauthPgRevision}:{})
         };
       }
     }

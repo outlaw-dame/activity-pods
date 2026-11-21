@@ -1,6 +1,7 @@
 const Redis = require('ioredis');
 const { MoleculerError } = require('moleculer').Errors;
 const { randomToken, nowEpochSec, parseIntWithBounds } = require('../../utils/oauth-security');
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 module.exports = {
   name: 'oauth-code-store',
@@ -47,6 +48,9 @@ module.exports = {
         state: { type: 'string', optional: true }
       },
       async handler(ctx) {
+        // The actual coordinator must first have admitted the owner-approved
+        // PG generation. A pre-fence code cannot be promoted on redemption.
+        const oauthPgRevision=await pgEpoch.current(ctx,ctx.params);
         const code = randomToken(24);
         const now = nowEpochSec();
         const record = {
@@ -56,6 +60,7 @@ module.exports = {
           did: ctx.params.did,
           scope: ctx.params.scope,
           consentGrantId: ctx.params.consentGrantId,
+          ...(oauthPgRevision!==null?{oauthPgRevision}:{}),
           dpopJkt: ctx.params.dpopJkt,
           codeChallenge: ctx.params.codeChallenge,
           codeChallengeMethod: ctx.params.codeChallengeMethod,
@@ -64,7 +69,8 @@ module.exports = {
           expiresAt: now + this.settings.codeTtlSec
         };
 
-        await this.redis.set(`${this.settings.keyPrefix}:${code}`, JSON.stringify(record), 'EX', this.settings.codeTtlSec);
+        const saved=await this.redis.set(`${this.settings.keyPrefix}:${code}`, JSON.stringify(record), 'EX', this.settings.codeTtlSec);
+        if(saved!=='OK')throw new MoleculerError('Authorization code persistence unavailable',503,'OAUTH_CODE_UNAVAILABLE');
         return { code, expiresIn: this.settings.codeTtlSec };
       }
     },
@@ -89,7 +95,8 @@ module.exports = {
             400,used===1?'AUTHORIZATION_CODE_ALREADY_USED':'INVALID_AUTHORIZATION_CODE'
           );
         }
-        await this.redis.set(usedKey,'1','EX',this.settings.codeTtlSec);
+        const marker=await this.redis.set(usedKey,'1','EX',this.settings.codeTtlSec);
+        if(marker!=='OK')throw new MoleculerError('Code consumption confirmation unavailable',503,'OAUTH_CODE_UNAVAILABLE');
         let record;
         try{record=JSON.parse(payload);}catch{
           throw new MoleculerError('Invalid authorization code',400,'INVALID_AUTHORIZATION_CODE');

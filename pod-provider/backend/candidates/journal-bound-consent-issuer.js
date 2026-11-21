@@ -71,7 +71,6 @@ function createDisposableJournalBoundConsentIssuer({
     }
     return true;
   }
-  let admitted;
   return Object.freeze({
     async reserve({ providerId: provider, origin, tokenHash } = {}) {
       gate();

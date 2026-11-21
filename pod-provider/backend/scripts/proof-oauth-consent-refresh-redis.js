@@ -101,6 +101,7 @@ async function main(){
   {settings:jwtConfig},{params:{token},call:issuerCtx.call}
  );
  const old=await grant();
+ console.log('PHASE: owner consent written');
  assert.match(old.grantId,/^[A-Za-z0-9_-]{32}$/u);
  const oldJwt=await jwt(old.grantId);
  assert.equal((await verify(oldJwt)).consent_grant_id,old.grantId);
@@ -115,6 +116,7 @@ async function main(){
  const issued=await code.actions.issueCode.handler.call(
   {redis:one,settings:codeSettings},{params:codeParams}
  );
+ console.log('PHASE: competing authorization-code redemption');
  const redeemed=await Promise.allSettled([one,two].map(redis=>
   code.actions.consumeCode.handler.call({redis,settings:codeSettings},{
    params:{code:issued.code}
@@ -134,15 +136,18 @@ async function main(){
  await refused(jwt(old.grantId),'INVALID_GRANT');
  const freshJwt=await jwt(fresh.grantId);
  assert.equal((await verify(freshJwt)).active,true);
+ console.log('PHASE: revoke/reapprove access JWT epoch passed');
 
  const first=await issue(fresh);
  assert.equal((await introspect(w1,first.refreshToken)).active,true);
+ console.log('PHASE: initial refresh rotation');
  const next=await rotate(w1,first.refreshToken);
  assert.equal((await introspect(w1,first.refreshToken)).active,false);
  assert.equal((await introspect(w2,next.refreshToken)).active,true);
 
  // Two independent provider cells racing on one successor MUST NOT
  // return two valid descendants. Replay atomically poisons its family.
+ console.log('PHASE: competing refresh CAS');
  const races=await Promise.allSettled([
   rotate(w1,next.refreshToken),rotate(w2,next.refreshToken)
  ]);
@@ -167,6 +172,7 @@ async function main(){
 
  // A revoked owner grant blocks even a fresh family before encryption or
  // refresh lookup is stored. Reapproving changes generation permanently.
+ console.log('PHASE: family revoke and reapproval');
  const existing=await issue(fresh);
  await revoke();
  assert.equal((await introspect(w1,existing.refreshToken)).active,false);
@@ -189,6 +195,7 @@ async function main(){
   dpopJkt,familyId:cappedFamily
  }}),'REFRESH_FAMILY_LIMIT');
 
+ console.log('PHASE: family cap/refresh replay passed');
  // Production may never start with the historical public example key.
  const oldEnv=process.env.NODE_ENV;
  try{
@@ -201,10 +208,16 @@ async function main(){
  console.log('PASS: Redis 8.2 atomic auth-code consumption, consent epochs, JWT revoke/regrant, two-worker refresh CAS/replay, family revocation and bounded index');
 }
 (async()=>{
- let problem;
- try{await main()}catch(error){problem=error;process.exitCode=1;console.error(error?.stack||String(error))}
+ // A logic regression must not consume a whole hosted runner indefinitely.
+ const watchdog=setTimeout(()=>{
+  console.error('FAIL: bounded OAuth Redis acceptance watchdog expired');
+  process.exit(1);
+ },90000);
+ try{await main()}
+ catch(error){process.exitCode=1;console.error(error?.stack||String(error))}
  finally{
   try{await cleanup()}catch(e){process.exitCode=1;console.error('Own-key cleanup failed',e?.message)}
   await Promise.allSettled(clients.map(c=>c.quit()));
+  clearTimeout(watchdog);
  }
 })();

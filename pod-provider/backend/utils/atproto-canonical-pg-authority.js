@@ -57,7 +57,7 @@ function createCanonicalAtprotoPgAuthority({pool}={}) {
       if(r.rowCount===0)return null;
       if(r.rowCount!==1 || r.rows[0].owner_webid!==owner ||
         r.rows[0].app_uri!==app || r.rows[0].identity_state!=='active' ||
-        !['active','blocked'].includes(r.rows[0].state)) {
+        !['pending','active','blocked'].includes(r.rows[0].state)) {
         refused('ATPROTO_PG_AUTHORITY_AMBIGUOUS');
       }
       canonicalHttps(r.rows[0].grant_uri);revision(r.rows[0].revision);

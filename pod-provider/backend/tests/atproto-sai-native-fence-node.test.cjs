@@ -171,6 +171,48 @@ test('canonical PG revocation is monotonic and makes no privileged Jena write', 
   env(false);
 });
 
+test('pending canonical consent permits owner initial POST but irrevocably fences DELETE', async () => {
+  env(true);
+  process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = 'true';
+  let state = 'pending', revision = '1', revokeCalls = 0;
+  const placeholder = owner + '/.private/pending-consent/6a45c54c-5b3f-4f42-8fd8-1e4e68a7d21d';
+  getPgAuthority = async () => ({
+    async getIdentity() { return { owner, state: 'active' }; },
+    async getConsent() { return { owner, app, grantUri: placeholder, state, revision }; },
+    async revoke({ owner: who, app: client, grantUri: pointer, expectedRevision }) {
+      assert.equal(who, owner); assert.equal(client, app);
+      assert.equal(pointer, placeholder); assert.equal(expectedRevision, '1');
+      revokeCalls++; state = 'blocked'; revision = '2';
+      return { state, revision };
+    }
+  });
+  const { ctx, calls } = setup();
+  const first = await native.beforeSaiMutation(ctx, 'access-grants', resource, 'post');
+  assert.equal(first.checked, true); assert.equal(first.pending, true);
+  assert.equal(revokeCalls, 0);
+  assert.equal(calls.some(c => c.name === 'triplestore.update'), false);
+  const denied = await native.beforeSaiMutation(ctx, 'access-grants', resource, 'delete');
+  assert.equal(denied.blocked, true); assert.equal(revokeCalls, 1);
+  assert.equal((await native.beforeSaiMutation(ctx, 'access-grants', resource, 'post')).blocked, true);
+  assert.equal(revokeCalls, 1, 'a blocked grant must not be activated by a later POST');
+  env(false);
+});
+
+test('pending consent cannot be created using an impersonated app session', async () => {
+  env(true);
+  process.env.APODS_ATPROTO_CANONICAL_PG_AUTHORITY_ENABLED = 'true';
+  getPgAuthority = async () => ({
+    getIdentity: async () => ({ owner, state: 'active' }),
+    getConsent: async () => ({ owner, app, grantUri: grant, state: 'pending', revision: '1' })
+  });
+  const { ctx, calls } = setup();
+  ctx.meta.webId = app; ctx.meta.impersonatedUser = owner;
+  await assert.rejects(native.beforeSaiMutation(ctx, 'access-grants', resource, 'post'),
+    e => e.type === 'ATPROTO_SAI_OWNER_REQUIRED');
+  assert.equal(calls.length, 0);
+  env(false);
+});
+
 test('feature-disabled SAI traffic adds no Moleculer or Jena calls', async () => {
   env(false);
   const { ctx, calls } = setup();

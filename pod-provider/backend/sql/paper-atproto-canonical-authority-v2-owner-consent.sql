@@ -50,7 +50,7 @@ CREATE FUNCTION paper_atproto_authority.begin_owner_consent(
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
 SET search_path=pg_catalog,pg_temp
 AS $function$
-DECLARE new_row boolean;
+DECLARE new_row integer;
 BEGIN
   IF p_owner IS NULL OR p_did IS NULL OR p_app IS NULL OR
       p_operation IS NULL OR p_request_sha256 IS NULL OR
@@ -71,7 +71,7 @@ BEGIN
     AND i.managed=true
   ON CONFLICT (owner_webid,app_uri) DO NOTHING;
   GET DIAGNOSTICS new_row=ROW_COUNT;
-  IF new_row THEN RETURN true; END IF;
+  IF new_row=1 THEN RETURN true; END IF;
   -- Lost acknowledgement is idempotent *only for the identical* in-flight
   -- operation and digest. A blocked/active row can never be opened by replay.
   RETURN EXISTS (SELECT 1 FROM paper_atproto_authority.consents AS c

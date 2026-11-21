@@ -202,15 +202,24 @@ async function beforeSaiMutation(ctx, kind, resource, operation) {
     if ((state.state || state.status) === 'blocked') {
       return { checked: true, blocked: true };
     }
+    // An authenticated owner may create the INITIAL native SAI resource
+    // while a separately credentialed PostgreSQL coordinator has reserved
+    // the pending operation. Pending never grants repository signing.
+    // Revocation/deletion while pending still advances the PG epoch.
+    const pending = canonicalMode && state.state === 'pending';
+    if (pending && operation === 'post') return { checked: true, pending: true };
 
     // Only the approved application's existing access grant is a valid
     // consent pointer. Do not trust the mutation's submitted grant URI.
     const grantContainer = await call('access-grants.getContainerUri', { webId: owner });
     safeIri(grantContainer, { httpsOnly: true });
-    if (!grantUri.startsWith(grantContainer.endsWith('/') ? grantContainer : grantContainer + '/') ||
-        !grantUri.startsWith(new URL(owner).origin + '/')) {
+    if (!pending && (!grantUri.startsWith(grantContainer.endsWith('/') ? grantContainer : grantContainer + '/') ||
+        !grantUri.startsWith(new URL(owner).origin + '/'))) {
       deny('ATPROTO_SAI_FENCE_GRANT_INVALID');
     }
+    // A pending row has a provider-created NON-RESOURCE placeholder. The
+    // independent native-SAI attestor must replace it with an actual grant
+    // before repository consent can be active.
     safeEpoch(state.revision);
     if (BigInt(state.revision) === 9223372036854775807n) {
       deny('ATPROTO_SAI_FENCE_EPOCH_EXHAUSTED');

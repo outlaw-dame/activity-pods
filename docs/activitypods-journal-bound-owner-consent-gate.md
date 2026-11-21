@@ -261,3 +261,60 @@ startup denials. The pinned OAuth proof workflow runs this offline
 test plus all live Redis consent/refresh and signed PDS OAuth checks.
 This remains nonactivated; owner-consented positive production signup
 and the restore-aware PostgreSQL/OAuth generation fence remain closed.
+
+## PostgreSQL OAuth restore fence — candidate gate (November 21, 2026)
+
+**Not activated; production signup remains CLOSED.** The existing OAuth
+generation/refresh/DPoP guards are Redis-backed. Restoring a pre-revocation
+Redis snapshot can restore a credential already rejected before recovery.
+The separate canonical native-SAI PostgreSQL consent authority can stop
+this class of resurrection, but the OAuth grant ID must be bound to PG.
+
+- `pod-provider/backend/sql/paper-atproto-canonical-authority-v4-oauth-generations.sql`
+  defines the smallest necessary OAuth credential-generation projection
+  **inside the existing canonical `paper_atproto_authority` schema**,
+  keyed by owner WebID and OAuth client. It does not create a new account,
+  DID, Pod, or identity authority. It references the canonical owner/app
+  SAI grant, accepts only a previously independently attested native
+  consent, and ties every credential generation to the current SAI
+  revision and scope digest. Generation IDs are unique and never
+  reissued at the same revision.
+- Separate NOLOGIN issuer, revoker, reader and signer roles have only
+  function EXECUTE. The new table is inaccessible to the provider,
+  ordinary Jena/SPARQL users, or the unauthenticated public. No runtime
+  LOGIN is provisioned by this candidate.
+- SQL `issue_oauth_generation` performs a revision CAS and locks native
+  SAI consent; `revoke_oauth_generation` permanently bumps the epoch
+  via CAS; `verify_oauth_generation` rejects any stale Redis generation,
+  mismatched scope, revoked native consent, or blocked local identity.
+  The `lock_oauth_generation_for_write` predicate must execute in
+  the **same PostgreSQL transaction** as a signed PDS repository write;
+  row locks serialize an acknowledged OAuth/native revocation against
+  already-admitted writes. A separate preflight SELECT is insufficient.
+- `pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs`
+  and `.github/workflows/paper-oauth-pg-restore-fence.yml` exercise
+  disposable PostgreSQL 18 + Redis 8.2, two competing issuers, two
+  revokers, least-privilege SQL roles, signed-write lock contention,
+  an intentionally restored pre-revocation Redis grant and native
+  SAI revocation. Existing v1/v2 activation is a synthetic fixture;
+  the genuine v3 session journal and protected Jena attestation remain
+  independently enforced elsewhere.
+
+**Unresolved, do not activate:** OAuth authorization currently writes
+Redis generations without a trusted owner-journal-bound PG issuance call;
+JWT/refresh tokens do not yet carry the PG epoch, and the PDS writer is
+not wired to the transaction-local signer predicate. Neither endpoint
+must be treated as protected by this candidate until all are updated
+together and rechecked against real primary PG on every signing path.
+No reader replica with possible stale grants may authorize writes.
+
+**PostgreSQL PITR rollback:** An independent non-rewindable recovery
+witness/high-water outside both backed-up PG and Redis is mandatory.
+A PG backup restored from before revocation can otherwise resurrect
+both PG and Redis state. This proof only demonstrates that PG surviving
+a **Redis-only** rollback remains authoritative. Require operator recovery
+with an externally monotonic witness, restore/failover integration, exact
+owner-bound consent, service-key rotation and standalone hosted PDS
+acceptance before enabling any production OAuth generation issuer.
+See federation tracking issue #186. Never treat a passing Redis/PG
+fixture test as a production recovery signoff.

@@ -7,6 +7,8 @@ import crypto from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {Client} from 'pg';
 import {createRequire} from 'node:module';
+import {createDisposableNativeSaiReader} from './native-sai-pg-consent-attestor.mjs';
+import {createDisposableJournalBoundSaiAttestor} from './journal-bound-sai-pg-attestor.mjs';
 const require=createRequire(import.meta.url);
 const {createCanonicalAtprotoPgAuthority}=require('../../utils/atproto-canonical-pg-authority.js');
 const DSN='postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test';
@@ -15,6 +17,15 @@ if(process.env.NODE_ENV!=='test'||
  process.env.ATPROTO_REPO_PROOF_DISPOSABLE!=='confirmed'||
  process.env.ATPROTO_REPO_PROOF_DSN!==DSN)throw Error('Test-only PG18 journal authority');
 const root=new URL('../../sql/',import.meta.url),here=new URL('./',import.meta.url);
+const realJena=process.env.PAPER_JOURNAL_BOUND_SAI_JENA==='confirmed';
+const JENA='http://127.0.0.1:3041';
+if((process.env.PAPER_JOURNAL_BOUND_SAI_JENA &&
+    process.env.PAPER_JOURNAL_BOUND_SAI_JENA!=='confirmed')||
+   (realJena&&(process.env.ATPROTO_SAI_ACTIVATION_DISPOSABLE!=='confirmed'||
+     process.env.ATPROTO_FUSEKI_ISOLATION_DISPOSABLE!=='confirmed'||
+     process.env.FUSEKI_ISOLATION_URL!==JENA))){
+ throw Error('Journal-bound Jena requires exact isolated disposable authority');
+}
 const scripts=[
  new URL('paper-account-postgres-candidate-v1.sql',root),
  new URL('paper-account-postgres-candidate-v2-signup-ledger.sql',root),
@@ -61,7 +72,39 @@ const a=(name,letter)=>({
  grant:base+'/'+name+'/data/access-grants/native'
 });
 const owner=a('paperjournal01','k'),incomplete=a('paperjournal02','l'),pending=a('paperjournal03','m');
-const digest=sha('native-jena-typed-rights:confirmed');
+let digest=sha('native-jena-typed-rights:confirmed');
+const INTEROP='http://www.w3.org/ns/solid/interop#';
+const APODS='http://activitypods.org/ns/core#';
+const iri=x=>'<'+x+'>';
+const nativeRights=rights.map(x=>APODS+x.slice('apods:'.length));
+const needGroup='https://app-e2e.test:3443/access-need';
+function nativeGraph(actor){
+ const registry=actor.owner+'/data/agent-registry';
+ const set=actor.owner+'/data/registry-set';
+ return [
+   iri(actor.owner)+' '+iri(INTEROP+'hasRegistrySet')+' '+iri(set)+' .',
+   iri(set)+' '+iri(INTEROP+'hasAgentRegistry')+' '+iri(registry)+' .',
+   iri(registry)+' '+iri(INTEROP+'hasApplicationRegistration')+' '+iri(actor.registration)+' .',
+   iri(actor.registration)+' a '+iri(INTEROP+'ApplicationRegistration')+' ;',
+   ' '+iri(INTEROP+'registeredBy')+' '+iri(actor.owner)+' ;',
+   ' '+iri(INTEROP+'registeredAgent')+' '+iri(app)+' ;',
+   ' '+iri(INTEROP+'hasAccessGrant')+' '+iri(actor.grant)+' .',
+   iri(actor.grant)+' a '+iri(INTEROP+'AccessGrant')+' ;',
+   ' '+iri(INTEROP+'grantedBy')+' '+iri(actor.owner)+' ;',
+   ' '+iri(INTEROP+'grantee')+' '+iri(app)+' ;',
+   ' '+iri(INTEROP+'hasAccessNeedGroup')+' '+iri(needGroup)+' ;',
+   ' '+iri(APODS+'hasSpecialRights')+' '+nativeRights.map(iri).join(', ')+' .'
+ ].join('\n');
+}
+async function projectJena(update){
+ const res=await fetch(JENA+'/protected-proof/update',{
+  method:'POST',redirect:'error',signal:AbortSignal.timeout(7000),
+  headers:{authorization:'Basic '+Buffer.from(
+   'fixture-projector:fixture-projector-only').toString('base64'),
+   'content-type':'application/sparql-update'},body:update});
+ if(![200,204].includes(res.status))throw Error('Protected native Jena UPDATE rejected');
+ await res.body?.cancel().catch(()=>{});
+}
 const failDigest=sha('native-jena-drifted');
 async function login(kind){
  const url=new URL(DSN);url.username=names[kind];url.password=passwords[kind];
@@ -133,7 +176,7 @@ async function state(actor){
   'FROM paper_atproto_authority.consents WHERE owner_webid=$1',[actor.owner]);
  return r.rows[0]||null;
 }
-let created=false,originalError;
+let created=false,originalError,jenaWritten=false;
 await admin.connect();
 try{
  for(const schema of schemas){
@@ -200,8 +243,31 @@ try{
  assert.equal(await attest(attestor,owner),false,'Consent selection drift invalidates receipt');
  await admin.query('UPDATE paper_account_candidate.signup_operations SET enrollment_selection=$1 WHERE operation_id=$2',
   [JSON.stringify(initialChoice),owner.operation]);
- assert.deepEqual(await Promise.all([attest(attestor,owner),attest(attestor2,owner)]),
-  [true,true],'Two independent PG attestors recover identical evidence');
+ if(realJena){
+  await projectJena('INSERT DATA { '+nativeGraph(owner)+' }');
+  jenaWritten=true;
+  const read=createDisposableNativeSaiReader({
+   origin:JENA,username:'fixture-attestor',
+   password:'fixture-attestor-only',fixtureOnly:true
+  });
+  const trusted=await createDisposableJournalBoundSaiAttestor({
+   pool:attestor,readNativeSai:read,fixtureOnly:true,
+   config:{owner:owner.owner,app,needGroup,requiredRights:nativeRights}
+  });
+  const independentlyRead=await trusted.inspect();
+  assert.equal(independentlyRead.registration,owner.registration);
+  assert.equal(independentlyRead.grant,owner.grant);
+  digest=independentlyRead.digest;
+  const admitted=await trusted.attest({
+   reservationId:owner.reservation,operationId:owner.operation
+  });
+  assert.equal(admitted.status,'evidence_only');
+  assert.equal(admitted.evidenceSha256,digest.toString('hex'));
+  assert.equal(await attest(attestor2,owner),true,'Attestor retry after exact native Jena readback');
+ }else{
+  assert.deepEqual(await Promise.all([attest(attestor,owner),attest(attestor2,owner)]),
+   [true,true],'Two independent PG attestors recover identical evidence');
+ }
  assert.equal(await confirm(attestor,owner),true);
  assert.equal(await confirm(attestor,owner,owner.registration,owner.grant,failDigest),false);
  assert.equal(await api.verifyActiveGrant({
@@ -233,6 +299,10 @@ try{
 }catch(e){originalError=e;throw e;}
 finally{
  const failures=[];
+ if(jenaWritten){
+  try{await projectJena('DELETE DATA { '+nativeGraph(owner)+' }');}
+  catch(e){failures.push(e)}
+ }
  for(const c of clients.reverse())try{await c.end()}catch(e){failures.push(e)}
  if(created){
   for(const schema of schemas)try{await admin.query('DROP SCHEMA IF EXISTS '+schema+' CASCADE')}catch(e){failures.push(e)}

@@ -149,7 +149,7 @@ async function main(){
   const priorRedis=JSON.stringify({canonicalAccountId:owner,clientId,scope,
     grantId:initial,revoked:false});
   await redis.set(redisKey,priorRedis,'EX',120);
-  const priorSnapshot=await redis.dump(redisKey);
+  const priorSnapshot=await redis.dumpBuffer(redisKey);
   assert.ok(Buffer.isBuffer(priorSnapshot)&&priorSnapshot.length>0,
     'Require actual Redis DUMP backup bytes, not a manually forged fixture');
 

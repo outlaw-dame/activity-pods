@@ -74,6 +74,7 @@ const a=(name,letter)=>({
  grant:base+'/'+name+'/data/access-grants/native'
 });
 const owner=a('paperjournal01','k'),incomplete=a('paperjournal02','l'),pending=a('paperjournal03','m');
+const overbroad=a('paperjournal04','n'),wrongKind=a('paperjournal05','p');
 let digest=sha('native-jena-typed-rights:confirmed');
 const INTEROP='http://www.w3.org/ns/solid/interop#';
 const APODS='http://activitypods.org/ns/core#';
@@ -215,6 +216,19 @@ try{
  await denied(attestor,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
   [owner.reservation,owner.operation]);
  await seed(owner);await seed(incomplete,rights.slice(0,2));await seed(pending);
+ await seed(overbroad,[...rights,'apods:UpdateWebId']);
+ await seed(wrongKind);
+ await admin.query('UPDATE paper_account_candidate.signup_operations '+
+  'SET enrollment_selection=$1 WHERE operation_id=$2',[
+   JSON.stringify({acceptedSpecialRights:rights,
+    acceptedAccessNeeds:['apods:CreateGroup']}),wrongKind.operation
+  ]);
+ assert.equal(await begin(issuer,overbroad),false,
+  'Unadvertised native special rights must never issue pending authority');
+ assert.equal(await begin(issuer,wrongKind),false,
+  'Native group rights cannot be smuggled into acceptedAccessNeeds');
+ assert.equal(await state(overbroad),null);
+ assert.equal(await state(wrongKind),null);
  // The actual issuer borrows a PG session for both role audit and CAS;
  // a shared pg.Client cannot satisfy its lease/release discipline.
  const issuerDsn=new URL(DSN);

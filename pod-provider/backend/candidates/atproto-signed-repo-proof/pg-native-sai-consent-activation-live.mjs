@@ -102,6 +102,10 @@ async function run(){
       [begin.owner,begin.did,begin.app,begin.operation,begin.digest]);
     await denied(issuer,'SELECT '+schema+'.attest_owner_consent($1,$2,$3,$4::uuid,$5,$6::bytea)',
       [attest.owner,attest.did,attest.app,attest.operation,attest.grant,attest.digest]);
+    await denied(ordinary,'SELECT '+schema+'.confirm_owner_consent($1,$2,$3,$4::uuid,$5,$6::bytea)',
+      [attest.owner,attest.did,attest.app,attest.operation,attest.grant,attest.digest]);
+    await denied(issuer,'SELECT '+schema+'.confirm_owner_consent($1,$2,$3,$4::uuid,$5,$6::bytea)',
+      [attest.owner,attest.did,attest.app,attest.operation,attest.grant,attest.digest]);
     for(const owner of owners)await seed(owner);
     const api=createCanonicalAtprotoPgAuthority({pool:revoker});
     // Admission is irreversible, bounded to a single owner operation.
@@ -118,6 +122,9 @@ async function run(){
       grant:'https://other.example/foreign'}),false);
     assert.equal(await invoke(attestor,'attest',{...attest,operation:crypto.randomUUID()}),false);
     assert.equal(await invoke(attestor,'attest',attest),true);
+    assert.equal((await attestor.query('SELECT '+schema+'.confirm_owner_consent('+
+      '$1,$2,$3,$4::uuid,$5,$6::bytea) AS accepted',
+      [attest.owner,attest.did,attest.app,attest.operation,attest.grant,attest.digest])).rows[0].accepted,true);
     assert.equal(await invoke(attestor2,'attest',attest),true,'Lost attest ACK is idempotent');
     assert.equal(await invoke(attestor,'attest',{...attest,digest:sha('stale RDF')}),false);
     assert.equal(await api.verifyActiveGrant({
@@ -125,6 +132,10 @@ async function run(){
       consentRevision:'1'}),true);
     assert.deepEqual(await api.revoke({owner:first.owner,app:first.app,
       grantUri:first.grant,expectedRevision:'1'}),{state:'blocked',revision:'2'});
+    assert.equal((await attestor.query('SELECT '+schema+'.confirm_owner_consent('+
+      '$1,$2,$3,$4::uuid,$5,$6::bytea) AS accepted',
+      [attest.owner,attest.did,attest.app,attest.operation,attest.grant,attest.digest])).rows[0].accepted,false,
+      'Revocation acknowledged before confirmation must fail closed');
     assert.equal(await invoke(attestor,'attest',attest),false,
       'SAI regrant cannot revive credentials from a revoked epoch');
     assert.equal(await invoke(issuer,'begin',begin),false);

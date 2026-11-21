@@ -209,7 +209,8 @@ async function cleanup(){
   }
   for(const [name,args] of [
     ['begin_owner_consent','text,text,text,uuid,bytea'],
-    ['attest_owner_consent','text,text,text,uuid,text,bytea']
+    ['attest_owner_consent','text,text,text,uuid,text,bytea'],
+    ['confirm_owner_consent','text,text,text,uuid,text,bytea']
   ]){
     await admin.query('DROP FUNCTION IF EXISTS paper_atproto_authority.'+name+'('+args+')');
   }

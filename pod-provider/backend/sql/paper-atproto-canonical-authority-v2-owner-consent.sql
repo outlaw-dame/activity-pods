@@ -133,6 +133,35 @@ BEGIN
       AND i.did=p_did AND i.state='active' AND i.managed=true);
 END $function$;
 
+
+-- Recheck a just-attested consent from the independent reader login. The
+-- confirmation is read-only and requires the identical operation/readback.
+-- It does not create a cross-store transaction or supersede operation-time
+-- authorization. A revocation acknowledged before this query must deny.
+CREATE FUNCTION paper_atproto_authority.confirm_owner_consent(
+  p_owner text,p_did text,p_app text,p_operation uuid,
+  p_grant text,p_native_readback_sha256 bytea
+) RETURNS boolean
+LANGUAGE sql STABLE STRICT SECURITY DEFINER
+SET search_path=pg_catalog AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM paper_atproto_authority.consents c
+    JOIN paper_atproto_authority.identities i
+      ON i.owner_webid=c.owner_webid
+    WHERE c.owner_webid=p_owner AND c.app_uri=p_app
+      AND c.state='active' AND c.revision=1
+      AND c.activation_operation=p_operation
+      AND c.grant_uri=p_grant
+      AND c.grant_proof_sha256=p_native_readback_sha256
+      AND c.activation_native_readback_at IS NOT NULL
+      AND i.did=p_did AND i.state='active' AND i.managed=true
+  )
+$function$;
+REVOKE ALL ON FUNCTION paper_atproto_authority.confirm_owner_consent(
+  text,text,text,uuid,text,bytea) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paper_atproto_authority.confirm_owner_consent(
+  text,text,text,uuid,text,bytea) TO paper_atproto_consent_attestor;
+
 -- A native owner DELETE can arrive while first consent is still pending.
 -- Block it durably so an already-started attestor cannot activate a stale
 -- readback. The very same row lock serializes concurrent revoke/attest.

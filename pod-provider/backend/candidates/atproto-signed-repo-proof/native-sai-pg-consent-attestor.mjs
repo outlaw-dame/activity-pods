@@ -3,7 +3,6 @@
  * activation. No ordinary SemApps credential or browser may call this code.
  * This candidate requires an explicit disposable provider test marker.
  */
-import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
 const INTEROP='http://www.w3.org/ns/solid/interop#';
@@ -35,11 +34,11 @@ function scope(value){
   const owner=https(value.owner);
   const app=https(value.app);
   const needGroup=https(value.needGroup);
-  const required=value.requiredRights,optional=value.optionalRights||[];
-  const rights=[...required||[],...optional];
+  const required=value.requiredRights,optional=value.optionalRights??[];
   if(!Array.isArray(required)||required.length<1||required.length>16||
-      !Array.isArray(optional)||optional.length>32||
-      rights.length>48||new Set(rights).size!==rights.length||
+      !Array.isArray(optional)||optional.length>32)fail();
+  const rights=[...required,...optional];
+  if(rights.length>48||new Set(rights).size!==rights.length||
       rights.some(v=>typeof v!=='string'||!v.startsWith(APODS)||
         !/^[A-Za-z][A-Za-z0-9]*$/u.test(v.slice(APODS.length)))){
     fail();
@@ -159,6 +158,7 @@ export async function createDisposableNativeSaiPgAttestor({
     "pg_catalog.pg_has_role(current_user,'paper_atproto_authority_revoker','MEMBER') AS revoker_member, "+
     "pg_catalog.has_table_privilege(current_user,'paper_atproto_authority.consents','UPDATE,INSERT,DELETE') AS dml, "+
     "pg_catalog.has_function_privilege(current_user,'paper_atproto_authority.attest_owner_consent(text,text,text,uuid,text,bytea)','EXECUTE') AS attest_exec, "+
+    "pg_catalog.has_function_privilege(current_user,'paper_atproto_authority.confirm_owner_consent(text,text,text,uuid,text,bytea)','EXECUTE') AS confirm_exec, "+
     "pg_catalog.has_function_privilege(current_user,'paper_atproto_authority.begin_owner_consent(text,text,text,uuid,bytea)','EXECUTE') AS begin_exec "+
     "FROM pg_catalog.pg_roles r WHERE r.rolname=current_user"
   ).catch(()=>fail('SAI_ACTIVATION_ATTESTOR_PRIVILEGES_UNSAFE'));
@@ -166,7 +166,8 @@ export async function createDisposableNativeSaiPgAttestor({
   if(q.rowCount!==1||role.self_login!==true||role.restricted!==true||
      role.attestor!==true||role.issuer_member!==false||
      role.importer_member!==false||role.revoker_member!==false||
-     role.dml!==false||role.attest_exec!==true||role.begin_exec!==false) {
+     role.dml!==false||role.attest_exec!==true||role.confirm_exec!==true||
+     role.begin_exec!==false) {
     fail('SAI_ACTIVATION_ATTESTOR_PRIVILEGES_UNSAFE');
   }
   const inspect=async()=>{
@@ -191,6 +192,14 @@ export async function createDisposableNativeSaiPgAttestor({
       if(after.grant!==before.grant||
          !crypto.timingSafeEqual(after.digest,before.digest)){
         fail('SAI_ACTIVATION_NATIVE_EVIDENCE_CHANGED');
+      }
+      const stillCurrent=await pool.query(
+        'SELECT paper_atproto_authority.confirm_owner_consent('+
+        '$1::text,$2::text,$3::text,$4::uuid,$5::text,$6::bytea) AS accepted',
+        [s.owner,did,s.app,operationId,after.grant,after.digest]
+      );
+      if(stillCurrent.rowCount!==1||stillCurrent.rows[0].accepted!==true){
+        fail('SAI_ACTIVATION_PENDING_OR_REVOKED');
       }
       return Object.freeze({attested:true,grantUri:after.grant,
         digest:after.digest.toString('hex')});

@@ -6,7 +6,9 @@
  * The provider resolves the app and grant from authenticated OIDC/SAI state;
  * a caller must not control this identity binding or its revision.
  */
+import crypto from 'node:crypto';
 const DID=/^did:plc:[a-z2-7]{24}$/u;
+const OAUTH_GRANT=/^[A-Za-z0-9_-]{32}$/u;
 const REV=/^[1-9][0-9]{0,18}$/u;
 const MAX=9223372036854775807n;
 function fail(code){
@@ -26,12 +28,51 @@ function web(value){
   return value;
 }
 export function createCanonicalRecordWriteConsentFence({
-  appUri,grantUri,consentRevision,restrictedCredential=false
+  appUri,grantUri,consentRevision,restrictedCredential=false,
+  oauthEpoch=null
 }={}){
   web(appUri);web(grantUri);
   if(typeof restrictedCredential!=='boolean')fail('WRITE_CONSENT_SCOPE_INVALID');
   if(typeof consentRevision!=='string'||!REV.test(consentRevision)||
      BigInt(consentRevision)>MAX)fail('WRITE_CONSENT_SCOPE_INVALID');
+  const oauthGate=()=>{
+    if(process.env.NODE_ENV!=='test'||
+       process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE!=='confirmed'||
+       process.env.ATPROTO_REPO_WRITER_ROLE_TEST_DISPOSABLE!=='confirmed'||
+       restrictedCredential!==true)
+      fail('WRITE_OAUTH_EPOCH_NOT_RELEASED');
+  };
+  let oauthArgs=null;
+  if(oauthEpoch!==null){
+    oauthGate();
+    if(!oauthEpoch||typeof oauthEpoch!=='object'||
+       Array.isArray(oauthEpoch)||
+       Object.keys(oauthEpoch).sort().join(',')!=='clientId,grantId,revision,scope'||
+       !web(oauthEpoch.clientId)||!OAUTH_GRANT.test(oauthEpoch.grantId||'')||
+       typeof oauthEpoch.scope!=='string'||oauthEpoch.scope.length<1||
+       oauthEpoch.scope.length>8192||
+       typeof oauthEpoch.revision!=='string'||!REV.test(oauthEpoch.revision)||
+       BigInt(oauthEpoch.revision)>MAX)fail('WRITE_OAUTH_EPOCH_SCOPE_INVALID');
+    oauthArgs=Object.freeze({
+      clientId:oauthEpoch.clientId,grantId:oauthEpoch.grantId,
+      revision:oauthEpoch.revision,
+      scopeHash:crypto.createHash('sha256').update(oauthEpoch.scope,'utf8').digest()
+    });
+  }
+  async function lockOauth(client,accountId){
+    if(oauthArgs===null)return;
+    oauthGate();
+    // This SQL locks the exact OAuth and native SAI rows as part of the
+    // signed writer's ALREADY-OPEN transaction (never another pool).
+    const q=await client.query(
+      'SELECT paper_atproto_authority.lock_oauth_generation_for_write('+
+      '$1::text,$2::text,$3::text,$4::text,$5::bytea,$6::bigint) AS allowed',
+      [accountId,appUri,oauthArgs.clientId,oauthArgs.grantId,
+        oauthArgs.scopeHash,oauthArgs.revision]
+    );
+    if(q.rowCount!==1||q.rows[0].allowed!==true)
+      fail('WRITE_OAUTH_EPOCH_NOT_CURRENT');
+  }
   return async function lockCanonicalConsent(client,{accountId,did}={}){
     web(accountId);
     if(!DID.test(did||'')||typeof client?.query!=='function'){
@@ -53,6 +94,7 @@ export function createCanonicalRecordWriteConsentFence({
       if(answer.rowCount!==1||answer.rows[0].allowed!==true){
         fail('WRITE_CONSENT_NOT_CURRENT');
       }
+      await lockOauth(client,accountId);
       return true;
     }
     const r=await client.query(
@@ -69,6 +111,7 @@ export function createCanonicalRecordWriteConsentFence({
        r.rows[0].revision!==consentRevision){
       fail('WRITE_CONSENT_NOT_CURRENT');
     }
+    await lockOauth(client,accountId);
     return true;
   };
 }

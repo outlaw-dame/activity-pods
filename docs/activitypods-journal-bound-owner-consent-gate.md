@@ -379,3 +379,39 @@ and independent monotonic recovery authority across PostgreSQL PITR
 is absent. An actual multi-cell provider and signed PDS positive
 signup, restorable backup, and failover acceptance must precede
 any production activation. See federation issue #186.
+
+## Signed PDS PostgreSQL OAuth epoch commit fence — disposable candidate
+
+The maintained reference-MST signed writer already obtains its canonical
+native SAI consent lock inside the SAME restricted PostgreSQL transaction
+that advances signed repository head, immutable DAG blocks, native event
+outbox and Jena projection intent.
+
+The optional oauthEpoch capability in
+pod-provider/backend/candidates/atproto-signed-repo-proof/pg-record-write-consent-fence.mjs
+now locks the **exact owner, fixed SAI app, client, grant, scope digest and
+OAuth revision** using lock_oauth_generation_for_write on that SAME PG
+connection/transaction. Native SAI and OAuth locks are both held until
+COMMIT or ROLLBACK, so an acknowledged revocation cannot linearize between
+authorization and the signed write. A missing, revoked or mismatched
+generation fails closed before any new signed repository head is committed.
+
+A separate nonactivated v6 SQL grant provides the restricted signed
+repository writer only EXECUTE on the row-locking function, not SELECT,
+INSERT, UPDATE, or revocation privileges on the generation table.
+The real PostgreSQL18 restricted-writer test creates independently
+authenticated writer/revoker logins, does a signed reference-MST write,
+runs a concurrent OAuth revoker against a held writer transaction, then
+proves a subsequent signed mutation fails without changing signed history.
+
+The existing trusted provider OAuth/DPoP bridge now propagates a frozen
+trusted OAuth-generation scope to the PDS XRPC writer factory and requires
+the identical generation on its post-commit consent recheck. An HTTP
+caller cannot substitute an OAuth generation or app mapping.
+
+This extension remains enabled ONLY in disposable test mode and is
+not activated in the production hosted signed-PDS flow. The actual
+owner-authenticated grant issuance and revocation coordinator, separate
+PG PITR anti-rollback witness, and hosted cross-protocol positive signup
+remain hard blockers under federation issue #186. Never widen a runtime
+credential grant to avoid a failing transaction-lock proof.

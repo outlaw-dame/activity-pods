@@ -31,7 +31,8 @@ const roleSuffix=crypto.randomBytes(7).toString('hex');
 const writerLogin='paper_repo_writer_'+roleSuffix;
 const genericLogin='paper_repo_generic_'+roleSuffix;
 const revokerLogin='paper_repo_revoker_'+roleSuffix;
-const names=[writerLogin,genericLogin,revokerLogin];
+const oauthRevokerLogin='paper_oauth_revoker_'+roleSuffix;
+const names=[writerLogin,genericLogin,revokerLogin,oauthRevokerLogin];
 const secret=new Map(names.map(n=>[n,crypto.randomBytes(27).toString('hex')]));
 const ident=n=>{
   if(!/^[a-z_][a-z0-9_]{0,62}$/u.test(n))throw Error('unsafe SQL role');
@@ -48,6 +49,9 @@ const accountId='https://paper.example.org/users/restricted-writer';
 const did='did:plc:'+'r'.repeat(24);
 const app='https://paper.example.org/apps/restricted';
 const grant=accountId+'/data/grants/atproto';
+const oauthClientId='https://paper-client.example.org/reader';
+const oauthGrantId='o'.repeat(32);
+const oauthScope='atproto repo:app.bsky.feed.post?action=create';
 const path='app.bsky.feed.post/3jzm3xwpf342a';
 const record={
   $type:'app.bsky.feed.post',text:'Restricted PG writer signed post',
@@ -60,7 +64,7 @@ async function sql(path){
 }
 
 test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regrant identity',async()=>{
-  let writerPool,genericPool,revokerPool,cleanErr=null;
+  let writerPool,genericPool,revokerPool,oauthRevokerPool,cleanErr=null;
   let schemaMade=false;
   try{
     const present=await admin.query(
@@ -72,8 +76,11 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
     await admin.query(await sql('./schema.sql'));
     await admin.query(await sql('./single-record-mutation.sql'));
     await admin.query(await sql('../../sql/paper-atproto-canonical-authority-v1.sql'));
-    await admin.query(await sql('./pg-restricted-writer-roles.sql'));
     schemaMade=true;
+    await admin.query(await sql('../../sql/paper-atproto-canonical-authority-v2-owner-consent.sql'));
+    await admin.query(await sql('../../sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'));
+    await admin.query(await sql('./pg-restricted-writer-roles.sql'));
+    await admin.query(await sql('../../sql/paper-atproto-canonical-authority-v6-repo-writer-oauth-lock.sql'));
     for(const name of names){
       await admin.query('CREATE ROLE '+ident(name)+
         " LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS "+
@@ -83,9 +90,12 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
       ident(writerLogin)+' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
     await admin.query('GRANT paper_atproto_authority_revoker TO '+
       ident(revokerLogin)+' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
+    await admin.query('GRANT paper_oauth_epoch_revoker TO '+
+      ident(oauthRevokerLogin)+' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
     writerPool=rolePool(writerLogin);
     genericPool=rolePool(genericLogin);
     revokerPool=rolePool(revokerLogin);
+    oauthRevokerPool=rolePool(oauthRevokerLogin);
     const admitted=await assertRestrictedRepoWriterLogin(writerPool);
     assert.equal(admitted.restricted,true);
     assert.equal(admitted.mayMarkProjectionApplied,false);
@@ -153,15 +163,30 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
     );
     await admin.query(
       'INSERT INTO paper_atproto_authority.consents '+
-      '(owner_webid,app_uri,grant_uri,state,revision,grant_proof_sha256) '+
-      "VALUES ($1,$2,$3,'active',1,$4)",[accountId,app,grant,digest(grant)]
+      '(owner_webid,app_uri,grant_uri,state,revision,grant_proof_sha256,'+
+      'activation_operation,activation_request_sha256,activation_native_readback_at) '+
+      "VALUES ($1,$2,$3,'active',1,$4,$5,$4,clock_timestamp())",
+      [accountId,app,grant,digest(grant),crypto.randomUUID()]
     );
+    const pgIssued=await admin.query(
+      'SELECT paper_atproto_authority.issue_oauth_generation('+
+      '$1,$2,$3,$4,$5,0::bigint,1::bigint) AS revision',
+      [accountId,app,oauthClientId,oauthGrantId,digest(oauthScope)]
+    );
+    assert.equal(pgIssued.rows[0].revision,'1');
 
     await forbidden(genericPool.query(
       'SELECT 1 FROM paper_atproto_repo_proof.repos LIMIT 1'
     ));
     await forbidden(genericPool.query(
       'SELECT 1 FROM paper_atproto_authority.consents LIMIT 1'
+    ));
+    await forbidden(writerPool.query(
+      'SELECT * FROM paper_atproto_authority.oauth_generations'
+    ));
+    await forbidden(writerPool.query(
+      'SELECT paper_atproto_authority.revoke_oauth_generation($1,$2,$3,$4)',
+      [accountId,oauthClientId,oauthGrantId,1]
     ));
     await forbidden(writerPool.query(
       "UPDATE paper_atproto_authority.consents SET state='active' "+
@@ -211,7 +236,9 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
     let currentConsent='1';
     const fence=createCanonicalRecordWriteConsentFence({
       appUri:app,grantUri:grant,consentRevision:currentConsent,
-      restrictedCredential:true
+      restrictedCredential:true,
+      oauthEpoch:{clientId:oauthClientId,grantId:oauthGrantId,
+        scope:oauthScope,revision:'1'}
     });
     const writer=createReferenceMstWriter({
       pool:writerPool,reference,fixtureOnly:true,
@@ -279,6 +306,42 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
     );
     assert.equal(acknowledged.rowCount,1);
 
+    // Real signed repository writer holds the PG OAuth epoch lock in
+    // the SAME transaction as signed MST, repo head, outbox and projection.
+    const oauthLockedWriter=await writerPool.connect();
+    let oauthCommitDone=false,oauthRevoked=false,oauthRevocation;
+    try{
+      await oauthLockedWriter.query('BEGIN');
+      const locked=await oauthLockedWriter.query(
+        'SELECT paper_atproto_authority.lock_oauth_generation_for_write('+
+        '$1,$2,$3,$4,$5,$6::bigint) AS allowed',
+        [accountId,app,oauthClientId,oauthGrantId,digest(oauthScope),1]
+      );
+      assert.equal(locked.rows[0].allowed,true);
+      oauthRevocation=oauthRevokerPool.query(
+        'SELECT paper_atproto_authority.revoke_oauth_generation('+
+        '$1,$2,$3,$4::bigint) AS revision',
+        [accountId,oauthClientId,oauthGrantId,1]
+      ).then(r=>{oauthRevoked=true;return r;});
+      await new Promise(ok=>setTimeout(ok,125));
+      assert.equal(oauthRevoked,false,
+        'OAuth revocation must wait for the in-flight signed writer');
+      await oauthLockedWriter.query('COMMIT');oauthCommitDone=true;
+    }finally{
+      if(!oauthCommitDone)await oauthLockedWriter.query('ROLLBACK').catch(()=>{});
+      oauthLockedWriter.release(!oauthCommitDone);
+    }
+    assert.equal((await oauthRevocation).rows[0].revision,'2');
+    await assert.rejects(writer.write({
+      accountId,did,...signing,action:'update',path,
+      record:{...record,text:'OAuth-revoked must never commit'},
+      expectedCommitCid:result.commitCid,expectedRev:result.rev
+    }),e=>e?.code==='WRITE_OAUTH_EPOCH_NOT_CURRENT');
+    assert.equal((await writer.verify({
+      accountId,did,path,publicKeyPem:signing.publicKeyPem
+    })).commitCid,result.commitCid,
+    'OAuth revocation cannot mutate the signed head or outbox');
+
     // Exactly one of two independently authenticated SQL writers can win
     // a revocation update. No signed write may proceed after that update.
     // Deterministic real-connection revocation race. Holding the consent
@@ -336,10 +399,13 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
       realSignedReferenceMst:true,outboxPending:true,
       projectionCasDefiner:true,revocationDenied:true,
       consentRevocationSerialized:true,
+      oauthEpochLockedInSignedCommit:true,
+      oauthRevocationSerialized:true,
+      signedWriteDeniedAfterOAuthRevoke:true,
       noReplayAfterPending:true,idleTransactions:idle
     }));
   }finally{
-    for(const p of [writerPool,genericPool,revokerPool]){
+    for(const p of [writerPool,genericPool,revokerPool,oauthRevokerPool]){
       if(p)try{await p.end();}catch(e){cleanErr=e;}
     }
     if(schemaMade){
@@ -353,6 +419,9 @@ test('restricted PG18 signed writer cannot forge applied RDF, ack outbox or regr
       catch(e){cleanErr=e;}
     }
     for(const name of ['paper_atproto_repo_writer',
+      'paper_oauth_epoch_signer','paper_oauth_epoch_reader',
+      'paper_oauth_epoch_revoker','paper_oauth_epoch_issuer',
+      'paper_atproto_consent_issuer','paper_atproto_consent_attestor',
       'paper_atproto_authority_revoker','paper_atproto_authority_reader',
       'paper_atproto_authority_importer']){
       try{await admin.query('DROP ROLE IF EXISTS '+ident(name));}

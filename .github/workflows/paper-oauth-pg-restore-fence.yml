@@ -14,6 +14,8 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
+      - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
   push:
     branches: [master]
     paths:
@@ -26,6 +28,8 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
+      - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
   workflow_dispatch:
 
 permissions:
@@ -53,6 +57,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      independent-witness:
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+        env:
+          POSTGRES_USER: witness_probe
+          POSTGRES_PASSWORD: fixture_witness_only
+          POSTGRES_DB: oauth_witness_disposable
+        ports:
+          - 5550:5432
+        options: >-
+          --health-cmd "pg_isready -U witness_probe -d oauth_witness_disposable"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
       redis:
         image: redis:8.2.11-alpine@sha256:da23c2478319ceb4903857d77a2fd7aa5137d9e9d4c8165dafbacedac6403e95
         ports:
@@ -72,6 +89,8 @@ jobs:
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
+      PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
+      PAPER_OAUTH_WITNESS_DSN: postgres://witness_probe:fixture_witness_only@127.0.0.1:5550/oauth_witness_disposable
     steps:
       - name: Checkout pinned source without persistent credentials
         uses: actions/checkout@v4
@@ -85,6 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
           node --check pod-provider/backend/candidates/oauth-pg-epoch-reader.js
           node --check pod-provider/backend/utils/oauth-pg-epoch-policy.js
           node --check pod-provider/backend/services/oauth/oauth-token.service.js
@@ -105,3 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
+      - name: Prove separated witness survives primary PG and Redis rollback
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-external-witness.mjs

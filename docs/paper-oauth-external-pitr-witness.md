@@ -1,0 +1,135 @@
+# Paper OAuth/PDS external restore witness — P0, **NONACTIVATED**
+
+Last checkpoint: 2026-11-21. Owner: ActivityPods account authority; cross-repo
+staging release remains **CLOSED**. Primary issue:
+https://github.com/outlaw-dame/mastopod-federation-architecture/issues/186
+
+## Threat model and assumptions
+
+Restoring an old Redis RDB/AOF or canonical PostgreSQL PITR snapshot can
+resurrect *cryptographically valid*, unexpired OAuth access/refresh/session
+credentials and account grant rows that had been revoked after the backup.
+A PostgreSQL CAS and revoker row lock protect concurrent live traffic, but
+cannot protect a database after its own backup is rewound. A separate
+failure-domain authority must reject older epochs on every credential
+admission, including all signed PDS write commits.
+
+The witness must not share the primary PG database cluster, disks,
+snapshot catalog, restore credentials, service account, lifecycle, or
+unrestricted administrator with the original. Its supported deployment
+requires independent durable object storage with immutable receipts
+(such as separately administered Cloudflare R2 bucket locks or an
+S3/MinIO Object Lock COMPLIANCE bucket). **A second database alone is NOT
+proof of non-rewindability.** A witness restore without reconciliation
+against the independent immutable audit receipts must serve **503 / deny**
+rather than accepting an older authorization state.
+
+Official reference: https://developers.cloudflare.com/r2/buckets/bucket-locks/
+— R2 bucket locks prevent deletion and overwriting while retained, but
+users with bucket-lock configuration authority can remove rules.
+Therefore isolate the lock-control account and deny it to the provider,
+writer, OAuth issuer/revoker, runtime attestor, and backup/restore roles.
+https://minio.community/community/minio-object-store/administration/object-management/object-retention.html
+describes S3 Object Lock COMPLIANCE mode for self-hosted alternatives.
+
+## Candidate implementation and exact failure order
+
+`pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql`
+belongs exclusively on an **independent PostgreSQL 18 witness cluster**.
+Each (owner WebID, client ID) has a monotonic, contiguous revision and
+a linked SHA-256 event history. No runtime principal has raw table
+SELECT/INSERT/UPDATE/DELETE privileges. Dedicated NOLOGIN roles for
+issuer, revoker, WORM attestor and reader receive only respective
+SECURITY DEFINER function EXECUTE privileges.
+
+The safe transition protocol is:
+
+1. A separately authenticated owner approval (or owner revocation)
+   passes the real canonical PostgreSQL signup/session journal. Verify
+   exact owner, client, scope and fresh signed native SAI consent, with
+   explicit intent. General post-signup session approval still needs
+   a distinct owner-authenticated gate; the 10-minute signup token must
+   not become a permanent authorization mechanism.
+2. Send a unique operation UUID and the **hashed grant ID** to the
+   independent witness. Its serializable-per-key CAS advances revision,
+   records the chained event and resets `sealed=false`. An acknowledged
+   revocation denies immediately, even if the canonical PG mutation
+   has not completed. A newly issued grant is unusable while unsealed.
+3. Write the event receipt to an append-only immutable R2/S3 key
+   scoped by a SHA-256 owner/client pseudonym and revision, with
+   `If-None-Match: *`; use bucket-level retention locks. After
+   ambiguous ACK, perform an independent GET to verify exact bytes
+   and SHA-256. The issuer must never be permitted to tamper with
+   protected objects, relax bucket locks, or self-attest receipts.
+4. Only a separately privileged witness attestor, after immutable
+   readback, calls `seal(owner,client,revision,operation,eventSha)`.
+   If object PUT/GET or attestation is unreachable, retain the
+   unsealed state and **deny all** authorizations.
+5. Project that exact generation into canonical PostgreSQL (same
+   managed WebID/SAI and owner consent) and Redis (ephemeral grant/family).
+   The issuing coordinator must consider ambiguous cross-store ACK
+   a reconciliation requirement, never a reason for blind replay.
+6. Every code issue/redeem, signed JWT introspection, refresh
+   rotation/issue/introspection, old browser cookie/session admission
+   and signed-PDS transaction calls **all required** current authorities:
+   Redis grant, primary PG canonical SAI/OAuth, independent witness,
+   current DID/signing key and current owner session. Stale/missing/
+   restored witnesses, PG read replicas, ambiguous replies, and
+   cancelled requests deny. No positive authorization cache across
+   replica changes or restore boundaries.
+
+The SQL witness supports steps 2, 4, and read verification as a
+**nonactivated candidate**; no production external Object Lock bucket,
+readback attestor, restricted runtime LOGIN, or owner-session wiring is
+deployed by this migration.
+
+## Recovery and operations
+
+A witness rollback is as dangerous as canonical PG rollback. The
+recovery service must enumerate the immutable receipt chain and validate
+every revision, prior hash, unique operation, owner/client digest and
+highest sealed revision; reject gaps, forked high-water or nonexistent
+receipts. After a witness restore, block token admission and signed
+PDS writes until independent readback agrees. A restored primary PG
+behind that high-water remains blocked until an authenticated owner
+explicitly reauthorizes and a reconciler advances PG to a witnessed
+state. Do not automatically change a blocked witness to active.
+
+Use separate TLS/mTLS private network identities for primary vs witness,
+read-only credentials for admission, different issuer/revoker and WORM
+attestor identities, complete key rotation, isolated storage accounts
+and strict IAM on bucket lock configuration. Monitoring must include
+witness availability, PG/witness revision divergence, WORM seal lag,
+ambiguous cross-store acknowledgements, backup-age floor and restore
+readiness; no uncontrolled blind retry.
+
+For retention, the immutable receipt lifetime must exceed the maximum
+age of recoverable backups **and** the maximum lifetime of any legacy
+refresh/session credentials plus recovery/replication grace. Minimize
+personal data: receipt objects should contain pseudonymous hashes and
+operation digests only. If the external retention policy must eventually
+expire, an independently verifiable global recovery incarnation fence
+is also required so an ancient backup cannot bypass deleted tombstones.
+
+## Verified in disposable CI vs outstanding production acceptance
+
+`pod-provider/backend/scripts/proof-oauth-external-witness.mjs` and
+`.github/workflows/paper-oauth-external-restore-witness.yml` exercise
+two **physically separate PG18 containers** and Redis 8.2, distinct
+privileged-role logins, PG row rollback of canonical OAuth, native
+Redis binary DUMP/RESTORE, independent witness high-water and sealed
+vs unsealed authorization. The test WORM transport is an explicit
+in-memory write-once **test substitute**, NOT real Cloudflare R2 or
+S3 Object Lock; the PG rollback is a deliberate logical-row restore,
+NOT a full WAL/PITR or failover.
+
+The following are **still blocking P0** and cannot be satisfied by a
+green SQL-only test: real externally locked WORM bucket and actual
+PUT/readback attestor, witness PostgreSQL backup/PITR restore catch-up
+with chain verification, hosted mixed failure domains, all real OAuth
+and browser session credential admissions, transactionally locked
+signed-PDS writer, actual current DID/PLC key custody/rotation, positive
+new account WebID/Solid/ActivityPub/PDS signed write and remote
+readback through the released provider stack. Record exact immutable
+source SHAs, private-role grants, host restart outcomes and recovery
+evidence before considering `release=OPEN`.

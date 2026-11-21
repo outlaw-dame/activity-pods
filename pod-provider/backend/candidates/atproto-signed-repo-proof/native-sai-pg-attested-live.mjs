@@ -190,6 +190,29 @@ async function verify(){
   await assert.rejects(second.inspect(),e=>e?.code==='SAI_ACTIVATION_EVIDENCE_INVALID');
   await project('INSERT DATA { '+subject(grant)+' <'+A+'hasSpecialRights> '+subject(rights[1])+' . }');
   assert.equal((await second.inspect()).grant,grant);
+  // The same owner may legitimately have another application installed.
+  // Its unrelated registration must not contaminate the target app's proof.
+  const otherRegistration=owner+'/data/app-registrations/unrelated';
+  const otherGrant=owner+'/data/access-grants/unrelated';
+  const otherApp='https://unrelated.example.org/app';
+  const extra=[
+    subject(registry)+' <'+I+'hasApplicationRegistration> '+subject(otherRegistration)+' .',
+    subject(otherRegistration)+' a <'+I+'ApplicationRegistration> ;',
+    ' <'+I+'registeredBy> '+subject(owner)+' ;',
+    ' <'+I+'registeredAgent> '+subject(otherApp)+' ;',
+    ' <'+I+'hasAccessGrant> '+subject(otherGrant)+' .',
+    subject(otherGrant)+' a <'+I+'AccessGrant> ;',
+    ' <'+I+'grantedBy> '+subject(owner)+' ;',
+    ' <'+I+'grantee> '+subject(otherApp)+' ;',
+    ' <'+I+'hasAccessNeedGroup> '+subject('https://unrelated.example.org/need')+' .'
+  ].join('\n');
+  await project('INSERT DATA { '+extra+' }');
+  try{
+    assert.equal((await second.inspect()).grant,grant,
+      'Unrelated native SAI app must not invalidate this consent proof');
+  }finally{
+    await project('DELETE DATA { '+extra+' }');
+  }
   assert.equal((await pg.getConsent({owner,app})).state,'blocked');
   console.log('PASS: cross-process PG/Jena pending->attested, two worker reads, monotonic revocation, Jena tamper denial');
 }

@@ -54,9 +54,11 @@ function bindingUri(row,name){
 }
 export function queryNativeSaiEvidence(config){
   guard();const s=scope(config);
-  // Restrict to the authentic owner's registry; OPTIONAL keeps empty-rights
-  // grants visible as contradictions. At the cap, reject instead of silently
-  // accepting a partial SPARQL result.
+  // Scope to the exact approved app AND need group: an owner can have
+  // unrelated applications without breaking this admission. Keep separately
+  // bound agent/owner/group variables to expose contradictory extra values
+  // on this exact registration/grant; never silently FILTER them away.
+  // OPTIONAL keeps empty-rights grants visible; deny capped results.
   return [
     'PREFIX i: <'+INTEROP+'>',
     'PREFIX apods: <'+APODS+'>',
@@ -65,10 +67,13 @@ export function queryNativeSaiEvidence(config){
     ' <'+s.owner+'> i:hasRegistrySet/i:hasAgentRegistry ?registry .',
     ' ?registry i:hasApplicationRegistration ?registration .',
     ' ?registration a i:ApplicationRegistration ;',
+    '   i:registeredAgent <'+s.app+'> ;',
     '   i:registeredBy ?registeredBy ; i:registeredAgent ?registeredAgent ;',
     '   i:hasAccessGrant ?grant .',
-    ' ?grant a i:AccessGrant ; i:grantedBy ?grantedBy ;',
-    '   i:grantee ?grantee ; i:hasAccessNeedGroup ?need .',
+    ' ?grant a i:AccessGrant ;',
+    '   i:grantee <'+s.app+'> ; i:hasAccessNeedGroup <'+s.needGroup+'> ;',
+    '   i:grantedBy ?grantedBy ; i:grantee ?grantee ;',
+    '   i:hasAccessNeedGroup ?need .',
     ' OPTIONAL { ?grant apods:hasSpecialRights ?right . }',
     '} LIMIT '+(MAX_ROWS+1)
   ].join('\n');

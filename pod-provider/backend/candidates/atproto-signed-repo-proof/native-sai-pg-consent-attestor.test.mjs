@@ -49,6 +49,8 @@ test('canonical SPARQL query is fixed, bounded and scoped to authentic owner',()
   const query=queryNativeSaiEvidence(scope);
   assert.match(query,/LIMIT 65/);
   assert.ok(query.includes('<'+owner+'>'));
+  assert.ok(query.includes('i:registeredAgent <'+app+'>'));
+  assert.ok(query.includes('i:hasAccessNeedGroup <'+needGroup+'>'));
   assert.match(query,/i:hasRegistrySet\/i:hasAgentRegistry/);
   assert.match(query,/i:hasAccessGrant/);
   assert.match(query,/OPTIONAL \{ \?grant apods:hasSpecialRights \?right/);

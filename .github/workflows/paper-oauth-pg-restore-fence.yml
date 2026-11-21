@@ -91,7 +91,6 @@ jobs:
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
-      PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_DSN: postgres://witness_probe:fixture_witness_only@127.0.0.1:5550/oauth_witness_disposable
     steps:
       - name: Checkout pinned source without persistent credentials
@@ -129,6 +128,8 @@ jobs:
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
       - name: Prove separated witness survives primary PG and Redis rollback
+        env:
+          PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
         run: |
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-external-witness.mjs

@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {Client} from 'pg';
+import {Client,Pool} from 'pg';
 import {createRequire} from 'node:module';
 import {createDisposableNativeSaiReader} from './native-sai-pg-consent-attestor.mjs';
 import {createDisposableJournalBoundSaiAttestor} from './journal-bound-sai-pg-attestor.mjs';
@@ -215,8 +215,16 @@ try{
  await denied(attestor,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
   [owner.reservation,owner.operation]);
  await seed(owner);await seed(incomplete,rights.slice(0,2));await seed(pending);
+ // The actual issuer borrows a PG session for both role audit and CAS;
+ // a shared pg.Client cannot satisfy its lease/release discipline.
+ const issuerDsn=new URL(DSN);
+ issuerDsn.username=names.issuer;issuerDsn.password=passwords.issuer;
+ const issuerPool=new Pool({connectionString:issuerDsn.toString(),max:2,
+  connectionTimeoutMillis:2500,query_timeout:5500,idleTimeoutMillis:2500,
+  allowExitOnIdle:true});
+ clients.push(issuerPool);
  const issuerApi=createDisposableJournalBoundConsentIssuer({
-  pool:issuer,providerId:base,browserOrigin:'https://app-e2e.test:3443',
+  pool:issuerPool,providerId:base,browserOrigin:'https://app-e2e.test:3443',
   fixtureOnly:true
  });
  await assert.rejects(issuerApi.reserve({

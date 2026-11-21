@@ -80,6 +80,7 @@ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fn
       '["apods:CreateGroup","apods:ReadGroups","apods:ManageMembers"]'::jsonb
    AND s.enrollment_selection->'acceptedSpecialRights' @>
       '["apods:CreateGroup","apods:ReadGroups","apods:ManageMembers"]'::jsonb
+   AND jsonb_typeof(s.enrollment_requirements->'optional')='array'
    AND NOT EXISTS (
      SELECT 1 FROM jsonb_array_elements_text(
        s.enrollment_requirements->'required') AS necessary(right_uri)
@@ -87,6 +88,31 @@ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fn
        (s.enrollment_selection->'acceptedSpecialRights') ? necessary.right_uri
        OR (s.enrollment_selection->'acceptedAccessNeeds') ? necessary.right_uri
      )
+   )
+   -- Defense in depth against journal corruption or a changed signup
+   -- manifest. Enrollment may NOT approve an unadvertised special right
+   -- or smuggle a group right through the ordinary access-need list.
+   AND NOT EXISTS (
+     SELECT 1 FROM jsonb_array_elements_text(
+       CASE WHEN jsonb_typeof(s.enrollment_selection->'acceptedSpecialRights')='array'
+         THEN s.enrollment_selection->'acceptedSpecialRights'
+         ELSE '[]'::jsonb END) AS selected(right_uri)
+     WHERE selected.right_uri NOT LIKE 'apods:%'
+       OR NOT (
+         (s.enrollment_requirements->'required') ? selected.right_uri
+         OR (s.enrollment_requirements->'optional') ? selected.right_uri
+       )
+   )
+   AND NOT EXISTS (
+     SELECT 1 FROM jsonb_array_elements_text(
+       CASE WHEN jsonb_typeof(s.enrollment_selection->'acceptedAccessNeeds')='array'
+         THEN s.enrollment_selection->'acceptedAccessNeeds'
+         ELSE '[]'::jsonb END) AS selected(need_uri)
+     WHERE selected.need_uri LIKE 'apods:%'
+       OR NOT (
+         (s.enrollment_requirements->'required') ? selected.need_uri
+         OR (s.enrollment_requirements->'optional') ? selected.need_uri
+       )
    )
    AND (
      (p_phase='begin' AND a.state='provisioning'

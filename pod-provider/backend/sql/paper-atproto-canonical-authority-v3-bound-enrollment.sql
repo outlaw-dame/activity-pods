@@ -56,6 +56,12 @@ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fn
    AND r.v4_bound_at IS NOT NULL AND r.signup_claimed_at IS NOT NULL
    AND r.username=a.username_key AND r.expected_webid=a.webid
    AND r.provider_id=a.provider_id||'/provider'
+   -- Re-verify the original v4 binder's app-scope digest. The reservation
+   -- app scope is not an arbitrary alias for s.app_client_id.
+   AND r.app_client_id=encode(sha256(
+     convert_to('activitypods:approved-app:v1','UTF8') ||
+     decode('00','hex') || convert_to(s.app_client_id,'UTF8')
+   ),'hex')
    AND r.state=CASE WHEN p_phase='confirm' AND a.state='ready'
      THEN 'completed' ELSE 'side_effects_started' END
    AND s.may_have_side_effects AND a.atproto_repo_initialized

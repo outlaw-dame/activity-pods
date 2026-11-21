@@ -111,16 +111,13 @@ module.exports = (settings, privateJwk) => ({
     url: async (ctx, interaction) => {
       switch (interaction?.prompt?.name) {
         case 'login': {
-          const loginUrl = new URL(urlJoin(settings.frontendUrl, '/login'));
-          loginUrl.searchParams.set('interaction_id', interaction.jti);
-          loginUrl.searchParams.set('client_id', interaction?.params?.client_id);
-          loginUrl.searchParams.set('redirect', interaction.returnTo);
-          if (interaction?.params?.is_signup === 'true') loginUrl.searchParams.set('signup', true); // Extra param
-          return loginUrl.toString();
+          // oidc-provider scopes its signed interaction cookie to this path.
+          // The same endpoint receives the authenticated form completion.
+          return urlJoin(settings.baseUrl, '/.oidc/login-completed');
         }
 
         default: {
-          console.error('Unknown interaction', interaction);
+          throw new Error('Unsupported OIDC interaction');
         }
       }
     }

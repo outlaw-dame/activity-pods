@@ -38,7 +38,8 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
       '../sql/paper-browser-signup-transaction.sql', '../candidates/atproto-signed-repo-proof/schema.sql', '../sql/paper-atproto-canonical-authority-v1.sql',
       ...['pg-preaccount-reservations','pg-v4-reservation-completion-bridge','pg-canonical-signup-reserver','pg-enrollment-handoff','pg-dataset-admin-claim'].map(v => '../candidates/atproto-signed-repo-proof/' + v + '.sql'),
       '../sql/paper-provider-genesis-readback.sql', '../sql/paper-provider-genesis-projection.sql', '../sql/paper-provider-genesis-hosting.sql',
-      '../sql/paper-provider-genesis-sealer.sql'
+      '../sql/paper-provider-genesis-sealer.sql', '../sql/paper-local-native-auth.sql',
+      '../sql/paper-provider-owner-activation.sql'
     ];
     for (const file of files) {
       const sql = await fs.readFile(path.join(__dirname, file), 'utf8');
@@ -342,6 +343,28 @@ test('canonical coordinator: actual restricted SQL, durable fence and no duplica
     await assert.rejects(sealer.query(seal,[...sealArgs.slice(0,-1),Number(lease_epoch)+1]),{code:'42501'});
     assert.equal((await sealer.query(seal,sealArgs)).rowCount,1);
     assert.equal((await owner.query('SELECT state FROM paper_account_candidate.accounts WHERE account_id=$1',[admitted.accountId])).rows[0].state,'provisioning');
+    const activator = await runtime('paper_provider_owner_activator');
+    const native = await runtime('paper_private_auth_runtime');
+    const activate = 'SELECT paper_account_reservation_proof.activate_provider_owner($1,$2,$3,$4,$5,$6,$7,$8) AS ok';
+    const args = [bootstrapScope[0], admitted.operationId, webId, did, head, rootCid, rev, lease_epoch];
+    const ready = 'SELECT paper_private_auth.owner_ready($1,$2,$3) AS ok';
+    const ownerArgs = [bootstrapScope[0],webId,first.input.username];
+    assert.equal((await activator.query(activate,args)).rows[0].ok,false,'missing private owner');
+    await owner.query('INSERT INTO paper_private_auth.accounts(id,data) VALUES($1,$2)',[crypto.randomUUID(),
+      {username:first.input.username,webId,signupReservationId:bootstrapScope[0]}]);
+    assert.equal((await native.query(ready,ownerArgs)).rows[0].ok,false);
+    assert.equal((await activator.query(activate,[...args.slice(0,-1),Number(lease_epoch)+1])).rows[0].ok,false);
+    await assert.rejects(native.query(activate,args),{code:'42501'});
+    await assert.rejects(activator.query('SELECT * FROM paper_private_auth.accounts'),{code:'42501'});
+    const results=await Promise.all([activator.query(activate,args),activator.query(activate,args)]);
+    assert.ok(results.every(result=>result.rows[0].ok===true));
+    assert.equal((await native.query(ready,ownerArgs)).rows[0].ok,true);
+    assert.equal((await native.query(ready,[crypto.randomUUID(),...ownerArgs.slice(1)])).rows[0].ok,false);
+    assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,1);
+    assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,1);
+    const completed=await owner.query('SELECT state,generation FROM paper_account_candidate.accounts WHERE account_id=$1',[admitted.accountId]);
+    assert.equal(completed.rows[0].state,'ready');
+    assert.equal(Number(completed.rows[0].generation),3,'concurrent activation commits once');
     await owner.query("UPDATE paper_atproto_repo_proof.native_event_outbox SET blocked_at=clock_timestamp() WHERE did=$1",[did]);
     assert.equal((await bootstrapReader.query(hostedScope,[did])).rowCount,0);
     assert.equal((await bootstrapReader.query(readGenesis,bootstrapScope)).rowCount,0);

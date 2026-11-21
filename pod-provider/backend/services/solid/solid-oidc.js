@@ -12,6 +12,7 @@ const { allowedOrigin } = require('../../config/oidc-cors-policy');
 
 const { paperAppAccess } = require('../../candidates/local-paper-app-access');
 
+const localSignupApp = require('../../candidates/local-signup-app').createLocalSignupApp();
 const validatedRequests = new WeakMap();
 
 module.exports = {
@@ -41,7 +42,7 @@ module.exports = {
     const findAccount = config.findAccount;
     // This hook also runs when exchanging an authorization or refresh token.
     config.findAccount = async (ctx, owner, token) => {
-      if (!await paperAppAccess(this.broker, owner, ctx.oidc.client?.clientId, this.settings.baseUrl)) {
+      if (!await paperAppAccess(this.broker, owner, ctx.oidc.client?.clientId ?? token?.clientId, this.settings.baseUrl)) {
         throw new errors.AccessDenied('The owner has not granted the required application access');
       }
       return findAccount(ctx, owner, token);
@@ -86,7 +87,8 @@ module.exports = {
             json: true
           },
           aliases: {
-            'POST /': 'solid-oidc.loginCompleted'
+            'GET /': (req, res, next) => this.browserInteraction(req, res, false).catch(next),
+            'POST /': (req, res, next) => this.browserInteraction(req, res, true).catch(next)
           }
         }
       });
@@ -189,15 +191,6 @@ module.exports = {
         throw new Error('OIDC server not loaded');
       }
     },
-    // See https://github.com/panva/node-oidc-provider/blob/main/docs/README.md#user-flows
-    async loginCompleted(ctx) {
-      const { interactionId } = ctx.params;
-      const webId = ctx.meta.webId;
-
-      await this.interactionFinished(interactionId, {
-        login: { accountId: webId, amr: ['pwd'], remember: true }
-      });
-    }
   },
   methods: {
     async verifyDpopRequest(req, token, payload) {
@@ -246,14 +239,45 @@ module.exports = {
       // Raw bearer tokens and signed proofs must not remain in a cache.
       validatedRequests.set(req, fingerprint);
     },
-    async interactionFinished(interactionId, result) {
-      const interaction = await this.oidc.Interaction.find(interactionId);
-      if (interaction) {
-        interaction.result = result;
-        await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
-      } else {
-        throw new Error(`No interaction found with ID ${interactionId}. It may have expired.`);
+    async browserInteraction(req, res, submit) {
+      const interaction = await this.oidc.interactionDetails(req, res);
+      if (interaction.prompt?.name !== 'login' || interaction.result) {
+        throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
       }
+      res.setHeader('Cache-Control', 'no-store');
+      if (!submit) {
+        const login = new URL('login', this.settings.frontendUrl);
+        login.searchParams.set('interaction_id', interaction.uid);
+        login.searchParams.set('client_id', interaction.params.client_id);
+        login.searchParams.set('redirect', interaction.returnTo);
+        if (interaction.params.is_signup === 'true' && req.$params.enrolled !== '1') {
+          login.searchParams.set('signup', 'true');
+          if (process.env.NODE_ENV === 'test' && process.env.PAPER_BROWSER_ENROLLMENT_DISPOSABLE === 'confirmed' &&
+              interaction.params.client_id === localSignupApp.appUri) login.searchParams.set('verified_signup', '1');
+        }
+        res.writeHead(303, { Location: login.href });
+      } else {
+        const { user, webId } = req.$ctx.meta;
+        if (!user?.webId || user.webId !== webId || user.azp || req.headers.signature ||
+            req.$params.interactionId !== interaction.uid ||
+            !await paperAppAccess(this.broker, webId, interaction.params.client_id, this.settings.baseUrl)) {
+          throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
+        }
+        // Serialize concurrent submissions across replicas. If the write has
+        // an unknown outcome, the browser can start a new authorization.
+        const ttl = interaction.exp - Math.floor(Date.now() / 1000);
+        if (!Number.isSafeInteger(ttl) || ttl < 1 || ttl > 10800 ||
+            await this.dpopRedis.set('login-completion:' + interaction.uid, '1', 'EX', ttl, 'NX') !== 'OK') {
+          throw new E.UnAuthorizedError(E.ERR_INVALID_TOKEN);
+        }
+        const returnTo = await this.oidc.interactionResult(req, res, {
+          login: { accountId: webId, remember: true }
+        }, { mergeWithLastSubmission: false });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ returnTo }));
+        return;
+      }
+      res.end();
     }
   }
 };

@@ -65,6 +65,17 @@ function localNativeAccountStore(env = process.env) {
         }
         return {where, values};
       }
+      schema.actions ??= {};
+      schema.actions.providerOwnerReady = {
+        visibility: 'protected',
+        async handler(ctx) {
+          const { signupReservationId, webId, username } = ctx.params;
+          if (!uuid.test(signupReservationId)) return false;
+          const result = await execute('SELECT paper_private_auth.owner_ready($1,$2,$3) AS ready',
+            [signupReservationId, webId, username]);
+          return result.rows[0]?.ready === true;
+        }
+      };
       schema.adapter = {
         init() {
           pool = new Pool({connectionString:url.href, max:4, connectionTimeoutMillis:2500,

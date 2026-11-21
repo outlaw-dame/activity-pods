@@ -30,13 +30,17 @@ LANGUAGE sql STABLE STRICT SECURITY DEFINER SET search_path=pg_catalog,pg_temp A
   JOIN paper_atproto_repo_proof.blocks root_bytes ON root_bytes.did=repo.did AND root_bytes.cid=repo.root_cid
   WHERE r.reservation_id=p_reservation AND s.operation_id=p_operation AND repo.did=p_did
     AND r.v4_bound_at IS NOT NULL AND r.signup_claimed_at IS NOT NULL
-    AND r.state='side_effects_started' AND r.provider_id=s.provider_id||'/provider'
+    AND r.provider_id=s.provider_id||'/provider'
     AND r.username=a.username_key AND r.expected_webid=a.webid
     AND a.webid=a.provider_id||'/'||r.username AND a.activitypub_actor_uri=a.webid
     AND a.atproto_pds_url=a.provider_id AND a.atproto_repo_initialized
-    AND s.state IN ('reconciliation_required','evidence_sealed') AND s.may_have_side_effects
+    AND ((a.state='provisioning' AND r.state='side_effects_started' AND s.state IN ('reconciliation_required','evidence_sealed'))
+      OR (a.state='ready' AND r.state='completed' AND s.state='ready' AND s.completion_grant_uri IS NULL
+        AND r.evidence_hash=s.evidence_digest AND job.state='applied' AND job.lease_epoch=s.evidence_fence
+        AND (repo.head_cid,repo.root_cid,repo.rev)=(s.evidence_commit_cid,s.evidence_root_cid,s.evidence_rev)))
+    AND s.may_have_side_effects
     AND s.enrollment_state='consent_recorded' AND s.enrollment_app_uri=s.app_client_id
-    AND a.state='provisioning' AND repo.generation=1 AND job.state<>'blocked'
+    AND repo.generation=1 AND job.state<>'blocked'
     AND event.kind='at.commit.v1' AND event.blocked_at IS NULL;
 $$;
 REVOKE ALL ON FUNCTION paper_account_reservation_proof.read_provider_genesis(uuid,uuid,text) FROM PUBLIC;

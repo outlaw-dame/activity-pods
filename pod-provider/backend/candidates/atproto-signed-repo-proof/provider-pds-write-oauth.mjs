@@ -140,6 +140,8 @@ export function createProviderPdsWriteAuthorization({
          !consent||consent.revoked!==false||
          consent.canonicalAccountId!==webId||
          consent.clientId!==clientId||
+         !/^[A-Za-z0-9_-]{32}$/u.test(latest.consent_grant_id||'')||
+         latest.consent_grant_id!==consent.grantId||
          !scopeAllows(consent.scope,collection,action)||
          grant?.state!=='active'||
          grant?.did!==did||

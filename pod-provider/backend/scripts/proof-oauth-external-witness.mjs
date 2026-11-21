@@ -9,6 +9,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import pg from 'pg';
 import Redis from 'ioredis';
+import {generateKeyPair,exportJWK} from 'jose';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const oauthToken=require('../services/oauth/oauth-token.service.js');
+const {createDisposableOauthWitnessReader}=require('../candidates/oauth-external-witness-reader.js');
 const mainDsn='postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test';
 const witnessDsn='postgres://witness_probe:fixture_witness_only@127.0.0.1:5550/oauth_witness_disposable';
 const redisUrl='redis://127.0.0.1:6398';
@@ -16,6 +21,7 @@ if(process.env.NODE_ENV!=='test'||
    process.env.PAPER_OAUTH_PG_RESTORE_DISPOSABLE!=='confirmed'||
    process.env.PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE!=='confirmed'||
    process.env.PAPER_OAUTH_WITNESS_DISPOSABLE!=='confirmed'||
+   process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE!=='confirmed'||
    process.env.PAPER_OAUTH_PG_RESTORE_DSN!==mainDsn||
    process.env.PAPER_OAUTH_WITNESS_DSN!==witnessDsn||
    process.env.PAPER_OAUTH_EPOCH_REDIS_URL!==redisUrl){
@@ -38,6 +44,7 @@ const hash=s=>crypto.createHash('sha256').update(s).digest();
 const grant1=crypto.randomBytes(24).toString('base64url');
 const grant2=crypto.randomBytes(24).toString('base64url');
 const redisKey='paper:oauth:witness-proof:'+salt;
+const consentKey='paper:oauth:witness:'+salt;
 const roles={issuer:'paper_oauth_witness_issuer',
   revoker:'paper_oauth_witness_revoker',
   attestor:'paper_oauth_witness_attestor',
@@ -132,6 +139,7 @@ async function mainTest(){
   await main.query(await sql('../sql/paper-atproto-canonical-authority-v1.sql'));madeMain=true;
   await main.query(await sql('../sql/paper-atproto-canonical-authority-v2-owner-consent.sql'));
   await main.query(await sql('../sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'));
+  await main.query(await sql('../sql/paper-atproto-canonical-authority-v5-oauth-current.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v1.sql'));madeWitness=true;
   // pg@9 no longer guarantees queued concurrent query() calls on one
   // connection; create each independently authenticated role serially.
@@ -172,10 +180,73 @@ async function mainTest(){
     '$1,$2,$3,$4::bigint) AS rev',
     [owner,clientId,grant,expected]
   )).rows[0].rev);
+
+  const witnessReader=createDisposableOauthWitnessReader({
+    pool:{async connect(){return {query:q=>reader.query(q),release(){}}}},
+    clientIds:[clientId],fixtureOnly:true
+  });
+  const unsuitableReader=createDisposableOauthWitnessReader({
+    pool:{async connect(){return {query:q=>root.query(q),release(){}}}},
+    clientIds:[clientId],fixtureOnly:true
+  });
+  const identity=(grant,epoch)=>({
+    sub:did,canonicalAccountId:owner,clientId,scope,
+    consentGrantId:grant,oauthPgRevision:epoch,dpopJkt:'a'.repeat(43)
+  });
+  await assert.rejects(unsuitableReader.verify(identity(grant1,'1')),
+    e=>e?.code==='PG_OAUTH_WITNESS_ROLE_UNSAFE');
+  await assert.rejects(witnessReader.verify({...identity(grant1,'1'),
+    clientId:'https://attacker.example.org/oauth'}),
+    e=>e?.code==='PG_OAUTH_WITNESS_SCOPE_INVALID');
+  const {privateKey,publicKey}=await generateKeyPair('ES256',{extractable:true});
+  const privateJwk={...await exportJWK(privateKey),alg:'ES256'};
+  const publicJwk={...await exportJWK(publicKey),alg:'ES256'};
+  const tokenState={
+    settings:{issuer:'https://paper.example.org',
+      audience:'https://paper.example.org',accessTtlSec:300},
+    ...oauthToken.methods
+  };
+  const pgCall=async(name,p)=>{
+    if(name==='jwk.get')return {privateJwk,publicJwk};
+    if(name==='oauth-consent.get'){
+      const r=await redis.get(consentKey);
+      return r?JSON.parse(r):null;
+    }
+    if(name==='oauth-witness-epoch.verify')return witnessReader.verify(p);
+    if(name==='oauth-pg-epoch.current'){
+      if(p.canonicalAccountId!==owner||p.clientId!==clientId||
+         p.scope!==scope)return null;
+      const q=await main.query(
+        'SELECT paper_atproto_authority.current_oauth_generation('+
+        '$1,$2,$3,$4,$5) AS revision',
+        [owner,app,clientId,p.consentGrantId,scopeHash]);
+      return q.rows[0].revision===null?null:String(q.rows[0].revision);
+    }
+    if(name==='oauth-pg-epoch.verify'){
+      if(p.canonicalAccountId!==owner||p.clientId!==clientId||
+         p.scope!==scope)return false;
+      return current(main,p.consentGrantId,p.oauthPgRevision);
+    }
+    throw Error('Unexpected OAuth witness proof service '+name);
+  };
+  const pgCtx={call:pgCall};
+  const issueToken=async(grant,epoch)=>
+    oauthToken.methods.issueAccessToken.call(tokenState,identity(grant,epoch),pgCtx);
+  const introspect=async(jwt,ctx=pgCtx)=>
+    oauthToken.actions.introspectAccessToken.handler.call(tokenState,
+      {call:ctx.call,params:{token:jwt}});
+  const redisOld=JSON.stringify({canonicalAccountId:owner,clientId,
+    scope,grantId:grant1,revoked:false});
+  assert.equal(await redis.set(consentKey,redisOld,'EX',180),'OK');
+  const redisSnapshot=await redis.dumpBuffer(consentKey);
+  assert.ok(Buffer.isBuffer(redisSnapshot));
+
   const op1=crypto.randomUUID();
   assert.equal(await transition(issuer,'active',grant1,0,op1),'1');
   assert.equal(await issuePg(grant1,0),'1');
   assert.equal(await admitted(reader,grant1,1),false,'Unsealed witness must never authorize');
+  await assert.rejects(issueToken(grant1,'1'),e=>e?.type==='INVALID_GRANT',
+    'An unsealed witness must block real signed JWT issuance');
   const digest1=await receipt(attestor,op1,1);
   assert.ok(Buffer.isBuffer(digest1)&&digest1.length===32);
   // WORM readback is test-double logic: immutable and append-only in-process,
@@ -191,12 +262,24 @@ async function mainTest(){
   assert.equal(await seal(attestor,op1,1,hash('forged receipt')),false);
   assert.equal(await seal(attestor,op1,1,digest1),true);
   assert.equal(await admitted(reader,grant1,1),true);
+  const firstJwt=await issueToken(grant1,'1');
+  assert.equal((await introspect(firstJwt)).active,true);
+  await assert.rejects(issueToken(grant1,undefined),
+    e=>e?.type==='INVALID_GRANT');
+  const unavailableCtx={call:async(name,p)=>{
+    if(name==='oauth-witness-epoch.verify')throw Error('Witness network partition');
+    return pgCall(name,p);
+  }};
+  assert.equal((await introspect(firstJwt,unavailableCtx)).active,false,
+    'A cached signed JWT must not survive independent witness outage');
+  await assert.rejects(oauthToken.methods.issueAccessToken.call(
+    tokenState,identity(grant1,'1'),unavailableCtx),
+    e=>e?.type==='INVALID_GRANT');
+  assert.equal((await introspect(firstJwt)).active,true,
+    'Witness recovery may resume without cached positive authority');
 
-  const consentKey='paper:oauth:witness:'+salt;
-  const redisOld=JSON.stringify({owner,clientId,grantId:grant1,revoked:false});
-  assert.equal(await redis.set(consentKey,redisOld,'EX',180),'OK');
-  const redisSnapshot=await redis.dumpBuffer(consentKey);
-  assert.ok(Buffer.isBuffer(redisSnapshot));
+  assert.equal(JSON.parse(await redis.get(consentKey)).revoked,false,
+    'Active Redis grant remains the pre-revocation snapshot');
 
   // ACK revocation in independent witness FIRST, before even attempting
   // canonical PG and ephemeral Redis; no cross-store distributed atomicity.
@@ -204,6 +287,9 @@ async function mainTest(){
   assert.equal(await transition(revoker,'blocked',grant1,1,revokeOp),'2');
   assert.equal(await admitted(reader,grant1,1),false,
     'Independent witness must deny old token immediately');
+  assert.equal((await introspect(firstJwt)).active,false,
+    'The signed JWT must be denied immediately on witness ACK');
+  await assert.rejects(issueToken(grant1,'1'),e=>e?.type==='INVALID_GRANT');
   assert.equal(await revokePg(grant1,1),'2');
   await redis.set(consentKey,JSON.stringify({owner,clientId,grantId:grant1,revoked:true}),'EX',180);
   const digest2=await receipt(attestor,revokeOp,2);
@@ -224,6 +310,8 @@ async function mainTest(){
   assert.equal(JSON.parse(await redis.get(consentKey)).revoked,false);
   assert.equal(await admitted(reader,grant1,1),false,
     'Independently intact witness rejects both restored PG and Redis');
+  assert.equal((await introspect(firstJwt)).active,false,
+    'Restored PG and Redis cannot reactivate a real signed JWT');
   assert.equal(await transition(issuer,'active',grant2,1,crypto.randomUUID()),'0');
   assert.equal(await transition(revoker,'blocked',grant1,1,crypto.randomUUID()),'0');
   const op3=crypto.randomUUID();
@@ -236,11 +324,20 @@ async function mainTest(){
     "UPDATE paper_atproto_authority.oauth_generations SET state='blocked',"+
     'revision=2 WHERE owner_webid=$1',[owner]);
   assert.equal(await issuePg(grant2,2),'3');
+  assert.equal(await redis.set(consentKey,JSON.stringify({
+    canonicalAccountId:owner,clientId,scope,grantId:grant2,revoked:false
+  }),'EX',180),'OK');
   assert.equal(await admitted(reader,grant2,3),false);
+  await assert.rejects(issueToken(grant2,'3'),
+    e=>e?.type==='INVALID_GRANT',
+    'A real JWT signer must reject an unsealed new epoch');
   const digest3=await receipt(attestor,op3,3);
   putOnce(objectKey(3),digest3);
   assert.equal(await seal(attestor,op3,3,digest3),true);
   assert.equal(await admitted(reader,grant2,3),true);
+  const secondJwt=await issueToken(grant2,'3');
+  assert.equal((await introspect(secondJwt)).active,true);
+  assert.equal((await introspect(firstJwt)).active,false);
   assert.equal(await admitted(reader,grant1,1),false);
   const oldOp=crypto.randomUUID();
   assert.equal(await transition(issuer,'active',grant1,3,oldOp),'0',
@@ -248,8 +345,9 @@ async function mainTest(){
   const op4=crypto.randomUUID();
   assert.equal(await transition(revoker,'blocked',grant2,3,op4),'4');
   assert.equal(await admitted(reader,grant2,3),false);
+  assert.equal((await introspect(secondJwt)).active,false);
   assert.equal(await transition(revoker,'blocked',grant2,3,crypto.randomUUID()),'0');
-  console.log('PASS: two independent PostgreSQL18 clusters, issuer/revoker/attestor/reader privilege isolation, unsealed deny, revoked witness survives restored PG and Redis, stale epoch replay blocked; release CLOSED');
+  console.log('PASS: two independent PostgreSQL18 clusters, restricted reader, real signed JWT issue/introspection fail closed on witness outage, unsealed transition and restored PG/Redis, stale epoch replay; release CLOSED');
 }
 const watchdog=setTimeout(()=>{console.error('Witness proof timed out');process.exit(1)},100000);
 try{await mainTest()}catch(e){error=e;process.exitCode=1;console.error(e?.stack||String(e))}

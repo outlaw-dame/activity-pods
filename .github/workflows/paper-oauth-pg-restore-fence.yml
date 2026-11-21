@@ -16,6 +16,7 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
+      - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
   push:
     branches: [master]
     paths:
@@ -30,6 +31,7 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
+      - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
   workflow_dispatch:
 
 permissions:
@@ -89,7 +91,6 @@ jobs:
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
-      PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_DSN: postgres://witness_probe:fixture_witness_only@127.0.0.1:5550/oauth_witness_disposable
     steps:
       - name: Checkout pinned source without persistent credentials
@@ -105,6 +106,7 @@ jobs:
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
+          node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
           node --check pod-provider/backend/candidates/oauth-pg-epoch-reader.js
           node --check pod-provider/backend/utils/oauth-pg-epoch-policy.js
           node --check pod-provider/backend/services/oauth/oauth-token.service.js
@@ -126,6 +128,8 @@ jobs:
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
       - name: Prove separated witness survives primary PG and Redis rollback
+        env:
+          PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
         run: |
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-external-witness.mjs

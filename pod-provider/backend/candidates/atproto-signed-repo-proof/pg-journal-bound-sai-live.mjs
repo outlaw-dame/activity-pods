@@ -11,6 +11,7 @@ import {createDisposableNativeSaiReader} from './native-sai-pg-consent-attestor.
 import {createDisposableJournalBoundSaiAttestor} from './journal-bound-sai-pg-attestor.mjs';
 const require=createRequire(import.meta.url);
 const {createCanonicalAtprotoPgAuthority}=require('../../utils/atproto-canonical-pg-authority.js');
+const {createDisposableJournalBoundConsentIssuer}=require('../journal-bound-consent-issuer');
 const DSN='postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test';
 if(process.env.NODE_ENV!=='test'||
  process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE!=='confirmed'||
@@ -214,6 +215,13 @@ try{
  await denied(attestor,'SELECT paper_atproto_authority.begin_bound_owner_consent($1,$2)',
   [owner.reservation,owner.operation]);
  await seed(owner);await seed(incomplete,rights.slice(0,2));await seed(pending);
+ const issuerApi=createDisposableJournalBoundConsentIssuer({
+  pool:issuer,providerId:base,browserOrigin:'https://app-e2e.test:3443',
+  fixtureOnly:true
+ });
+ await assert.rejects(issuerApi.reserve({
+  providerId:base,origin:'https://attacker.example.org',tokenHash:owner.tokenHash
+ }),e=>e?.code==='OWNER_CONSENT_ISSUER_SCOPE_INVALID');
  // A forged app-scope alias in a previously bridged reservation is not
  // sufficient just because its copied v4_app_client_id still matches.
  await admin.query('UPDATE paper_account_reservation_proof.reservations '+
@@ -230,7 +238,9 @@ try{
  assert.equal(await begin(issuer,{...owner,provider:'https://another.example.org'}),false);
  assert.equal(await begin(issuer,incomplete),false,'Missing ManageMembers must fail');
  assert.equal(await state(incomplete),null);
- assert.equal(await begin(issuer,owner),true);
+ assert.equal(await issuerApi.reserve({
+  providerId:base,origin:'https://app-e2e.test:3443',tokenHash:owner.tokenHash
+ }),true,'Real restricted issuer grants only canonical pending owner consent');
  assert.equal(await begin(issuer,owner),true,'Idempotent lost BEGIN acknowledgement');
  assert.equal((await state(owner)).state,'pending');
  const api=createCanonicalAtprotoPgAuthority({pool:revoker});

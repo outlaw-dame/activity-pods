@@ -239,6 +239,30 @@ async function main(){
     refreshState,{...pgCtx,params:{refreshToken:firstResult.refresh_token}});
   assert.equal(liveRefresh.active,true);
   assert.equal(liveRefresh.oauthPgRevision,'1');
+  // A previously successful primary-PG read may never cache "allowed".
+  // Losing the PG authority must invalidate the *same* unexpired JWT and
+  // prevent new codes/refreshes even while Redis still says active.
+  const outageCall=(name,args)=>{
+    if(name.startsWith('oauth-pg-epoch.'))throw Error('Injected primary PG outage');
+    return pgCall(name,args);
+  };
+  assert.equal((await oauthToken.actions.introspectAccessToken.handler.call(
+    tokenState,{call:outageCall,params:{token:firstResult.access_token}})).active,false);
+  await assert.rejects(oauthRefresh.actions.issueRefreshToken.handler.call(
+    refreshState,{call:outageCall,params:{...identity(initial,'1'),did}}),
+    e=>e?.type==='INVALID_GRANT');
+  await assert.rejects(oauthCode.actions.issueCode.handler.call(
+    codeState,{call:outageCall,params:codeArgs(initial)}),
+    e=>e?.type==='INVALID_GRANT');
+  assert.equal((await introspect(firstResult.access_token)).active,true,
+    'Healthy primary PG must admit same epoch without stale negative cache');
+  // A LOGIN holding the issuer role may not impersonate the reader.
+  const wrongRole=pgEpochReader.createDisposableOauthPgEpochReader({
+    pool:{async connect(){return {query:q=>issuerA.query(q),release(){}}}},
+    approvedApps:[{clientId,appUri:app}],fixtureOnly:true
+  });
+  await assert.rejects(wrongRole.current(identity(initial,'1')),
+    e=>e?.code==='PG_OAUTH_EPOCH_ROLE_UNSAFE');
   const preRevokeCode=await createCode(initial);
   const redisConsentSnapshot=await redis.dumpBuffer(consentRedisKey);
   assert.ok(Buffer.isBuffer(redisConsentSnapshot));

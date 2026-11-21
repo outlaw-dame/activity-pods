@@ -17,13 +17,29 @@ module.exports = {
   },
 
   created() {
-    this.redis = new Redis(this.settings.redisUrl);
+    // Never queue or automatically replay a one-use Redis operation after
+    // disconnect or an ambiguously acknowledged write.
+    this.redis = new Redis(this.settings.redisUrl, {
+      lazyConnect: true, enableOfflineQueue: false,
+      autoResendUnfulfilledCommands: false,
+      connectTimeout: 2500, maxRetriesPerRequest: 1
+    });
+  },
+
+  async started() {
+    await this.redis.connect();
+    if (await this.redis.ping() !== 'PONG') {
+      throw new Error('OAuth consent challenge Redis unavailable');
+    }
   },
 
   async stopped() {
-    if (this.redis) {
-      await this.redis.quit().catch(() => this.redis.disconnect());
+    if (!this.redis) return;
+    if (this.redis.status !== 'ready') {
+      this.redis.disconnect();
+      return;
     }
+    await this.redis.quit().catch(() => this.redis.disconnect());
   },
 
   actions: {
@@ -47,7 +63,11 @@ module.exports = {
           createdAt: now,
           expiresAt: now + ttlSec
         };
-        await this.redis.set(`${this.settings.keyPrefix}:${challengeId}`, JSON.stringify(record), 'EX', ttlSec);
+        const persisted = await this.redis.set(
+          `${this.settings.keyPrefix}:${challengeId}`,
+          JSON.stringify(record), 'EX', ttlSec
+        );
+        if (persisted !== 'OK') throw new Error('OAuth consent challenge persistence unavailable');
         return record;
       }
     },
@@ -58,9 +78,10 @@ module.exports = {
       },
       async handler(ctx) {
         const key = `${this.settings.keyPrefix}:${ctx.params.challengeId}`;
-        const raw = await this.redis.get(key);
+        // Single-use challenge must have one winner across provider replicas.
+        // Do not replay GETDEL when its acknowledgment is uncertain.
+        const raw = await this.redis.getdel(key);
         if (!raw) return null;
-        await this.redis.del(key);
         return JSON.parse(raw);
       }
     },

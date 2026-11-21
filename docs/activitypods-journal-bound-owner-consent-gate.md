@@ -205,3 +205,30 @@ under `backend/services/oauth/` before integration testing. This failure
 was **not** detected by isolated real-Redis tests; the full production-mode
 staging provider-startup test is an independent mandatory acceptance check.
 The private AES key stays required, and no signup/SAI/PDS release fuse changes.
+
+## OAuth front-channel single-use race hardening (2026-11-21 candidate)
+
+The existing PAR and owner consent-challenge implementations used Redis
+GET followed by DEL. On separate provider replicas, both callers could read
+the same one-time record before either deletion. The new implementation
+uses atomic Redis 8.2 GETDEL for both consumption paths, matching
+authorization-code and DPoP nonce behavior.
+
+PAR, consent-challenge and DPoP nonce services now refuse offline command
+queueing and auto-resend of unacknowledged Redis commands. Startup requires
+Redis connection readiness and PONG. PAR/challenge/nonce creation requires
+an explicit OK acknowledgment before returning a browser-useable value.
+An unknown GETDEL acknowledgment is a *burned/uncertain* request:
+never retry it blindly, fail closed and issue a fresh owner-authenticated
+authorization interaction instead.
+
+`pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js`
+runs against actual Redis 8.2 through two separate clients, verifies
+at most one winner for PAR, consent challenge and DPoP nonce, and
+deterministically forbids the previous GET + DEL implementation. The
+workflow checks the test script and all three service modules, and runs
+the existing OAuth refresh/DPoP acceptance independently.
+
+This is a nonactivated security hardening gate. It does not provide the
+outstanding PostgreSQL restore-epoch fence, protected owner SAI
+deployment, hosted PDS, or positive production signup readiness.

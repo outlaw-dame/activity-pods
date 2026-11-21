@@ -5,12 +5,16 @@ on:
     paths:
       - '.github/workflows/paper-oauth-consent-epoch-proof.yml'
       - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-consent-challenge.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-par.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-dpop-nonce.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/services/oauth/oauth-authorization.service.js'
       - 'pod-provider/backend/services/oauth/oauth-token.service.js'
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/utils/oauth-refresh-atomic-policy.js'
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
+      - 'pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
   push:
@@ -19,6 +23,7 @@ on:
       - '.github/workflows/paper-oauth-consent-epoch-proof.yml'
       - 'pod-provider/backend/services/oauth/**'
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
+      - 'pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
   workflow_dispatch:
@@ -68,6 +73,9 @@ jobs:
         run: |
           set -euo pipefail
           node --check pod-provider/backend/services/oauth/oauth-consent.service.js
+          node --check pod-provider/backend/services/oauth/oauth-consent-challenge.service.js
+          node --check pod-provider/backend/services/oauth/oauth-par.service.js
+          node --check pod-provider/backend/services/oauth/oauth-dpop-nonce.service.js
           node --check pod-provider/backend/services/oauth/oauth-code-store.service.js
           node --check pod-provider/backend/services/oauth/oauth-authorization.service.js
           node --check pod-provider/backend/services/oauth/oauth-token.service.js
@@ -88,12 +96,17 @@ jobs:
           console.log('PASS: OAuth utilities excluded from Moleculer recursive service loader');
           NODE
           node --check pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js
+          node --check pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js
           node --check pod-provider/backend/scripts/proof-provider-pds-oauth.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs
       - name: Install exact locked backend runtime without package scripts
         run: |
           set -euo pipefail
           npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Verify Redis 8.2 single-use PAR, consent challenge and DPoP nonce
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js
       - name: Verify Redis 8.2 consent epoch and two-replica refresh CAS
         run: |
           set -euo pipefail

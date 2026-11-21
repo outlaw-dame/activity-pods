@@ -55,15 +55,22 @@ async function bounded(work) {
 }
 
 function createProviderBrowserEnrollment({ pool, providerId, appClientId, appUri,
-  browserOrigin, returnUri, csrfKey, loadRequirements, registerApp, fixtureOnly = false } = {}) {
+  browserOrigin, returnUri, csrfKey, loadRequirements, registerApp,
+  reserveOwnerConsent, journalBoundConsent = false, fixtureOnly = false } = {}) {
   url(providerId, true); url(appClientId); url(appUri); url(browserOrigin, true); url(returnUri);
   if (!pool?.connect || !Buffer.isBuffer(csrfKey) || csrfKey.length !== 32 ||
-      typeof loadRequirements !== 'function' || typeof registerApp !== 'function') deny('ENROLLMENT_CONFIGURATION_INVALID');
+      typeof loadRequirements !== 'function' || typeof registerApp !== 'function' ||
+      typeof journalBoundConsent !== 'boolean' ||
+      (journalBoundConsent && typeof reserveOwnerConsent !== 'function') ||
+      (!journalBoundConsent && reserveOwnerConsent !== undefined)) deny('ENROLLMENT_CONFIGURATION_INVALID');
   const key = Buffer.from(csrfKey);
   const gate = () => {
     if (fixtureOnly !== true || process.env.NODE_ENV !== 'test' ||
         process.env.PAPER_ACCOUNTS_DISPOSABLE !== 'confirmed' ||
-        process.env.PAPER_BROWSER_ENROLLMENT_DISPOSABLE !== 'confirmed') deny('ENROLLMENT_NOT_RELEASED');
+        process.env.PAPER_BROWSER_ENROLLMENT_DISPOSABLE !== 'confirmed' ||
+        (journalBoundConsent && process.env.PAPER_JOURNAL_BOUND_SAI_DISPOSABLE !== 'confirmed')) {
+      deny('ENROLLMENT_NOT_RELEASED');
+    }
   };
   const csrf = token => crypto.createHmac('sha256', key)
     .update('paper:enrollment:csrf:v1\0').update(browserOrigin).update('\0').update(token).digest('base64url');
@@ -169,6 +176,21 @@ function createProviderBrowserEnrollment({ pool, providerId, appClientId, appUri
       [providerId, session.tokenHash, hash('csrf', csrfToken), browserOrigin, approve, selection && JSON.stringify(selection)]);
     if (claim.rows[0]?.allowed !== true) deny('ENROLLMENT_ALREADY_CLAIMED');
     if (!approve) return { state: 'denied' };
+    if (journalBoundConsent) {
+      // Only a successfully claimed, immutable owner approval may reserve a
+      // PENDING canonical grant. The hashed HttpOnly session token and fixed
+      // provider/origin are resolved by a *separate restricted PG issuer* to
+      // the exact existing signup journal and reservation.
+      //
+      // If this write is ambiguous, do NOT attempt the native SAI mutation or
+      // replay the claim. The journal stays consent_claimed until reconciled.
+      try {
+        const admitted = await bounded(() => reserveOwnerConsent({
+          providerId, origin: browserOrigin, tokenHash: Buffer.from(session.tokenHash)
+        }));
+        if (admitted !== true) throw Error('Canonical pending consent was not admitted');
+      } catch { deny('ENROLLMENT_CONSENT_RECONCILIATION_REQUIRED'); }
+    }
     // One call only. A timeout, crash or lost acknowledgment leaves the SQL
     // claim fenced. No replay is allowed to create another native SAI grant.
     let registrationUri;

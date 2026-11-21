@@ -116,10 +116,14 @@ async function main(){
     'activation_operation,activation_request_sha256,activation_native_readback_at) '+
     "VALUES ($1,$2,$3,'active',1,$4,$5,$4,clock_timestamp())",
     [owner,app,grantUri,sourceHash,crypto.randomUUID()]);
-  const [issuerA,issuerB,reader,revokerA,revokerB,signer]=await Promise.all([
-    login('issuer'),login('issuer'),login('reader'),
-    login('revoker'),login('revoker'),login('signer')
-  ]);
+  // A single admin client must not accept concurrent query() calls:
+  // pg@9 removes its implicit queuing. Workers below use independent logins.
+  const issuerA=await login('issuer');
+  const issuerB=await login('issuer');
+  const reader=await login('reader');
+  const revokerA=await login('revoker');
+  const revokerB=await login('revoker');
+  const signer=await login('signer');
   await assert.rejects(reader.query(issueSql,
     [...params(crypto.randomBytes(24).toString('base64url'),0),1]),
     e=>e?.code==='42501');
@@ -138,8 +142,13 @@ async function main(){
   assert.equal(await verify(reader,initial,1),true);
   assert.equal(await verify(reader,initial,2),false);
   assert.equal(await verify(reader,initial,1,crypto.randomBytes(32)),false);
-  assert.equal(await issue(issuerA,initial,1),0,
+  assert.equal(await issue(issuerA,initial,1),'0',
     'Identical grant must not be reissued at a higher revision');
+
+  // Capture a Redis pre-revocation grant snapshot before the PG revoke.
+  const priorRedis=JSON.stringify({canonicalAccountId:owner,clientId,scope,
+    grantId:initial,revoked:false});
+  await redis.set(redisKey,priorRedis,'EX',120);
 
   // The signer holds an exact-PG-transaction lock through a signed write.
   // OAuth revocation cannot acknowledge ahead of that transaction commit.
@@ -157,18 +166,32 @@ async function main(){
 
   // Redis can be restored to a pre-revocation grant without changing the
   // canonical PG generation: its active record must remain unauthorized.
-  const priorRedis=JSON.stringify({canonicalAccountId:owner,clientId,scope,
-    grantId:initial,revoked:false});
+  await redis.set(redisKey,JSON.stringify({canonicalAccountId:owner,
+    clientId,scope,grantId:initial,revoked:true}),'EX',120);
+  assert.equal(JSON.parse(await redis.get(redisKey)).revoked,true);
+  // Simulate Redis restoring its older AOF/RDB content after PG revocation.
   await redis.set(redisKey,priorRedis,'EX',120);
   assert.equal(JSON.parse(await redis.get(redisKey)).revoked,false);
   assert.equal(await verify(reader,initial,1),false,
     'Redis rollback must not resurrect a PG-revoked token');
   const second=crypto.randomBytes(24).toString('base64url');
-  assert.equal(await issue(issuerA,second,2),3);
+  assert.equal(await issue(issuerA,second,2),'3');
   assert.equal(await verify(reader,initial,1),false);
   assert.equal(await verify(reader,second,3),true);
   assert.equal(await redis.get(redisKey),priorRedis,
     'A restored Redis grant may lag; canonical PG still wins');
+  // Both independent authorities must agree. A new PG grant must not be
+  // admitted while Redis still contains an older restored generation.
+  async function bothAgree(grant,revision){
+    const r=JSON.parse(await redis.get(redisKey));
+    return r.grantId===grant&&r.revoked===false&&r.scope===scope&&
+      await verify(reader,grant,revision);
+  }
+  assert.equal(await bothAgree(initial,1),false);
+  assert.equal(await bothAgree(second,3),false);
+  await redis.set(redisKey,JSON.stringify({canonicalAccountId:owner,
+    clientId,scope,grantId:second,revoked:false}),'EX',120);
+  assert.equal(await bothAgree(second,3),true);
 
   // Two distinct revokers cannot both acknowledge the same revocation.
   const secondRace=await Promise.all([
@@ -176,14 +199,14 @@ async function main(){
   ]);
   assert.deepEqual(secondRace.slice().sort(),['0','4']);
   assert.equal(await verify(reader,second,3),false);
-  assert.equal(await revoke(revokerB,second,3),0);
+  assert.equal(await revoke(revokerB,second,3),'0');
 
   // A native SAI revoke blocks even a new OAuth reapproval.
   const third=crypto.randomBytes(24).toString('base64url');
-  assert.equal(await issue(issuerA,third,4),5);
+  assert.equal(await issue(issuerA,third,4),'5');
   await admin.query("UPDATE paper_atproto_authority.consents SET state='blocked',revision=revision+1 WHERE owner_webid=$1 AND app_uri=$2",[owner,app]);
   assert.equal(await verify(reader,third,5),false);
-  assert.equal(await issue(issuerB,crypto.randomBytes(24).toString('base64url'),5,2),0);
+  assert.equal(await issue(issuerB,crypto.randomBytes(24).toString('base64url'),5,2),'0');
   assert.equal((await signer.query(lockSql,params(third,5))).rows[0].allowed,false);
   await redis.set(redisKey,priorRedis,'EX',120);
   assert.equal(await verify(reader,initial,1),false);

@@ -138,6 +138,9 @@ async function main(){
  assert.equal(redeemed.filter(x=>x.status==='fulfilled').length,1);
  assert.equal(redeemed.filter(x=>x.status==='rejected').length,1);
  assert.equal(redeemed.find(x=>x.status==='fulfilled').value.consentGrantId,old.grantId);
+ const delayedCode=await code.actions.issueCode.handler.call(
+  {redis:one,settings:codeSettings},{params:codeParams}
+ );
 
  // Old access tokens stay cryptographically signed and unexpired, yet
  // become unauthorized immediately on revoke and never revive on regrant.
@@ -146,6 +149,12 @@ async function main(){
  const fresh=await grant();
  assert.notEqual(fresh.grantId,old.grantId);
  assert.equal((await verify(oldJwt)).active,false);
+ // A code created before revocation can be redeemed only once, but its
+ // embedded old generation cannot produce a new access/refresh token.
+ const late=await code.actions.consumeCode.handler.call(
+  {redis:two,settings:codeSettings},{params:{code:delayedCode.code}});
+ assert.equal(late.consentGrantId,old.grantId);
+ await refused(jwt(late.consentGrantId),'INVALID_GRANT');
  await refused(jwt(old.grantId),'INVALID_GRANT');
  const freshJwt=await jwt(fresh.grantId);
  assert.equal((await verify(freshJwt)).active,true);

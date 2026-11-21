@@ -149,6 +149,9 @@ async function main(){
   const priorRedis=JSON.stringify({canonicalAccountId:owner,clientId,scope,
     grantId:initial,revoked:false});
   await redis.set(redisKey,priorRedis,'EX',120);
+  const priorSnapshot=await redis.dump(redisKey);
+  assert.ok(Buffer.isBuffer(priorSnapshot)&&priorSnapshot.length>0,
+    'Require actual Redis DUMP backup bytes, not a manually forged fixture');
 
   // The signer holds an exact-PG-transaction lock through a signed write.
   // OAuth revocation cannot acknowledge ahead of that transaction commit.
@@ -169,8 +172,9 @@ async function main(){
   await redis.set(redisKey,JSON.stringify({canonicalAccountId:owner,
     clientId,scope,grantId:initial,revoked:true}),'EX',120);
   assert.equal(JSON.parse(await redis.get(redisKey)).revoked,true);
-  // Simulate Redis restoring its older AOF/RDB content after PG revocation.
-  await redis.set(redisKey,priorRedis,'EX',120);
+  // Use native Redis DUMP/RESTORE after PG revocation. The old Redis
+  // snapshot contains an active grant, but must never override intact PG.
+  assert.equal(await redis.restore(redisKey,120000,priorSnapshot,'REPLACE'),'OK');
   assert.equal(JSON.parse(await redis.get(redisKey)).revoked,false);
   assert.equal(await verify(reader,initial,1),false,
     'Redis rollback must not resurrect a PG-revoked token');
@@ -208,7 +212,7 @@ async function main(){
   assert.equal(await verify(reader,third,5),false);
   assert.equal(await issue(issuerB,crypto.randomBytes(24).toString('base64url'),5,2),'0');
   assert.equal((await signer.query(lockSql,params(third,5))).rows[0].allowed,false);
-  await redis.set(redisKey,priorRedis,'EX',120);
+  assert.equal(await redis.restore(redisKey,120000,priorSnapshot,'REPLACE'),'OK');
   assert.equal(await verify(reader,initial,1),false);
   assert.equal(await verify(reader,second,3),false);
   assert.equal(await verify(reader,third,5),false);

@@ -91,11 +91,18 @@ module.exports = {
           throw new MoleculerError('Managed local account is required for this authorization flow', 403, 'LOGIN_REQUIRED');
         }
 
-        await ctx.call('oauth-consent.upsert', {
+        const currentGrant = await ctx.call('oauth-consent.upsert', {
           canonicalAccountId: binding.canonicalAccountId,
           clientId: parRecord.clientId,
           scope: parRecord.scope
         });
+        if(!/^[A-Za-z0-9_-]{32}$/u.test(currentGrant?.grantId||'')||
+           currentGrant.revoked!==false||
+           currentGrant.canonicalAccountId!==binding.canonicalAccountId||
+           currentGrant.clientId!==parRecord.clientId||
+           currentGrant.scope!==parRecord.scope){
+          throw new MoleculerError('Consent state unavailable',403,'ACCESS_DENIED');
+        }
 
         const code = await ctx.call('oauth-code-store.issueCode', {
           clientId: parRecord.clientId,
@@ -103,6 +110,7 @@ module.exports = {
           canonicalAccountId: binding.canonicalAccountId,
           did: binding.atprotoDid,
           scope: parRecord.scope,
+          consentGrantId: currentGrant.grantId,
           dpopJkt: parRecord.dpopJkt,
           codeChallenge: parRecord.codeChallenge,
           codeChallengeMethod: parRecord.codeChallengeMethod,

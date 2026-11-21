@@ -28,7 +28,9 @@ function queryForOwner(owner) {
 
 async function paperAppAccess(broker, owner, clientId, issuer) {
   if (clientId !== app.appUri) return true;
-  if (issuer !== 'https://paper.example.org/') return false;
+  // Other providers can host the same test client. Only the configured local
+  // Paper runtime owns this policy and must reject an unexpected issuer.
+  if (issuer !== 'https://paper.example.org/') return !process.env.PAPER_LOCAL_BROWSER_CONFIG;
   const match = typeof owner === 'string' && owner.match(ownerPattern);
   if (!match || process.env.NODE_ENV !== 'test' || !process.env.PAPER_LOCAL_BROWSER_CONFIG ||
       process.env.PAPER_BROWSER_ENROLLMENT_DISPOSABLE !== 'confirmed') return false;

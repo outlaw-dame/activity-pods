@@ -216,6 +216,14 @@ async function main(){
   assert.equal(await verify(reader,initial,1),false);
   assert.equal(await verify(reader,second,3),false);
   assert.equal(await verify(reader,third,5),false);
+  // A native SAI/owner deletion must not strand a foreign-key-dependent
+  // OAuth row or block personal-data removal. It must fail closed afterward.
+  await admin.query('DELETE FROM paper_atproto_authority.consents '+
+    'WHERE owner_webid=$1 AND app_uri=$2',[owner,app]);
+  const residual=await admin.query(
+    'SELECT count(*)::integer AS n FROM paper_atproto_authority.oauth_generations WHERE owner_webid=$1',[owner]);
+  assert.equal(residual.rows[0].n,0);
+  assert.equal(await verify(reader,third,5),false);
   console.log('PASS: PG18 restricted roles, CAS contention, writer row-lock/revoker serialization, Redis restore cannot revive PG revocation, native SAI block; release CLOSED');
 }
 let failed;

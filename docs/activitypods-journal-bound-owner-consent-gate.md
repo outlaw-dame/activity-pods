@@ -278,7 +278,9 @@ this class of resurrection, but the OAuth grant ID must be bound to PG.
   SAI grant, accepts only a previously independently attested native
   consent, and ties every credential generation to the current SAI
   revision and scope digest. Generation IDs are unique and never
-  reissued at the same revision.
+  reissued at the same revision. The subordinate OAuth rows cascade on a
+  deleted native SAI consent, avoiding a new blocker to owner erasure;
+  credential verification then necessarily denies the missing grant.
 - Separate NOLOGIN issuer, revoker, reader and signer roles have only
   function EXECUTE. The new table is inaccessible to the provider,
   ordinary Jena/SPARQL users, or the unauthenticated public. No runtime

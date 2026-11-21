@@ -18,6 +18,7 @@ CREATE TABLE paper_atproto_authority.oauth_generations (
   PRIMARY KEY (owner_webid, client_id),
   FOREIGN KEY (owner_webid,app_uri)
     REFERENCES paper_atproto_authority.consents(owner_webid,app_uri)
+    ON DELETE CASCADE
 );
 REVOKE ALL ON TABLE paper_atproto_authority.oauth_generations FROM PUBLIC;
 

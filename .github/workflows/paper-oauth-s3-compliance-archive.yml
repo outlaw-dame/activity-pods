@@ -6,6 +6,8 @@ on:
       - '.github/workflows/paper-oauth-s3-compliance-archive.yml'
       - 'pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs'
+      - 'pod-provider/backend/candidates/oauth-r2-receipt-archive.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-r2-receipt-archive.mjs'
       - 'pod-provider/backend/candidates/oauth-s3-independent-custody.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs'
@@ -40,11 +42,14 @@ jobs:
           set -euo pipefail
           node --check pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs
           node --check pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs
+          node --check pod-provider/backend/candidates/oauth-r2-receipt-archive.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-r2-receipt-archive.mjs
+          node pod-provider/backend/scripts/proof-oauth-r2-receipt-archive.mjs
           node --check pod-provider/backend/candidates/oauth-s3-independent-custody.mjs
           node --check pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
           node --check pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs
-          if grep -R -nE 'oauth-s3-(compliance-archive|independent-custody)' pod-provider/backend/services; then
+          if grep -R -nE 'oauth-(s3-(compliance-archive|independent-custody)|r2-receipt-archive)' pod-provider/backend/services; then
             echo '::error::Do not wire an unapproved S3 adapter or custody probe into production services'
             exit 1
           fi

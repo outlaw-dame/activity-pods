@@ -16,6 +16,7 @@ module.exports = {
     'oauth-dpop-nonce',
     'oauth-par',
     'oauth-authorization',
+    'oauth-consent',
     'oauth-consent-challenge',
     'oauth-token',
     'oauth-refresh-session',

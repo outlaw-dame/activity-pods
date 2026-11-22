@@ -52,6 +52,37 @@ CREATE TRIGGER paper_signed_intent_capture_epoch
  FOR EACH ROW EXECUTE FUNCTION
  paper_oauth_restore_witness.capture_signed_intent_epoch();
 
+-- Sealed SQL outcomes lacking an independent outcome receipt are still
+-- unresolved. Bound these just like PENDING operations; otherwise a
+-- compromised signer could create unbounded unarchived settled rows while
+-- evading the v3 pending-only reservation cap. v3's per-key advisory lock
+-- serializes all ordinary reservations before this BEFORE INSERT check.
+CREATE INDEX paper_oauth_unarchived_intents
+ ON paper_oauth_restore_witness.signed_write_intents(
+  owner_webid,client_id
+ ) WHERE resolution_receipt_sealed=false;
+
+CREATE FUNCTION paper_oauth_restore_witness.reject_unarchived_intent_overflow()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $fn$
+DECLARE unresolved bigint;
+BEGIN
+ SELECT count(*) INTO unresolved
+ FROM paper_oauth_restore_witness.signed_write_intents i
+ WHERE i.owner_webid=NEW.owner_webid AND i.client_id=NEW.client_id
+   AND (i.state='pending' OR NOT i.resolution_receipt_sealed);
+ IF unresolved>=8 THEN
+  RAISE EXCEPTION USING ERRCODE='P0001',
+   MESSAGE='Unarchived signed-write intent capacity reached';
+ END IF;
+ RETURN NEW;
+END $fn$;
+CREATE TRIGGER paper_signed_intent_unarchived_cap
+ BEFORE INSERT ON paper_oauth_restore_witness.signed_write_intents
+ FOR EACH ROW EXECUTE FUNCTION
+ paper_oauth_restore_witness.reject_unarchived_intent_overflow();
+
 -- Prevent rollback of receipt bits and settlement before pending sealing,
 -- independently of the function used by the privileged migration owner.
 CREATE FUNCTION paper_oauth_restore_witness.enforce_signed_intent_receipts()
@@ -250,6 +281,8 @@ END $fn$;
 
 REVOKE ALL ON FUNCTION
  paper_oauth_restore_witness.capture_signed_intent_epoch() FROM PUBLIC;
+REVOKE ALL ON FUNCTION
+ paper_oauth_restore_witness.reject_unarchived_intent_overflow() FROM PUBLIC;
 REVOKE ALL ON FUNCTION
  paper_oauth_restore_witness.enforce_signed_intent_receipts() FROM PUBLIC;
 REVOKE ALL ON FUNCTION

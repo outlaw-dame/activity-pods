@@ -155,11 +155,12 @@ test('rejects wrong object retention mode or insufficient per-version retention'
   {retentionMode:'GOVERNANCE'},
   {expiry:new Date(now+390*DAY)},
   {expiry:'not-a-date'},
+  {expiry:null},
   {retentionUnavailable:true}
  ]){
   const f=fixture(o);
   await denies(f,epochKey,epochBody,o.retentionUnavailable?
-   'S3_RECEIPT_READBACK_UNAVAILABLE':'S3_RECEIPT_RETENTION_UNVERIFIED');
+   'S3_RECEIPT_RETENTION_UNAVAILABLE':'S3_RECEIPT_RETENTION_UNVERIFIED');
  }
 });
 test('rejects byte tamper, version swap, delete marker and oversized stream',async()=>{

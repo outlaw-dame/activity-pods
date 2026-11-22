@@ -35,7 +35,7 @@ const REVOKE_CONSENT_IF_SESSION_AND_GENERATION = [
   "if ttl<=0 then ttl=tonumber(ARGV[6])*1000 end",
   "redis.call('SET',KEYS[1],cjson.encode(record),'PX',ttl)",
   "return 1"
-].join('\\n');
+].join('\n');
 function digest(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }

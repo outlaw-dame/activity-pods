@@ -571,3 +571,29 @@ including after the archive reader or database restarts. Signed-write
 pending/resolved receipt chain replay and WAL-based aborted-transaction
 evidence remain prerequisites. This nonactivated candidate cannot open
 production signup; `release=CLOSED` and federation P0 #186 stay in force.
+
+
+## Witness-primary read admission hardening — NONACTIVATED
+
+The restricted external OAuth witness reader rejects PostgreSQL hot standby
+connections on each new authorization check, using
+`NOT pg_catalog.pg_is_in_recovery()` alongside its existing exact
+reader-login, role-membership, function-grant and table-privilege checks.
+A replica with asynchronously applied witness events may be behind a
+revocation even when its local `current_epochs` and `events` rows
+match one another. No successful authorization may be inferred from
+a stale read replica, including during PITR/failover. A failed/unknown
+recovery predicate is denied rather than treated as a fresh primary.
+
+The two-physical-PG18 witness/Redis integration test exercises a
+genuine primary PostgreSQL server and injects a standby result into
+the restricted read-role admission response. It requires the reader
+to reject a valid-looking sealed OAuth grant with
+`PG_OAUTH_WITNESS_ROLE_UNSAFE`, without granting issuer, revoker,
+attestor or writer permissions.
+
+This is a protective **nonactivated** candidate, not a verified
+production failover mechanism. Recovery must establish an independently
+archived immutable high-water and WAL/PITR barrier before a promoted
+primary can resume OAuth admission. Both hosted restore/consent and
+actual immutable bucket tests remain P0; `release=CLOSED`.

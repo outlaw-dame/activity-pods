@@ -223,8 +223,10 @@ async function main(){
     }
     const persistedGrant=await consentSchema.actions.get.handler.call(consent,
       {params:{canonicalAccountId:webId,clientId:grantParams.clientId}});
-    assert.equal(persistedGrant.grantId,grantBefore.grantId,
-      'Revoked session must not overwrite last authorized consent generation');
+    assert.equal(persistedGrant.grantId,finalGrant.grantId,
+      'Logout must not rewrite the final owner-revoked consent generation');
+    assert.equal(persistedGrant.revoked,true,
+      'Logout and stale session must never reactivate revoked consent');
     assert.equal(await service.isActiveBrowserSession(context(b,raw),signed),false);
     const repeat=context(a,raw);
     const repeated=await apiSchema.actions.logoutSession.call(service,repeat);

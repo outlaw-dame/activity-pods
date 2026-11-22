@@ -309,9 +309,11 @@ outbox and valid generation. It loads CID-addressed immutable DAG
 blocks and the historical upstream `@atproto/repo` MST under bounded
 read/byte limits; verifies the exact post path and before/after MST record digests,
 checking that create/update/delete change precisely the claimed historical
-path; then
-independently validates the canonical signed secp256k1 commit using a
-server-resolved historic DID PLC signing key, never a public client
+path. It independently verifies **both previous and proposed v3 commit
+signatures**, resolving the historic DID signing key separately at each
+revision to accommodate legitimate signing-key rotation. A merely valid
+CID or current-head signature does not authenticate the old MST state.
+Keys must be obtained by a trusted resolver, never from a public client
 supplied signing key. Only then does a **different** witness reconciler
 role ask the independent database to settle that exact operation as
 `committed`.

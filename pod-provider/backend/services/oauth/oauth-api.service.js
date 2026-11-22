@@ -94,6 +94,8 @@ module.exports = {
           'POST /session/logout': 'oauth-api.logoutSession',
           'POST /token': 'oauth-api.exchangeToken',
           'POST /revoke': 'oauth-api.revoke',
+          'GET /owner/grant': 'oauth-api.getOwnerGrant',
+          'POST /owner/grant/revoke': 'oauth-api.revokeOwnerGrant',
           'GET /client-metadata/:id': 'oauth-api.getClientMetadata',
           'GET /dpop-nonce': 'oauth-api.getDpopNonce'
         }
@@ -359,6 +361,83 @@ module.exports = {
       return { revoked: true };
     },
 
+    // Post-enrollment owner consent management. This route is deliberately
+    // browser-session-only: historic SemApps RS256 bearer credentials are
+    // not yet bound to password-verifier or independent restore epochs.
+    async getOwnerGrant(ctx) {
+      this.noStore(ctx);
+      const session = await this.requireBrowserOwnerSession(ctx);
+      const clientId = this.requireOwnerGrantClientId(ctx.meta?.$query?.client_id);
+      const grant = await this.runSafely(() => ctx.call('oauth-consent.get', {
+        canonicalAccountId:session.webId,clientId
+      }));
+      if (!grant || grant.revoked!==false) {
+        return { client_id:clientId, consented:false };
+      }
+      const csrfToken=this.randomToken();
+      const fingerprint=this.requestFingerprint(ctx);
+      const challenge=await this.runSafely(() => ctx.call('oauth-consent-challenge.mint',{
+        requestUri:this.ownerGrantRevokeLabel(session,clientId,grant.grantId),
+        fingerprint,csrfToken
+      }));
+      return {
+        client_id:clientId,consented:true,scope:grant.scope,
+        grant_id:grant.grantId,challenge_id:challenge.challengeId,
+        csrf_token:csrfToken,expires_at:challenge.expiresAt
+      };
+    },
+
+    async revokeOwnerGrant(ctx) {
+      this.noStore(ctx);
+      this.requireOwnerGrantPostOrigin(ctx);
+      const session=await this.requireBrowserOwnerSession(ctx);
+      const body=this.body(ctx);
+      const clientId=this.requireOwnerGrantClientId(body.client_id);
+      const expectedGrantId=body.grant_id;
+      if (typeof expectedGrantId!=='string' ||
+          !/^[A-Za-z0-9_-]{32}$/u.test(expectedGrantId) ||
+          typeof body.challenge_id!=='string' ||
+          !/^[A-Za-z0-9_-]{32}$/u.test(body.challenge_id) ||
+          typeof body.csrf_token!=='string' ||
+          !/^[A-Za-z0-9_-]{32}$/u.test(body.csrf_token)) {
+        throw new MoleculerError('Invalid owner revocation request',400,'INVALID_REQUEST');
+      }
+      // Always consume a challenge exactly once, across every API replica.
+      // Do not retry GETDEL when acknowledgement is uncertain.
+      const challenge=await this.runSafely(() =>
+        ctx.call('oauth-consent-challenge.consume',{
+          challengeId:body.challenge_id
+        }));
+      const now=Math.floor(Date.now()/1000);
+      if (!challenge ||
+          challenge.requestUri!==this.ownerGrantRevokeLabel(
+            session,clientId,expectedGrantId) ||
+          challenge.fingerprint!==this.requestFingerprint(ctx) ||
+          !Number.isSafeInteger(challenge.expiresAt) ||
+          challenge.expiresAt<=now) {
+        throw new MoleculerError('Owner challenge expired or mismatched',403,'LOGIN_REQUIRED');
+      }
+      const validCsrf=await this.runSafely(() =>
+        ctx.call('oauth-consent-challenge.verifyCsrf',{
+          expectedHash:challenge.csrfHash,csrfToken:body.csrf_token
+        }));
+      if (validCsrf!==true) {
+        throw new MoleculerError('Owner challenge invalid',403,'LOGIN_REQUIRED');
+      }
+      const outcome=await this.runSafely(() => ctx.call(
+        'oauth-consent.revokeOwnerGeneration',{
+          canonicalAccountId:session.webId,clientId,
+          expectedGrantId,ownerSessionId:session.sessionId
+        }));
+      if (outcome?.revoked!==true) {
+        // A concurrent reapproval wins. Never revoke or report success on
+        // a different, newly minted consent generation.
+        ctx.meta.$statusCode=409;
+        return {revoked:false,error:'consent_changed',client_id:clientId};
+      }
+      return {revoked:true,client_id:clientId};
+    },
+
     async getClientMetadata(ctx) {
       this.noStore(ctx);
       const id = decodeURIComponent(String(ctx.params.id || '').trim());
@@ -534,6 +613,64 @@ module.exports = {
       } catch {
         // Missing Redis or a stale replica is DENY, never a positive cache.
         return false;
+      }
+    },
+
+    async requireBrowserOwnerSession(ctx) {
+      const headers=ctx.meta?.$headers || {};
+      if (headers.authorization!==undefined || headers.Authorization!==undefined) {
+        throw new MoleculerError('Owner browser login required',401,'LOGIN_REQUIRED');
+      }
+      const session=this.getSession(ctx);
+      if (!session || await this.requireUserWebId(ctx)!==session.webId) {
+        throw new MoleculerError('Owner browser login required',401,'LOGIN_REQUIRED');
+      }
+      return session;
+    },
+
+    requireOwnerGrantClientId(value) {
+      if (typeof value!=='string' || value.length<8 || value.length>2048) {
+        throw new MoleculerError('Client id invalid',400,'INVALID_REQUEST');
+      }
+      try {
+        const parsed=new URL(value);
+        if (parsed.protocol!=='https:' || !parsed.hostname || parsed.username ||
+            parsed.password || parsed.search || parsed.hash || parsed.href!==value) {
+          throw Error('Not a canonical HTTPS client id');
+        }
+      } catch {
+        throw new MoleculerError('Client id invalid',400,'INVALID_REQUEST');
+      }
+      return value;
+    },
+
+    ownerGrantRevokeLabel(session,clientId,grantId) {
+      return 'paper:owner-consent-revoke:v1:'+
+        crypto.createHmac('sha256',this.settings.sessionSecret)
+          .update(JSON.stringify([session.webId,session.sessionId,clientId,grantId]))
+          .digest('hex');
+    },
+
+    requireOwnerGrantPostOrigin(ctx) {
+      const headers=ctx.meta?.$headers || {};
+      const origin=headers.origin===undefined ? headers.Origin : headers.origin;
+      let expected;
+      try {
+        const parsed=new URL(this.settings.issuer);
+        if (parsed.protocol!=='https:') throw Error('Issuer is not HTTPS');
+        expected=parsed.origin;
+      } catch {
+        throw new MoleculerError('Owner origin unavailable',503,'SESSION_AUTHORITY_UNAVAILABLE');
+      }
+      const contentType=headers['content-type']===undefined ?
+        headers['Content-Type'] : headers['content-type'];
+      const site=headers['sec-fetch-site']===undefined ?
+        headers['Sec-Fetch-Site'] : headers['sec-fetch-site'];
+      if (typeof origin!=='string' || origin!==expected ||
+          typeof contentType!=='string' ||
+          !/^application\/json(?:\s*;|\s*$)/iu.test(contentType) ||
+          (site!==undefined && site!=='same-origin')) {
+        throw new MoleculerError('Same-origin JSON owner request required',403,'LOGIN_REQUIRED');
       }
     },
 

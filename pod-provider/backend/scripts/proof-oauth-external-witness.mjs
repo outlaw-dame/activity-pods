@@ -394,6 +394,12 @@ async function mainTest(){
       "WHERE account_id=$1 AND did=$2 AND head_cid=$3 AND state='pending' "+
       "RETURNING generation",[owner,did,genesis.commitCid]);
     assert.equal(ready.rowCount,1);
+    assert.throws(()=>createReferenceMstWriter({
+      pool:repoPool,reference,fixtureOnly:true,
+      authorize:async()=>true,
+      lockCanonicalConsent:async()=>true
+    }),e=>e?.code==='REFERENCE_MST_EXTERNAL_WITNESS_NOT_RELEASED',
+    'Witness-enabled signed writer cannot run without its reservation gate');
     const witnessed=[];
     const repoWriter=createReferenceMstWriter({
       pool:repoPool,reference,fixtureOnly:true,
@@ -419,18 +425,39 @@ async function mainTest(){
         return ok;
       }
     });
-    const signed=await repoWriter.write({
+    const mutation={
       accountId:owner,did,expectedCommitCid:genesis.commitCid,
       expectedRev:genesis.rev,action:'create',
       path:'app.bsky.feed.post/3jzm3xwpf342a',
       record:{$type:'app.bsky.feed.post',
         text:'Independent witness-fenced reference MST',
         createdAt:'2026-11-21T00:00:00.000Z'},...signing
-    });
+    };
+    // Force a crash *after* the signed block INSERT inside primary PG but
+    // before COMMIT: rollback removes repo effects, independent intent
+    // must remain pending until the recovery actor verifies the abort.
+    await assert.rejects(repoWriter.write({
+      ...mutation,testFailAfterBlocks:true
+    }),e=>e?.code==='REFERENCE_MST_TEST_INJECTED_FAILURE');
+    assert.equal(witnessed.length,1);
+    const crashOp=witnessed[0].operationId;
+    assert.equal((await readIntent(crashOp)).state,'pending');
+    assert.equal((await repoWriter.verify({
+      accountId:owner,did,publicKeyPem:signing.publicKeyPem,
+      path:mutation.path
+    })).commitCid,genesis.commitCid);
+    assert.equal((await repoPool.query(
+      'SELECT count(*)::int AS n FROM paper_atproto_repo_proof.record_mutations'
+    )).rows[0].n,0,'Rolled-back signed transaction left no mutation');
+    await assert.rejects(transition(revoker,'blocked',grant1,1,crypto.randomUUID()),
+      e=>e?.code==='P0001');
+    assert.equal(await resolve(crashOp,1,'aborted',null),true);
+    assert.equal((await readIntent(crashOp)).state,'aborted');
+    const signed=await repoWriter.write(mutation);
     assert.equal(signed.verified,true);
     assert.notEqual(signed.commitCid,genesis.commitCid);
-    assert.equal(witnessed.length,1);
-    const op=witnessed[0].operationId;
+    assert.equal(witnessed.length,2);
+    const op=witnessed[1].operationId;
     assert.equal((await readIntent(op)).state,'pending');
     const audit=await repoPool.query(
       'SELECT witness_operation_id::text AS op FROM '+

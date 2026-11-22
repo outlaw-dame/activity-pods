@@ -14,6 +14,8 @@ import {generateKeyPair,exportJWK} from 'jose';
 import {createRequire} from 'node:module';
 import {createDisposableWormEpochAttestor} from
  '../candidates/oauth-worm-epoch-attestor.mjs';
+import {createS3ComplianceReceiptArchive} from
+ '../candidates/oauth-s3-compliance-archive.mjs';
 const require=createRequire(import.meta.url);
 const oauthToken=require('../services/oauth/oauth-token.service.js');
 const {createDisposableOauthWitnessReader}=require('../candidates/oauth-external-witness-reader.js');
@@ -404,15 +406,59 @@ async function mainTest(){
     pool:witnessPool,clientIds:[clientId],fixtureOnly:true
   }),e=>e?.code==='PG_OAUTH_HIGHWATER_NOT_RELEASED',
   'No immutable receipt resolver means no high-water admission');
+  // Exercise the actual S3 COMPLIANCE *API verifier* against the already
+  // separately stored, write-once disposable receipts, then pass its exact
+  // version-verified bytes through the restricted PG18 v6 checkpoint.
+  // This emulates S3 metadata; it is NOT a real locked cloud bucket.
+  process.env.PAPER_OAUTH_S3_COMPLIANCE_DISPOSABLE='confirmed';
+  const commandNames=['PutObjectCommand','HeadObjectCommand',
+    'GetObjectCommand','GetObjectRetentionCommand',
+    'GetBucketVersioningCommand','GetObjectLockConfigurationCommand',
+    'ListObjectVersionsCommand'];
+  const commands=Object.fromEntries(commandNames.map(kind=>
+    [kind,class {constructor(input){this.kind=kind;this.input=input}}]));
+  let maskRetainedEpoch=false;
+  const objectVersion=key=>'retained-'+hash(key).toString('hex').slice(0,32);
+  const independentS3Reader={async send(command){
+    const {kind,input}=command;
+    const key=input.Key;
+    const bytes=immutable.get(key);
+    if(kind==='GetBucketVersioningCommand')return {Status:'Enabled'};
+    if(kind==='GetObjectLockConfigurationCommand')
+      return {ObjectLockConfiguration:{ObjectLockEnabled:'Enabled',
+        Rule:{DefaultRetention:{Mode:'COMPLIANCE',Days:400}}}};
+    if(kind==='ListObjectVersionsCommand'){
+      const all=[...immutable.entries()].filter(([k])=>
+        k.startsWith(input.Prefix)).sort(([a],[b])=>a.localeCompare(b));
+      const entries=input.KeyMarker?all.filter(([k])=>k>input.KeyMarker):all;
+      return {Versions:entries.map(([k,v])=>({
+        Key:k,VersionId:objectVersion(k),IsLatest:true,Size:v.length
+      })),DeleteMarkers:maskRetainedEpoch?
+        [{Key:all.at(-1)?.[0]||'',VersionId:'marker',IsLatest:true}]:[],
+        IsTruncated:false};
+    }
+    if(!bytes)throw Error('Independent locked S3 receipt absent');
+    if(kind==='HeadObjectCommand')
+      return {VersionId:objectVersion(key),
+        ContentLength:bytes.length,DeleteMarker:false};
+    if(kind==='GetObjectRetentionCommand')
+      return {Retention:{Mode:'COMPLIANCE',
+        RetainUntilDate:new Date(Date.now()+401*86400000)}};
+    if(kind==='GetObjectCommand')
+      return {VersionId:objectVersion(key),Body:Buffer.from(bytes)};
+    throw Error('Unexpected independent S3 operation '+kind);
+  }};
+  const s3Archive=createS3ComplianceReceiptArchive({
+    writer:{async send(){throw Error('High-water reader must not write')}},
+    reader:independentS3Reader,commands,
+    bucket:'paper-witness-disposable-receipts',
+    minRetentionDays:400,minRemainingDays:30,
+    fixtureOnly:true
+  });
   const newestImmutableReceipt=async({owner:subject,clientId:audience,signal})=>{
     assert.equal(subject,owner);assert.equal(audience,clientId);
     assert.equal(signal.aborted,false);
-    const values=[...immutable.values()].map(bytes=>Buffer.from(bytes));
-    if(values.length===0)return null;
-    // Fixture-only enumeration, intentionally separate from witness PG.
-    values.sort((a,b)=>Number(JSON.parse(b.toString('utf8')).revision)-
-      Number(JSON.parse(a.toString('utf8')).revision));
-    return values[0];
+    return s3Archive.readLatestEpoch({owner:subject,clientId:audience});
   };
   const highWaterReader=createDisposableOauthWitnessReader({
     pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
@@ -420,6 +466,12 @@ async function mainTest(){
   });
   assert.equal(await highWaterReader.verify(identity(grant1,'1')),true,
     'Current sealed grant must match latest independently retained receipt');
+  // An S3 delete marker must not mask a retained revocation/epoch.
+  maskRetainedEpoch=true;
+  await assert.rejects(highWaterReader.verify(identity(grant1,'1')),
+    e=>e?.code==='PG_OAUTH_WITNESS_UNAVAILABLE',
+    'A delete marker must deny current OAuth admission');
+  maskRetainedEpoch=false;
   const noArchiveReader=createDisposableOauthWitnessReader({
     pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
     readImmutableHeadReceipt:async()=>null

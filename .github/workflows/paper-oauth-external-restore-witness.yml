@@ -9,6 +9,7 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql'
       - 'pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs'
@@ -77,6 +78,7 @@ jobs:
       PAPER_OAUTH_PG_RESTORE_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
+      PAPER_OAUTH_WORM_HIGHWATER_DISPOSABLE: confirmed
       PAPER_OAUTH_WORM_READBACK_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE: confirmed
       ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
@@ -102,6 +104,7 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql

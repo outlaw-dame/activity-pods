@@ -445,6 +445,8 @@ async function mainTest(){
   const objectVersion=key=>'retained-'+hash(key).toString('hex').slice(0,32);
   const independentS3Reader={async send(command){
     const {kind,input}=command;
+    assert.equal(input.ExpectedBucketOwner,'123456789012',
+      'Witness readback must bind every S3 request to independent owner');
     const key=input.Key;
     const bytes=immutable.get(key);
     if(kind==='GetBucketVersioningCommand')return {Status:'Enabled'};
@@ -476,6 +478,7 @@ async function mainTest(){
     writer:{async send(){throw Error('High-water reader must not write')}},
     reader:independentS3Reader,commands,
     bucket:'paper-witness-disposable-receipts',
+    expectedBucketOwner:'123456789012',
     minRetentionDays:400,minRemainingDays:30,
     fixtureOnly:true
   });

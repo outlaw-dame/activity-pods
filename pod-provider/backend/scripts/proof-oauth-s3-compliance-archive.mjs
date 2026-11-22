@@ -29,6 +29,7 @@ const resolvedBody=Buffer.from([
  'd'.repeat(64),'e'.repeat(64),head1,head2,'resolved','committed',head2,''
 ].join('\n'));
 const now=Date.UTC(2026,10,22),DAY=86400000;
+const ownerAccount='123456789012'; // Synthetic custody account, no real credentials.
 const commandNames=['PutObjectCommand','HeadObjectCommand','GetObjectCommand',
  'GetObjectRetentionCommand','GetBucketVersioningCommand',
  'GetObjectLockConfigurationCommand','ListObjectVersionsCommand'];
@@ -51,6 +52,7 @@ function fixture(opts={}){
  const writer={send:async cmd=>{
   assert.equal(cmd.kind??cmd.constructor.name,'PutObjectCommand');
   assert.equal(cmd.input.Bucket,'paper-immutable-archive');
+  assert.equal(cmd.input.ExpectedBucketOwner,ownerAccount);
   assert.equal(cmd.input.IfNoneMatch,'*');
   assert.equal(cmd.input.ContentMD5,
    crypto.createHash('md5').update(cmd.input.Body).digest('base64'));
@@ -69,6 +71,8 @@ function fixture(opts={}){
  const reader={send:async cmd=>{
   const kind=cmd.kind??cmd.constructor.name;
   state.reads.push(kind);
+  assert.equal(cmd.input.ExpectedBucketOwner,ownerAccount,
+   'Every independent read and policy check must bind the bucket owner');
   const obj=state.map.get(cmd.input.Key);
   switch(kind){
    case 'GetBucketVersioningCommand':
@@ -135,6 +139,7 @@ function fixture(opts={}){
  }};
  const archive=createS3ComplianceReceiptArchive({
   writer,reader,commands,bucket:'paper-immutable-archive',
+  expectedBucketOwner:opts.expectedBucketOwner??ownerAccount,
   minRetentionDays:400,minRemainingDays:30,
   maxReceipts:opts.maxReceipts??4096,clock:()=>now,fixtureOnly:true
  });
@@ -229,6 +234,19 @@ test('rejects foreign identifiers, altered receipt encoding, and owner/client PI
  for(const v of variants)
   await denies(fixture(),v.key,v.bytes,'S3_RECEIPT_FORMAT_INVALID');
 });
+test('rejects missing or invalid expected external bucket ownership before S3 operations',async()=>{
+ for(const value of [undefined,null,'','123','12345678901x','0123456789012345']){
+  const config=fixtureConfig();
+  config.expectedBucketOwner=value;
+  assert.throws(()=>createS3ComplianceReceiptArchive({
+   ...config,fixtureOnly:true
+  }),e=>e?.code==='S3_RECEIPT_CONFIGURATION_INVALID');
+ }
+ const wrong=fixture({expectedBucketOwner:'999999999999'});
+ await denies(wrong,epochKey,epochBody,'S3_RECEIPT_LOCK_UNVERIFIED');
+ assert.equal(wrong.state.writes.length,0,
+  'Foreign bucket ownership cannot advance an OAuth epoch');
+});
 test('rejects missing explicit test gate and privilege aliases',async()=>{
  assert.throws(()=>createS3ComplianceReceiptArchive({
   ...fixtureConfig(),fixtureOnly:false
@@ -236,14 +254,16 @@ test('rejects missing explicit test gate and privilege aliases',async()=>{
  const f=fixture();
  assert.throws(()=>createS3ComplianceReceiptArchive({
   writer:f.reader,reader:f.reader,commands,
-  bucket:'paper-immutable-archive',minRetentionDays:400,
+  bucket:'paper-immutable-archive',expectedBucketOwner:ownerAccount,
+  minRetentionDays:400,
   fixtureOnly:true
  }),e=>e?.code==='S3_RECEIPT_CONFIGURATION_INVALID');
 });
 function fixtureConfig(){
  const f=fixture();
  return {writer:f.writer,reader:f.reader,commands,
-  bucket:'paper-immutable-archive',minRetentionDays:400,clock:()=>now};
+  bucket:'paper-immutable-archive',expectedBucketOwner:ownerAccount,
+  minRetentionDays:400,clock:()=>now};
 }
 
 

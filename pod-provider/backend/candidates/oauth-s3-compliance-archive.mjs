@@ -15,6 +15,7 @@ const REV=/^[1-9][0-9]{0,18}$/u;
 const MAX=9223372036854775807n;
 const DAY=86400000;
 const BUCKET=/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u;
+const ACCOUNT=/^[0-9]{12}$/u;
 const MAX_BYTES=1024;
 const EPOCH_KEY=/^paper\/oauth-witness\/epochs\/v1\/([a-f0-9]{64})\/([0-9]{19})$/u;
 const INTENT_KEY=/^paper\/oauth-witness\/signed-intents\/v1\/([0-9a-f-]{36})\/(pending|resolved)$/u;
@@ -104,7 +105,7 @@ async function getBounded(body){
  * Caller never obtains signed-write or witness SQL credentials.
  */
 export function createS3ComplianceReceiptArchive({
- writer,reader,commands,bucket,minRetentionDays=400,
+ writer,reader,commands,bucket,expectedBucketOwner,minRetentionDays=400,
  minRemainingDays=30,maxReceipts=4096,
  clock=()=>Date.now(),fixtureOnly=false
 }={}){
@@ -117,6 +118,7 @@ export function createS3ComplianceReceiptArchive({
  if(!writer||!reader||writer===reader||
     typeof writer.send!=='function'||typeof reader.send!=='function'||
     typeof bucket!=='string'||!BUCKET.test(bucket)||
+    typeof expectedBucketOwner!=='string'||!ACCOUNT.test(expectedBucketOwner)||
     !Number.isSafeInteger(minRetentionDays)||
     minRetentionDays<365||minRetentionDays>3650||
     !Number.isSafeInteger(minRemainingDays)||minRemainingDays<1||
@@ -131,7 +133,12 @@ export function createS3ComplianceReceiptArchive({
  const send=(client,command)=>client.send(command,{
   abortSignal:AbortSignal.timeout(7000)
  });
- const command=(type,args)=>new commands[type](args);
+ // Enforce the independent bucket owner's AWS account ID on EVERY S3
+ // policy query, version listing, exact-version read and conditional PUT.
+ // An S3 bucket-name collision must fail closed, not accept a foreign head.
+ const command=(type,args)=>new commands[type]({
+  ...args,ExpectedBucketOwner:expectedBucketOwner
+ });
  async function lockPolicy(){
   let versions,policy;
   try{

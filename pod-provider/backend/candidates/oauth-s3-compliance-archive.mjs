@@ -181,7 +181,7 @@ export function createS3ComplianceReceiptArchive({
    deny('S3_RECEIPT_VERSION_MISMATCH');
   const actual=await getBounded(read.Body);
   if(actual.length!==head.ContentLength)
-   deny('S3_RECEIPT_HEAD_INVALID');
+   deny('S3_RECEIPT_BYTES_MISMATCH');
   let current;
   try{current=await send(reader,command('HeadObjectCommand',{
    Bucket:bucket,Key:key

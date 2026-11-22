@@ -57,7 +57,7 @@ const clients=[],accounts=[];
 const id=s=>'"'+s.replaceAll('"','""')+'"';
 const sql=path=>fs.readFile(new URL(path,import.meta.url),'utf8');
 let madeMain=false,madeWitness=false,madeRepo=false,error=null;
-let repoPool=null;
+let repoPool=null,primaryReaderPool=null,primaryReaderName=null;
 const current=(c,grant,rev)=>c.query(
   'SELECT paper_atproto_authority.verify_oauth_generation('+
   '$1,$2,$3,$4,$5,$6::bigint) AS allowed',
@@ -418,6 +418,52 @@ async function mainTest(){
       "WHERE account_id=$1 AND did=$2 AND head_cid=$3 AND state='pending' "+
       "RETURNING generation",[owner,did,genesis.commitCid]);
     assert.equal(ready.rowCount,1);
+    // Independent reconciler uses a distinct READ ONLY primary PG login.
+    primaryReaderName='paper_witness_primary_reader_'+salt;
+    const primarySecret=crypto.randomBytes(18).toString('hex');
+    await main.query('CREATE ROLE '+id(primaryReaderName)+
+      " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION "+
+      "NOBYPASSRLS PASSWORD '"+primarySecret+"'");
+    await main.query('GRANT USAGE ON SCHEMA paper_atproto_repo_proof TO '+
+      id(primaryReaderName));
+    await main.query('GRANT SELECT ON '+
+      ['repos','record_mutations','native_event_outbox','blocks'].map(
+        table=>'paper_atproto_repo_proof.'+table
+      ).join(',')+' TO '+id(primaryReaderName));
+    const primaryUrl=new URL(mainDsn);
+    primaryUrl.username=primaryReaderName;
+    primaryUrl.password=primarySecret;
+    primaryReaderPool=new Pool({
+      connectionString:primaryUrl.toString(),max:2,
+      connectionTimeoutMillis:3000,query_timeout:8500,
+      idleTimeoutMillis:2000,allowExitOnIdle:true
+    });
+    await assert.rejects(primaryReaderPool.query(
+      'UPDATE paper_atproto_repo_proof.repos SET generation=generation '+
+      'WHERE account_id=$1',[owner]),e=>e?.code==='42501');
+    const {createIndependentWitnessCommitReconciler}=await import(
+      '../candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs');
+    const trustedSettlement={
+      primaryPool:primaryReaderPool,reference,fixtureOnly:true,
+      readWitnessIntent:readIntent,
+      settleCommitted:async p=>{
+        assert.equal(p.owner,owner);
+        assert.equal(p.clientId,clientId);
+        return resolve(p.operationId,p.revision,'committed',p.commitCid);
+      },
+      resolveSigningKey:async p=>{
+        assert.equal(p.owner,owner);
+        assert.equal(p.did,did);
+        return signing.publicKeyPem;
+      }
+    };
+    const committedReconciler=createIndependentWitnessCommitReconciler(
+      trustedSettlement);
+    const untrustedPrimary=createIndependentWitnessCommitReconciler({
+      ...trustedSettlement,primaryPool:repoPool
+    });
+    assert.equal(await committedReconciler.reconcileCommitted(crypto.randomUUID()),
+      false,'No primary evidence can never imply a successful settlement');
     assert.throws(()=>createReferenceMstWriter({
       pool:repoPool,reference,fixtureOnly:true,
       authorize:async()=>true,
@@ -466,6 +512,9 @@ async function mainTest(){
     assert.equal(witnessed.length,1);
     const crashOp=witnessed[0].operationId;
     assert.equal((await readIntent(crashOp)).state,'pending');
+    assert.equal(await committedReconciler.reconcileCommitted(crashOp),false,
+      'A missing rolled-back commit can NEVER imply successful settlement');
+    assert.equal((await readIntent(crashOp)).state,'pending');
     assert.equal((await repoWriter.verify({
       accountId:owner,did,publicKeyPem:signing.publicKeyPem,
       path:mutation.path
@@ -512,8 +561,23 @@ async function mainTest(){
     assert.equal(await resolve(op,1,'committed',genesis.commitCid),false);
     assert.equal(await resolve(op,1,'committed',signedCid),false,
       'Reference-MST operation cannot be settled using a foreign signed CID');
-    assert.equal(await resolve(op,1,'committed',signed.commitCid),true);
+    await assert.rejects(untrustedPrimary.reconcileCommitted(op),
+      e=>e?.code==='WITNESS_RECONCILER_PRIMARY_ROLE_UNSAFE',
+      'Superuser primary SQL cannot count as independent signed proof');
+    const otherKey=crypto.generateKeyPairSync('ec',{namedCurve:'secp256k1'});
+    const wrongSigner=createIndependentWitnessCommitReconciler({
+      ...trustedSettlement,resolveSigningKey:async()=>
+        otherKey.publicKey.export({format:'pem',type:'spki'}).toString()
+    });
+    await assert.rejects(wrongSigner.reconcileCommitted(op),
+      e=>e?.code==='WITNESS_RECONCILER_SIGNATURE_INVALID',
+      'An unrelated key cannot attest a witnessed signed commit');
+    assert.equal((await readIntent(op)).state,'pending');
+    assert.equal(await committedReconciler.reconcileCommitted(op),true,
+      'Independent read-only primary proof matches exact signed CID');
     assert.equal((await readIntent(op)).state,'committed');
+    assert.equal(await committedReconciler.reconcileCommitted(op),false,
+      'Resolved operation cannot be settled again');
     console.log('PASS: real signed reference MST, atomic canonical PG witness UUID/outbox and independent PG18 revoke barrier until verified signed head settlement');
   }else if(process.env.PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE!==undefined){
     throw Error('Invalid signed reference MST disposable gate');
@@ -608,8 +672,10 @@ finally{
  for(const role of accounts.reverse())try{await root.query('DROP ROLE IF EXISTS '+id(role))}catch(e){errs.push(e)}
  if(madeWitness)for(const role of Object.values(roles).filter(Boolean))
   try{await root.query('DROP ROLE IF EXISTS '+id(role))}catch(e){errs.push(e)}
+ if(primaryReaderPool)try{await primaryReaderPool.end()}catch(e){errs.push(e)}
  if(repoPool)try{await repoPool.end()}catch(e){errs.push(e)}
  if(madeRepo)try{await main.query('DROP SCHEMA paper_atproto_repo_proof CASCADE')}catch(e){errs.push(e)}
+ if(primaryReaderName)try{await main.query('DROP ROLE IF EXISTS '+id(primaryReaderName))}catch(e){errs.push(e)}
  if(madeMain)try{await main.query('DROP SCHEMA paper_atproto_authority CASCADE')}catch(e){errs.push(e)}
  if(madeMain)for(const role of [
   'paper_oauth_epoch_issuer','paper_oauth_epoch_revoker','paper_oauth_epoch_reader',

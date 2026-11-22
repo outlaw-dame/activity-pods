@@ -3,6 +3,8 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const registrySchema = require('../services/oauth/oauth-session-registry.service');
+const consentSchema = require('../services/oauth/oauth-consent.service');
+const { consentKey } = require('../utils/oauth-refresh-atomic-policy');
 const apiSchema = require('../services/oauth/oauth-api.service');
 
 if (process.env.NODE_ENV !== 'test' ||
@@ -18,6 +20,12 @@ const reg = () => ({
     redisUrl: process.env.PAPER_OAUTH_EPOCH_REDIS_URL, keyPrefix: prefix}
 });
 const a = reg(), b = reg();
+const consent = {settings:{...consentSchema.settings,
+  redisUrl:process.env.PAPER_OAUTH_EPOCH_REDIS_URL,
+  keyPrefix:'oauth:grant:proof:'+crypto.randomBytes(16).toString('hex'),
+  sessionKeyPrefix:prefix}};
+const grantParams={canonicalAccountId:webId,clientId:'https://paper.example.org/oauth-test-app',
+  scope:'atproto'};
 const service = {
   settings: {...apiSchema.settings, sessionSecret: crypto.randomBytes(32).toString('hex'),
     issuer: 'https://paper.example.org', sessionTtlSec: 3600,
@@ -55,8 +63,10 @@ async function rejected(fn, code) {
 async function main(){
   registrySchema.created.call(a);
   registrySchema.created.call(b);
+  consentSchema.created.call(consent);
   try{
-    await Promise.all([registrySchema.started.call(a), registrySchema.started.call(b)]);
+    await Promise.all([registrySchema.started.call(a), registrySchema.started.call(b),
+      consentSchema.started.call(consent)]);
     const login=context(a,null,{params:{username:'session-owner@example.org',password:'correct'}});
     const result=await apiSchema.actions.loginSession.call(service,login);
     assert.equal(result.ok,true);
@@ -81,6 +91,10 @@ async function main(){
     const ownerAttack=await action(b,'revoke',{sessionId:signed.sessionId,webId:alien});
     assert.equal(ownerAttack.revoked,false);
     assert.equal(await service.requireUserWebId(context(b,raw)),webId);
+    const grantBefore=await consentSchema.actions.upsert.handler.call(consent,
+      {params:{...grantParams,ownerSessionId:signed.sessionId}});
+    assert.equal(grantBefore.revoked,false);
+    assert.equal(grantBefore.canonicalAccountId,webId);
     const outageApproval=context(a,raw,{outage:true});
     await rejected(()=>service.requireUserWebId(outageApproval),401);
     const outageLogout=context(a,raw,{outage:true});
@@ -93,6 +107,16 @@ async function main(){
     assert.match(signedOut.meta.$responseHeaders['Set-Cookie'],/Max-Age=0/u);
     assert.equal(await action(a,'verify',{sessionId:signed.sessionId,webId}),false);
     await rejected(()=>service.requireUserWebId(context(a,raw)),401);
+    // The grant writer and logout share a Redis serialization boundary;
+    // an earlier positive HTTP session check cannot write a new grant.
+    for (let i=0;i<8;i++) {
+      await rejected(()=>consentSchema.actions.upsert.handler.call(consent,
+        {params:{...grantParams,ownerSessionId:signed.sessionId}}),403);
+    }
+    const persistedGrant=await consentSchema.actions.get.handler.call(consent,
+      {params:{canonicalAccountId:webId,clientId:grantParams.clientId}});
+    assert.equal(persistedGrant.grantId,grantBefore.grantId,
+      'Revoked session must not overwrite last authorized consent generation');
     assert.equal(await service.isActiveBrowserSession(context(b,raw),signed),false);
     const repeat=context(a,raw);
     const repeated=await apiSchema.actions.logoutSession.call(service,repeat);
@@ -114,8 +138,12 @@ async function main(){
   } finally {
     try { if(a.redis?.status==='ready' && ids.length)
       await a.redis.del(...ids.map(key)); } catch {}
+    try { if(consent.redis?.status==='ready')
+      await consent.redis.del(consentKey(consent.settings.keyPrefix,
+        webId,grantParams.clientId)); } catch {}
     await Promise.allSettled([
-      registrySchema.stopped.call(a),registrySchema.stopped.call(b)
+      registrySchema.stopped.call(a),registrySchema.stopped.call(b),
+      consentSchema.stopped.call(consent)
     ]);
   }
 }

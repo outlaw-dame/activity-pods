@@ -768,6 +768,12 @@ module.exports = {
     },
 
     async authorizeDecision(ctx, body, csrfToken, canonicalAccountId) {
+      const headers = ctx.meta?.$headers || {};
+      // A browser approval carries its exact live nonce to the atomic
+      // consent grant write, serializing logout against owner approval.
+      // Explicitly verified provider bearers have no browser session.
+      const ownerSessionId = headers.authorization === undefined &&
+        headers.Authorization === undefined ? this.getSession(ctx)?.sessionId : undefined;
       return this.runSafely(() =>
         ctx.call('oauth-authorization.authorize', {
           request_uri: body.request_uri,
@@ -775,7 +781,8 @@ module.exports = {
           consentChallenge: body.consent_challenge,
           requestFingerprint: this.requestFingerprint(ctx),
           csrfToken,
-          canonicalAccountId
+          canonicalAccountId,
+          ownerSessionId
         })
       );
     },

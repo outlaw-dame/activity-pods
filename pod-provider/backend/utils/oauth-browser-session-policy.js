@@ -17,6 +17,25 @@ const UPSERT_CONSENT_IF_SESSION_LIVE = [
   "redis.call('SET',KEYS[1],ARGV[2],'EX',tonumber(ARGV[3]))",
   "return 1"
 ].join('\n');
+// The owner can revoke ONLY the grant generation shown to that same live
+// session. Re-approval, logout and revoke all serialize in one Redis history.
+// Never replace a later consent generation via a stale browser challenge.
+const REVOKE_CONSENT_IF_SESSION_AND_GENERATION = [
+  "local live=redis.call('GET',KEYS[2])",
+  "if not live or live~=ARGV[1] then return -1 end",
+  "local raw=redis.call('GET',KEYS[1])",
+  "if not raw then return 0 end",
+  "local ok,record=pcall(cjson.decode,raw)",
+  "if not ok or type(record)~='table' then return redis.error_reply('INVALID_CONSENT') end",
+  "if record.canonicalAccountId~=ARGV[2] or record.clientId~=ARGV[3] or type(record.grantId)~='string' or type(record.revoked)~='boolean' then return redis.error_reply('INVALID_CONSENT') end",
+  "if record.grantId~=ARGV[4] or record.revoked==true then return 0 end",
+  "record.revoked=true",
+  "record.updatedAt=tonumber(ARGV[5])",
+  "local ttl=redis.call('PTTL',KEYS[1])",
+  "if ttl<=0 then ttl=tonumber(ARGV[6])*1000 end",
+  "redis.call('SET',KEYS[1],cjson.encode(record),'PX',ttl)",
+  "return 1"
+].join('\\n');
 function digest(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }
@@ -29,5 +48,6 @@ function inputValid(sessionId, webId) {
 }
 module.exports = {
   SESSION_ID, KEY_PREFIX, REVOKE_IF_OWNER,
-  UPSERT_CONSENT_IF_SESSION_LIVE, digest, sessionKey, inputValid
+  UPSERT_CONSENT_IF_SESSION_LIVE, REVOKE_CONSENT_IF_SESSION_AND_GENERATION,
+  digest, sessionKey, inputValid
 };

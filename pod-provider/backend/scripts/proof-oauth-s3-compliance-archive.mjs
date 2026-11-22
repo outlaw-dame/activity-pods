@@ -31,7 +31,7 @@ const resolvedBody=Buffer.from([
 const now=Date.UTC(2026,10,22),DAY=86400000;
 const commandNames=['PutObjectCommand','HeadObjectCommand','GetObjectCommand',
  'GetObjectRetentionCommand','GetBucketVersioningCommand',
- 'GetObjectLockConfigurationCommand'];
+ 'GetObjectLockConfigurationCommand','ListObjectVersionsCommand'];
 let commands=Object.fromEntries(commandNames.map(kind=>
  [kind,class {constructor(input){this.kind=kind;this.input=input}}]));
 if(process.env.PAPER_OAUTH_S3_SDK_ENTRY){
@@ -91,6 +91,32 @@ function fixture(opts={}){
     if(opts.retentionUnavailable)throw Error('Denied retention read');
     return {Retention:{Mode:opts.retentionMode??'COMPLIANCE',
       RetainUntilDate:state.expiry}};
+   case 'ListObjectVersionsCommand':{
+    if(opts.listUnavailable)throw Error('Denied version history listing');
+    const prefix=cmd.input.Prefix;
+    assert.ok(prefix.endsWith('/'));
+    assert.equal(cmd.input.MaxKeys,1000);
+    let versions=[...state.map.entries()]
+     .filter(([key])=>key.startsWith(prefix))
+     .sort(([a],[b])=>a.localeCompare(b))
+     .map(([key,item])=>({
+      Key:key,VersionId:item.version,IsLatest:true,Size:item.bytes.length
+     }));
+    if(opts.listMissingLast)versions=versions.slice(0,-1);
+    if(opts.duplicateVersion&&versions.length)
+     versions.splice(1,0,{...versions[0],VersionId:'unexpected-other-version'});
+    const start=cmd.input.KeyMarker;
+    if(start)versions=versions.filter(item=>item.Key>start);
+    const batch=versions.slice(0,opts.pageSize??1000);
+    const truncated=versions.length>batch.length;
+    return {Versions:batch,DeleteMarkers:opts.deleteMarkerVersion?
+      [{Key:prefix+'0000000000000000001',VersionId:'deleted',IsLatest:true}]:[],
+     IsTruncated:truncated,
+     ...(truncated&&!opts.missingMarker?{
+      NextKeyMarker:batch.at(-1).Key,
+      NextVersionIdMarker:batch.at(-1).VersionId
+     }:{})};
+   }
    case 'GetObjectCommand':
     if(!obj)throw Error('NoSuchKey');
     if(opts.getUnavailable)throw Error('Denied content read');
@@ -109,7 +135,8 @@ function fixture(opts={}){
  }};
  const archive=createS3ComplianceReceiptArchive({
   writer,reader,commands,bucket:'paper-immutable-archive',
-  minRetentionDays:400,clock:()=>now,fixtureOnly:true
+  minRetentionDays:400,minRemainingDays:30,
+  maxReceipts:opts.maxReceipts??4096,clock:()=>now,fixtureOnly:true
  });
  return {archive,state,writer,reader};
 }
@@ -218,3 +245,32 @@ function fixtureConfig(){
  return {writer:f.writer,reader:f.reader,commands,
   bucket:'paper-immutable-archive',minRetentionDays:400,clock:()=>now};
 }
+
+
+function epoch(revision){
+ const rev=String(revision);
+ return {
+  key:'paper/oauth-witness/epochs/v1/'+subject+'/'+rev.padStart(19,'0'),
+  bytes:Buffer.from(JSON.stringify({
+   kind:'paper.witness.epoch.v1',subject,revision:rev,
+   operationId:crypto.randomUUID(),
+   eventSha256:crypto.createHash('sha256').update('event'+rev).digest('hex')
+  }))
+ };
+}
+async function writeEpochs(f,revisions){
+ for(const n of revisions){
+  await f.archive.putAndVerify(epoch(n));
+ }
+}
+test('independently discover the latest contiguous COMPLIANCE-locked epoch',async()=>{
+ const f=fixture({pageSize:2});
+ await writeEpochs(f,[1,2,3]);
+ const b=await f.archive.readLatestEpoch({
+  owner:'https://paper.example.org/users/alice',
+  clientId:'https://paper-client.example.org/oauth'
+ });
+ // The archive key subject must match exactly the owner/client tuple,
+ // so the arbitrary fixture subject is not a trusted owner high-water.
+ assert.fail('This fixture subject must be derived from owner/client');
+});

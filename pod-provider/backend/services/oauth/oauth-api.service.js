@@ -687,8 +687,8 @@ module.exports = {
         /^application\/(?:json|x-www-form-urlencoded)(?:\s*;|\s*$)/iu :
         /^application\/json(?:\s*;|\s*$)/iu;
       if (typeof origin!=='string' || origin!==expected ||
-          !(allowEmptyBody&&contentType===undefined) &&
-            (typeof contentType!=='string' || !format.test(contentType)) ||
+          (!(allowEmptyBody && contentType===undefined) &&
+            (typeof contentType!=='string' || !format.test(contentType))) ||
           (site!==undefined && site!=='same-origin')) {
         throw new MoleculerError('Same-origin browser request required',
           403,'LOGIN_REQUIRED');

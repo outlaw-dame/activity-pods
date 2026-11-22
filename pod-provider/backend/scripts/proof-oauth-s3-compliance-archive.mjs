@@ -247,30 +247,82 @@ function fixtureConfig(){
 }
 
 
+const highOwner='https://paper.example.org/users/alice';
+const highClient='https://paper-client.example.org/oauth';
+const highSubject=crypto.createHash('sha256')
+ .update('paper:witness:subject:v1\0')
+ .update(highOwner).update('\0').update(highClient).digest('hex');
+const scope={owner:highOwner,clientId:highClient};
 function epoch(revision){
  const rev=String(revision);
  return {
-  key:'paper/oauth-witness/epochs/v1/'+subject+'/'+rev.padStart(19,'0'),
+  key:'paper/oauth-witness/epochs/v1/'+highSubject+'/'+rev.padStart(19,'0'),
   bytes:Buffer.from(JSON.stringify({
-   kind:'paper.witness.epoch.v1',subject,revision:rev,
+   kind:'paper.witness.epoch.v1',subject:highSubject,revision:rev,
    operationId:crypto.randomUUID(),
    eventSha256:crypto.createHash('sha256').update('event'+rev).digest('hex')
   }))
  };
 }
 async function writeEpochs(f,revisions){
- for(const n of revisions){
-  await f.archive.putAndVerify(epoch(n));
- }
+ for(const n of revisions)await f.archive.putAndVerify(epoch(n));
 }
-test('independently discover the latest contiguous COMPLIANCE-locked epoch',async()=>{
+test('independently discover latest contiguous locked version, paginated and uncached',async()=>{
  const f=fixture({pageSize:2});
  await writeEpochs(f,[1,2,3]);
- const b=await f.archive.readLatestEpoch({
-  owner:'https://paper.example.org/users/alice',
-  clientId:'https://paper-client.example.org/oauth'
- });
- // The archive key subject must match exactly the owner/client tuple,
- // so the arbitrary fixture subject is not a trusted owner high-water.
- assert.fail('This fixture subject must be derived from owner/client');
+ for(let attempt=0;attempt<2;attempt++){
+  const b=await f.archive.readLatestEpoch(scope);
+  assert.equal(JSON.parse(b).revision,'3');
+  assert.equal(JSON.parse(b).subject,highSubject);
+ }
+ assert.equal(f.state.reads.filter(x=>x==='ListObjectVersionsCommand').length,4,
+  'Every admission must enumerate current versions; never cache a positive head');
 });
+test('older and latest delete markers deny even when immutable versions survive',async()=>{
+ const f=fixture({deleteMarkerVersion:true});
+ await writeEpochs(f,[1,2]);
+ await deniesHighwater(f,'S3_HIGHWATER_LIST_UNSAFE');
+});
+test('duplicate historical version, missing earlier epoch and withheld latest deny',async()=>{
+ const duplicated=fixture({duplicateVersion:true});
+ await writeEpochs(duplicated,[1,2]);
+ await deniesHighwater(duplicated,'S3_HIGHWATER_LIST_UNSAFE');
+ const gap=fixture();
+ await writeEpochs(gap,[1,3]);
+ await deniesHighwater(gap,'S3_HIGHWATER_GAP_OR_FORK');
+ const missing=fixture({listMissingLast:true});
+ await writeEpochs(missing,[1,2,3]);
+ // Missing the latest version can look like valid old history. No client
+ // can independently prove the S3 server omitted a key; production
+ // requires a separately administered, complete ListBucketVersions grant
+ // and a monotonic external checkpoint/inventory audit.
+ assert.equal(JSON.parse(await missing.archive.readLatestEpoch(scope)).revision,'2');
+});
+test('listing unavailable, malformed pagination or bounded history deny',async()=>{
+ const fail=fixture({listUnavailable:true});
+ await writeEpochs(fail,[1]);
+ await deniesHighwater(fail,'S3_HIGHWATER_LIST_UNAVAILABLE');
+ const bad=fixture({pageSize:1,missingMarker:true});
+ await writeEpochs(bad,[1,2]);
+ await deniesHighwater(bad,'S3_HIGHWATER_PAGINATION_INVALID');
+ const capped=fixture({maxReceipts:2});
+ await writeEpochs(capped,[1,2,3]);
+ await deniesHighwater(capped,'S3_HIGHWATER_CAPACITY_EXCEEDED');
+});
+test('rewritten latest version, invalid retention and forged subject deny',async()=>{
+ const f=fixture();
+ await writeEpochs(f,[1,2]);
+ const bad=epoch(2);
+ const key=bad.key;
+ f.state.map.get(key).bytes=Buffer.from('forged receipt body');
+ await deniesHighwater(f,'S3_HIGHWATER_LIST_UNSAFE');
+ const wrong=fixture();
+ await writeEpochs(wrong,[1]);
+ await assert.rejects(wrong.archive.readLatestEpoch({
+  owner:'https://paper.example.org/users/attacker',
+  clientId:highClient
+ }),e=>e?.code==='S3_HIGHWATER_LIST_UNSAFE');
+});
+async function deniesHighwater(f,code){
+ await assert.rejects(f.archive.readLatestEpoch(scope),e=>e?.code===code);
+}

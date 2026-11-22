@@ -158,20 +158,22 @@ export function createS3ComplianceReceiptArchive({
      version.length>1024||head.DeleteMarker===true||
      head.ContentLength!==bytes.length)
    deny('S3_RECEIPT_HEAD_INVALID');
-  let retention,read;
+  let retention;
   try{
-   [retention,read]=await Promise.all([
-    send(reader,command('GetObjectRetentionCommand',{
-      Bucket:bucket,Key:key,VersionId:version
-    })),
-    send(reader,command('GetObjectCommand',{
-      Bucket:bucket,Key:key,VersionId:version
-    }))
-   ]);
-  }catch{deny('S3_RECEIPT_READBACK_UNAVAILABLE')}
+   retention=await send(reader,command('GetObjectRetentionCommand',{
+    Bucket:bucket,Key:key,VersionId:version
+   }));
+  }catch{deny('S3_RECEIPT_RETENTION_UNAVAILABLE')}
+  const expiry=validDate(retention?.Retention?.RetainUntilDate);
   if(retention?.Retention?.Mode!=='COMPLIANCE'||
-     validDate(retention.Retention.RetainUntilDate)<retentionFloor)
+     !Number.isFinite(expiry)||expiry<retentionFloor)
     deny('S3_RECEIPT_RETENTION_UNVERIFIED');
+  let read;
+  try{
+   read=await send(reader,command('GetObjectCommand',{
+    Bucket:bucket,Key:key,VersionId:version
+   }));
+  }catch{deny('S3_RECEIPT_READBACK_UNAVAILABLE')}
   if(read?.VersionId!==version)
    deny('S3_RECEIPT_VERSION_MISMATCH');
   const actual=await getBounded(read.Body);
@@ -194,6 +196,8 @@ export function createS3ComplianceReceiptArchive({
    if(!Number.isSafeInteger(now)||now<=0)
     deny('S3_RECEIPT_CLOCK_UNSAFE');
    const floor=now+minRetentionDays*DAY;
+   if(!Number.isSafeInteger(floor))
+    deny('S3_RECEIPT_CLOCK_UNSAFE');
    await lockPolicy();
    try{
     await send(writer,command('PutObjectCommand',{

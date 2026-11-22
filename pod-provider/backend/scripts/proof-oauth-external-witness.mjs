@@ -189,7 +189,15 @@ async function mainTest(){
     'SELECT paper_oauth_restore_witness.reserve_signed_write('+
     '$1,$2,$3,$4,$5,$6)',
     [owner,clientId,hash(grant1),1,crypto.randomUUID(),'bafyre'+'a'.repeat(53)]),
-    e=>e?.code==='42501');
+    e=>e?.code==='42883',
+    'Obsolete unbound reservation function must not exist');
+  await assert.rejects(reconciler.query(
+    'SELECT paper_oauth_restore_witness.reserve_signed_write('+
+    '$1,$2,$3,$4::bigint,$5::uuid,$6,$7)',
+    [owner,clientId,hash(grant1),1,crypto.randomUUID(),
+      'bafyre'+'a'.repeat(53),'bafyre'+'b'.repeat(53)]),
+    e=>e?.code==='42501',
+    'Reconciler may not reserve a signed operation itself');
   await main.query(
     'INSERT INTO paper_atproto_authority.identities '+
     '(owner_webid,did,state,managed,revision,source_proof_sha256) '+

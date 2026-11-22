@@ -20,11 +20,18 @@ function fromCookie(value) {
 }
 const webId = 'https://provider.paper.example.org/alice';
 const sessionId = crypto.randomBytes(32).toString('base64url');
-const token = service.buildSessionToken(webId, sessionId);
+const passwordHash = '$2b$10$'+'a'.repeat(53);
+const seal = service.credentialSealForAccount({webId,hashedPassword:passwordHash});
+const token = service.buildSessionToken(webId, sessionId, seal);
+assert.throws(() => service.buildSessionToken(webId,sessionId), /Credential version proof is required/u);
 assert.throws(() => service.buildSessionToken(webId), /session id missing/u);
 const good = service.getSession(fromCookie(encodeURIComponent(token)));
 assert.equal(good.webId, webId);
 assert.equal(good.sessionId, sessionId);
+assert.equal(good.credentialSeal,seal);
+assert.notEqual(seal,passwordHash);
+assert.equal(service.sessionCredentialMatches(good,{webId,hashedPassword:passwordHash}),true);
+assert.equal(service.sessionCredentialMatches(good,{webId,hashedPassword:'$2b$10$'+'b'.repeat(53)}),false);
 const oldStatelessPayload = Buffer.from(JSON.stringify({ webId, exp: Math.floor(Date.now()/1000)+1800 })).toString('base64url');
 const oldStatelessToken = oldStatelessPayload + '.' + service.signSessionPayload(oldStatelessPayload);
 assert.equal(service.getSession(fromCookie(oldStatelessToken)), null,

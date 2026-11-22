@@ -137,10 +137,10 @@ async function main(){
     console.log('PASS: two independent Redis-backed OAuth session replicas; login ACK before cookie, owner-bound NX, cross-cell logout, absent/malformed/stale legacy cookie denial, registry outage fail-closed');
   } finally {
     try { if(a.redis?.status==='ready' && ids.length)
-      await a.redis.del(...ids.map(key)); } catch {}
+      await a.redis.del(...ids.map(key)); } catch { /* Disposable cleanup must not mask security assertion failures. */ }
     try { if(consent.redis?.status==='ready')
       await consent.redis.del(consentKey(consent.settings.keyPrefix,
-        webId,grantParams.clientId)); } catch {}
+        webId,grantParams.clientId)); } catch { /* Disposable cleanup must not mask security assertion failures. */ }
     await Promise.allSettled([
       registrySchema.stopped.call(a),registrySchema.stopped.call(b),
       consentSchema.stopped.call(consent)

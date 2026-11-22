@@ -18,6 +18,7 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
+      - 'pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs'
       - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
   push:
     branches: [master]
@@ -110,6 +111,7 @@ jobs:
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
+          node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
           node --check pod-provider/backend/candidates/oauth-pg-epoch-reader.js
           node --check pod-provider/backend/utils/oauth-pg-epoch-policy.js
@@ -134,6 +136,7 @@ jobs:
       - name: Prove separated witness survives primary PG and Redis rollback
         env:
           PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
+          PAPER_OAUTH_WORM_READBACK_DISPOSABLE: confirmed
         run: |
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-external-witness.mjs

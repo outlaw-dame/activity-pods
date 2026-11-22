@@ -191,8 +191,8 @@ function createDisposableOauthWitnessReader({
          !HASH.test(archive.subject||''))
         fail('PG_OAUTH_HIGHWATER_INVALID');
       const subject=crypto.createHash('sha256')
-        .update('paper:witness:subject:v1\\0')
-        .update(p.canonicalAccountId).update('\\0').update(p.clientId)
+        .update('paper:witness:subject:v1\0')
+        .update(p.canonicalAccountId).update('\0').update(p.clientId)
         .digest('hex');
       if(!crypto.timingSafeEqual(Buffer.from(subject,'hex'),
           Buffer.from(archive.subject,'hex')))

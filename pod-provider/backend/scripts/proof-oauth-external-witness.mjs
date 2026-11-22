@@ -831,7 +831,22 @@ async function mainTest(){
   assert.equal(await transition(issuer,'active',grant1,3,oldOp),'0',
     'Old grant digest cannot be reused at a later epoch');
   const op4=crypto.randomUUID();
-  assert.equal(await transition(revoker,'blocked',grant2,3,op4),'4');
+  assert.equal(await highWaterReader.verify(identity(grant2,'3')),true,
+    'Newly approved epoch may authorize when independently archived');
+  const racingReader=createDisposableOauthWitnessReader({
+    pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
+    readImmutableHeadReceipt:async scope=>{
+      // Revoke exactly between two restricted PG checkpoint reads.
+      // A single SQL SELECT followed by a cached positive result would
+      // incorrectly admit this now-blocked grant.
+      assert.equal(await transition(revoker,'blocked',grant2,3,op4),'4');
+      return newestImmutableReceipt(scope);
+    }
+  });
+  assert.equal(await racingReader.verify(identity(grant2,'3')),false,
+    'Concurrent revocation during external readback must deny admission');
+  assert.equal(await attest(4,op4),true);
+  assert.equal(await highWaterReader.verify(identity(grant2,'3')),false);
   assert.equal(await admitted(reader,grant2,3),false);
   assert.equal((await introspect(secondJwt)).active,false);
   assert.equal(await transition(revoker,'blocked',grant2,3,crypto.randomUUID()),'0');

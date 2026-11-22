@@ -135,7 +135,7 @@ async function main(){
     assert.deepEqual(p,{username:'alice@example.org',password:'correct-password'});
     return record;
    }};
-  return {ctx,login:()=>schema.actions.loginSession.handler.call(service,ctx)};
+  return {ctx,login:()=>schema.actions.loginSession.call(service,ctx)};
  }
  const activeLogin=await runLogin({webId});
  const result=await activeLogin.login();

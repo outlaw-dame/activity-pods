@@ -636,7 +636,7 @@ module.exports = {
       try {
         const parsed=new URL(value);
         if (parsed.protocol!=='https:' || !parsed.hostname || parsed.username ||
-            parsed.password || parsed.search || parsed.hash || parsed.href!==value) {
+            parsed.password || parsed.hash || parsed.href!==value) {
           throw Error('Not a canonical HTTPS client id');
         }
       } catch {

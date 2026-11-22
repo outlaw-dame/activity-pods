@@ -226,24 +226,18 @@ module.exports = {
 
       let account;
       try {
-        await this.runSafely(() =>
-          ctx.call('auth.account.verify', {
-            username,
-            password
-          })
-        );
+        // auth.account.verify returns the authenticated record, including
+        // email-login aliases. A separate findByUsername lookup can select
+        // a different account or a tombstone after a concurrent mutation.
         account = await this.runSafely(() =>
-          ctx.call('auth.account.findByUsername', {
-            username
-          })
+          ctx.call('auth.account.verify', { username, password })
         );
       } catch {
         throw new MoleculerError('Invalid credentials', 401, 'LOGIN_REQUIRED');
       }
-
-      const webId = String(account?.webId || '').trim();
-      if (!webId) {
-        throw new MoleculerError('Unable to resolve account webId', 500, 'OAUTH_REQUEST_FAILED');
+      const webId = account?.webId;
+      if (this.ownerAccountUnsafe(account, webId)) {
+        throw new MoleculerError('Invalid credentials', 401, 'LOGIN_REQUIRED');
       }
 
       this.setSessionCookie(ctx, webId);
@@ -441,18 +435,41 @@ module.exports = {
       }
     },
 
+    ownerAccountUnsafe(account, webId) {
+      if (!account || typeof account !== 'object' || Array.isArray(account) ||
+          typeof webId !== 'string' || account.webId !== webId ||
+          webId.length < 8 || webId.length > 2048 ||
+          (account.deletedAt !== undefined && account.deletedAt !== null)) {
+        return true;
+      }
+      try {
+        const uri = new URL(webId);
+        return uri.protocol !== 'https:' || !uri.hostname ||
+          !!uri.username || !!uri.password || !!uri.search || uri.href !== webId;
+      } catch {
+        return true;
+      }
+    },
+
     async requireUserWebId(ctx) {
       const fromBearer = await this.tryUserBearerWebId(ctx);
-      if (fromBearer) {
-        return fromBearer;
+      const webId = fromBearer || this.getSession(ctx)?.webId;
+      if (!webId) {
+        throw new MoleculerError('Login is required to approve authorization', 401, 'LOGIN_REQUIRED');
       }
-
-      const session = this.getSession(ctx);
-      if (session?.webId) {
-        return session.webId;
+      // A previously authenticated HMAC cookie or verified JWT is not
+      // evidence that an account still exists. SemApps auth.account's
+      // findByWebId can return a tombstoned record. Never authorize it.
+      let account;
+      try {
+        account = await ctx.call('auth.account.findByWebId', { webId });
+      } catch {
+        throw new MoleculerError('Owner account is unavailable', 401, 'LOGIN_REQUIRED');
       }
-
-      throw new MoleculerError('Login is required to approve authorization', 401, 'LOGIN_REQUIRED');
+      if (this.ownerAccountUnsafe(account, webId)) {
+        throw new MoleculerError('Owner account is unavailable', 401, 'LOGIN_REQUIRED');
+      }
+      return webId;
     },
 
     async tryUserBearerWebId(ctx) {

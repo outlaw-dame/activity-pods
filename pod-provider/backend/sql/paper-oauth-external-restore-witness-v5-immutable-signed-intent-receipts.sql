@@ -71,7 +71,7 @@ BEGIN
  SELECT count(*) INTO unresolved
  FROM paper_oauth_restore_witness.signed_write_intents i
  WHERE i.owner_webid=NEW.owner_webid AND i.client_id=NEW.client_id
-   AND (i.state='pending' OR NOT i.resolution_receipt_sealed);
+   AND i.resolution_receipt_sealed=false;
  IF unresolved>=8 THEN
   RAISE EXCEPTION USING ERRCODE='P0001',
    MESSAGE='Unarchived signed-write intent capacity reached';

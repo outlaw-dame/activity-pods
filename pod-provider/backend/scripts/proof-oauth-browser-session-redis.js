@@ -224,7 +224,9 @@ async function main(){
     assert.equal(await action(a,'verify',{sessionId:signed.sessionId,webId}),true,
       'Cross-origin logout may not revoke an innocent owner session');
     assert.equal(forgedLogout.meta.$responseHeaders?.['Set-Cookie'],undefined);
-    const signedOut=context(b,raw);
+    // Empty-body logout must work without a Content-Type header, while
+    // Origin and Fetch Metadata still require the provider's own origin.
+    const signedOut=context(b,raw,{headers:{'content-type':undefined}});
     const signedOutResult=await apiSchema.actions.logoutSession.call(service,signedOut);
     assert.equal(signedOutResult.ok,true);
     assert.match(signedOut.meta.$responseHeaders['Set-Cookie'],/Max-Age=0/u);

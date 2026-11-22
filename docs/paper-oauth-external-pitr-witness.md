@@ -693,3 +693,33 @@ JWT check is also an O(n) cost that must be resolved before high-scale
 release without caching positive authorization across restore
 boundaries. The provider currently does **not** load this candidate
 and `release=CLOSED` remains mandatory.
+
+
+## Two-PG18 / Redis high-water proof via actual S3 API verifier — NONACTIVATED
+
+The disposable `proof-oauth-external-witness.mjs` previously used
+an ad hoc in-memory sort for the `readImmutableHeadReceipt` callback.
+It now invokes the actual `createS3ComplianceReceiptArchive`
+`readLatestEpoch` code against a **test-only in-memory S3 command
+transport**, and passes those exact retained bytes into the
+restricted `createDisposableOauthWitnessReader` PG18 v6
+`active_checkpoint` before/after authorization checks. The mocked
+reader exposes versioning, Object Lock COMPLIANCE, per-version
+retention, version-targeted GET, current HEAD and full
+`ListObjectVersions` including delete-marker enumeration. The
+high-water client's fake writer throws on any attempted write.
+
+The two physically isolated PostgreSQL 18 containers plus Redis 8.2
+test therefore prove the **composed** candidate path: a valid
+signed JWT with restored primary PG + Redis + witness PG rows is
+rejected because its independently retained, later epoch is observed
+by the S3 version-history verifier. A delete marker on an existing
+retained object also denies OAuth admission. No successful token
+admission result is cached across an independent archive check.
+
+This does not replace an actual S3 COMPLIANCE service,
+independently audited IAM/account custody, physical witness PITR
+reconciliation and WAL abort barrier, nor the unresolved signed-intent
+receipt history requirements. The storage transport remains a test
+substitute, no production credential/runtime path has been wired,
+and `release=CLOSED` remains enforced.

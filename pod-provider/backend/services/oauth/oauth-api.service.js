@@ -485,9 +485,15 @@ module.exports = {
       } catch {
         return invalid();
       }
+      // Upstream SemApps generateServerSignedToken currently adds iat
+      // but does NOT set exp. Never let an indefinitely valid historical
+      // signed JWT authorize a fresh Paper app consent years later.
+      const now = Math.floor(Date.now() / 1000);
       if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
           typeof payload.webId !== 'string' ||
-          payload.webId.length < 8 || payload.webId.length > 2048) {
+          payload.webId.length < 8 || payload.webId.length > 2048 ||
+          !Number.isSafeInteger(payload.iat) ||
+          payload.iat > now + 60 || payload.iat <= now - 3600) {
         return invalid();
       }
       let uri;

@@ -14,6 +14,9 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs'
       - 'pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs'
+      - 'pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs'
+      - '.github/workflows/paper-oauth-s3-compliance-archive.yml'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql'
@@ -79,6 +82,7 @@ jobs:
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
       PAPER_OAUTH_WORM_READBACK_DISPOSABLE: confirmed
+      PAPER_OAUTH_S3_COMPLIANCE_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE: confirmed
       ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
@@ -101,6 +105,8 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs
           node --check pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
+          node --check pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql
@@ -135,6 +141,25 @@ jobs:
             --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
             @atproto/repo@0.11.0 kafkajs@2.2.4
           test -f "$RUNNER_TEMP/witness-atproto-reference/node_modules/@atproto/repo/dist/index.js"
+      - name: Check independent S3 COMPLIANCE archive wire format and fail-closed readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs
+      - name: Install pinned official AWS S3 SDK for real command constructors
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/paper-s3-contract" \
+            --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
+            @aws-sdk/client-s3@3.1174.0
+          test -f "$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js"
+      - name: Check actual upstream AWS S3 SDK command types
+        shell: bash
+        run: |
+          set -euo pipefail
+          PAPER_OAUTH_S3_SDK_ENTRY="$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js" \
+            node pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs
       - name: Prove independent immutable receipt readback candidate
         shell: bash
         run: |

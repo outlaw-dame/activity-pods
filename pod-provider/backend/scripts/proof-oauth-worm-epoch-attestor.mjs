@@ -59,9 +59,10 @@ function createFixture({
   attestor:createDisposableWormEpochAttestor(callbacks)};
 }
 function called(f,name){return f.history.filter(i=>i[0]===name).length}
-async function denies(f,code,params=input){
+async function denies(f,code,params=input,sealAttempts=0){
  await assert.rejects(f.attestor.attestEpoch(params),e=>e?.code===code);
- assert.equal(called(f,'seal'),0,'No witness seal on unverified receipt');
+ assert.equal(called(f,'seal'),sealAttempts,
+  'Unexpected witness seal attempt on unverified receipt');
 }
 
 test('fail closed outside explicit fixture-only mode',async()=>{
@@ -112,8 +113,10 @@ test('an ambiguous PUT ACK cannot authorize unless independent GET matches',asyn
  await denies(absent,'WORM_RECEIPT_READBACK_MISMATCH');
 });
 test('sealing errors are never treated as authorization',async()=>{
- await denies(createFixture({sealMode:'no'}),'WORM_RECEIPT_SEAL_REFUSED');
- await denies(createFixture({sealMode:'throw'}),'WORM_RECEIPT_SEAL_UNAVAILABLE');
+ await denies(createFixture({sealMode:'no'}),'WORM_RECEIPT_SEAL_REFUSED',
+  input,1);
+ await denies(createFixture({sealMode:'throw'}),'WORM_RECEIPT_SEAL_UNAVAILABLE',
+  input,1);
 });
 test('refuses forged identity, operation and noncanonical revision',async()=>{
  for(const params of [

@@ -456,25 +456,51 @@ module.exports = {
     },
 
     async tryUserBearerWebId(ctx) {
-      const header = ctx.meta?.$headers?.authorization || ctx.meta?.$headers?.Authorization;
-      if (!header || !String(header).startsWith('Bearer ')) {
+      const lower = ctx.meta?.$headers?.authorization;
+      const upper = ctx.meta?.$headers?.Authorization;
+      if (lower === undefined && upper === undefined) {
         return null;
       }
-
-      const token = String(header).slice(7).trim();
+      // A supplied but invalid Authorization header must never fall back
+      // to a valid cookie. Reject conflicting duplicate header values.
+      const invalid = () => {
+        throw new MoleculerError('A valid server-signed user token is required', 401, 'LOGIN_REQUIRED');
+      };
+      if (lower !== undefined && upper !== undefined && lower !== upper) {
+        return invalid();
+      }
+      const header = lower === undefined ? upper : lower;
+      if (typeof header !== 'string' || header.length > 8192) {
+        return invalid();
+      }
+      const match = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/iu.exec(header);
+      if (!match) {
+        return invalid();
+      }
       let payload;
       try {
-        payload = await ctx.call('auth.jwt.decodeToken', { token });
+        // SemApps auth.jwt.decodeToken is deliberately UNVERIFIED.
+        // Only verifyServerSignedToken checks RS256 and expiry.
+        payload = await ctx.call('auth.jwt.verifyServerSignedToken', { token: match[1] });
       } catch {
-        return null;
+        return invalid();
       }
-
-      const webId = String(payload?.webId || payload?.webid || payload?.id || '').trim();
-      if (!webId || webId === 'anon') {
-        return null;
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+          typeof payload.webId !== 'string' ||
+          payload.webId.length < 8 || payload.webId.length > 2048) {
+        return invalid();
       }
-
-      return webId;
+      let uri;
+      try {
+        uri = new URL(payload.webId);
+      } catch {
+        return invalid();
+      }
+      if (uri.protocol !== 'https:' || !uri.hostname || uri.username ||
+          uri.password || uri.search || uri.href !== payload.webId) {
+        return invalid();
+      }
+      return payload.webId;
     },
 
     prefersHtml(ctx) {

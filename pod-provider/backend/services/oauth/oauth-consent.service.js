@@ -1,6 +1,7 @@
 const Redis = require('ioredis');
 const { MoleculerError } = require('moleculer').Errors;
-const { KEY_PREFIX, digest, sessionKey, UPSERT_CONSENT_IF_SESSION_LIVE } =
+const { KEY_PREFIX, digest, sessionKey, UPSERT_CONSENT_IF_SESSION_LIVE,
+  REVOKE_CONSENT_IF_SESSION_AND_GENERATION } =
   require('../../utils/oauth-browser-session-policy');
 const crypto = require('node:crypto');
 const { parseIntWithBounds, nowEpochSec } = require('../../utils/oauth-security');
@@ -109,6 +110,68 @@ module.exports = {
         // Legacy grants without a generation cannot reauthorize a stale PDS
         // token: the owner must complete a fresh consent interaction.
         return safeGrant(record,canonicalAccountId,clientId)?record:null;
+      }
+    },
+    revokeOwnerGeneration: {
+      params: {
+        canonicalAccountId: { type: 'string', min: 8, max: 2048 },
+        clientId: { type: 'string', min: 8, max: 2048 },
+        expectedGrantId: { type: 'string', pattern: '^[A-Za-z0-9_-]{32}
+        canonicalAccountId: { type: 'string', min: 1 },
+        clientId: { type: 'string', min: 1 }
+      },
+      async handler(ctx) {
+        const key = consentKey(this.settings.keyPrefix,
+          ctx.params.canonicalAccountId,ctx.params.clientId);
+        // Read/modify/write on separate Redis commands could overwrite a
+        // newly authorized generation. Lua makes the revocation atomic.
+        const changed=await this.redis.eval(REVOKE_CURRENT,1,key,
+          String(nowEpochSec()),String(this.settings.ttlSec));
+        if(changed!==0&&changed!==1)throw Error('OAuth consent revocation unavailable');
+        return {revoked:changed===1};
+      }
+    }
+  }
+};
+ },
+        ownerSessionId: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}
+        canonicalAccountId: { type: 'string', min: 1 },
+        clientId: { type: 'string', min: 1 }
+      },
+      async handler(ctx) {
+        const key = consentKey(this.settings.keyPrefix,
+          ctx.params.canonicalAccountId,ctx.params.clientId);
+        // Read/modify/write on separate Redis commands could overwrite a
+        // newly authorized generation. Lua makes the revocation atomic.
+        const changed=await this.redis.eval(REVOKE_CURRENT,1,key,
+          String(nowEpochSec()),String(this.settings.ttlSec));
+        if(changed!==0&&changed!==1)throw Error('OAuth consent revocation unavailable');
+        return {revoked:changed===1};
+      }
+    }
+  }
+};
+ }
+      },
+      async handler(ctx) {
+        const {canonicalAccountId,clientId,expectedGrantId,ownerSessionId}=ctx.params;
+        // Do not let an untrusted owner-management caller revoke a
+        // superseding generation or another owner's grant. The browser
+        // session and grant are validated in the same Redis transaction.
+        const result=await this.redis.eval(
+          REVOKE_CONSENT_IF_SESSION_AND_GENERATION, 2,
+          consentKey(this.settings.keyPrefix,canonicalAccountId,clientId),
+          sessionKey(this.settings.sessionKeyPrefix,ownerSessionId),
+          digest(canonicalAccountId),canonicalAccountId,clientId,
+          expectedGrantId,String(nowEpochSec()),String(this.settings.ttlSec)
+        );
+        if(result===-1) {
+          throw new MoleculerError('Owner session is not current',403,'LOGIN_REQUIRED');
+        }
+        if(result!==0&&result!==1) {
+          throw new MoleculerError('Consent revocation unavailable',503,'CONSENT_AUTHORITY_UNAVAILABLE');
+        }
+        return {revoked:result===1};
       }
     },
     revoke: {

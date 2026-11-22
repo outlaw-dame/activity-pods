@@ -124,13 +124,9 @@ export function createS3ComplianceReceiptArchive({
   'GetObjectLockConfigurationCommand'];
  if(names.some(n=>typeof commands?.[n]!=='function'))
   deny('S3_RECEIPT_CONFIGURATION_INVALID');
- const send=async(client,command)=>{
-  try{
-   return await client.send(command,{
-    abortSignal:AbortSignal.timeout(7000)
-   });
-  }catch(e){throw e}
- };
+ const send=(client,command)=>client.send(command,{
+  abortSignal:AbortSignal.timeout(7000)
+ });
  const command=(type,args)=>new commands[type](args);
  async function lockPolicy(){
   let versions,policy;

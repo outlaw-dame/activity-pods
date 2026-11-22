@@ -8,6 +8,8 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'
+      - 'pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs'
       - 'pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs'
@@ -95,6 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs
           node --check pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
@@ -106,6 +109,7 @@ jobs:
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql
           if grep -R -n 'paper-oauth-external-restore-witness-v1.sql' pod-provider/backend/services; then
             echo '::error::The independent witness candidate must not be auto-migrated by the production provider'
             exit 1
@@ -140,3 +144,11 @@ jobs:
           set -euo pipefail
           ATPROTO_REFERENCE_REPO_ENTRY="$RUNNER_TEMP/witness-atproto-reference/node_modules/@atproto/repo/dist/index.js" \
             node pod-provider/backend/scripts/proof-oauth-external-witness.mjs
+
+      - name: Prove pending and resolved signed-write WORM receipts block revoke ACK
+        shell: bash
+        env:
+          PAPER_OAUTH_WORM_INTENTS_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs

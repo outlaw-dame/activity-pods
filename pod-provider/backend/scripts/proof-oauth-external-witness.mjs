@@ -510,6 +510,20 @@ async function mainTest(){
       lockCanonicalConsent:async()=>true
     }),e=>e?.code==='REFERENCE_MST_EXTERNAL_WITNESS_NOT_RELEASED',
     'Witness-enabled signed writer cannot run without its reservation gate');
+    // A v5-enabled signed writer may not start its primary PG transaction
+    // with only a reserved SQL row; it requires independently sealed WORM
+    // proof through a *distinct* witness read-only verifier callback.
+    process.env.PAPER_OAUTH_WORM_INTENTS_DISPOSABLE='confirmed';
+    try{
+      assert.throws(()=>createReferenceMstWriter({
+        pool:repoPool,reference,fixtureOnly:true,
+        authorize:async()=>true,lockCanonicalConsent:async()=>true,
+        reserveWitnessIntent:async()=>true
+      }),e=>e?.code==='REFERENCE_MST_WORM_INTENT_NOT_RELEASED',
+      'v5 must refuse signer creation without sealed receipt verifier');
+    }finally{
+      delete process.env.PAPER_OAUTH_WORM_INTENTS_DISPOSABLE;
+    }
     const witnessed=[];
     const repoWriter=createReferenceMstWriter({
       pool:repoPool,reference,fixtureOnly:true,

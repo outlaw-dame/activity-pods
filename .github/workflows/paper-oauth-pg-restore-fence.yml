@@ -145,7 +145,6 @@ jobs:
       - name: Prove separated witness survives primary PG and Redis rollback
         env:
           PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
-          PAPER_OAUTH_WORM_HIGHWATER_DISPOSABLE: confirmed
           PAPER_OAUTH_WORM_READBACK_DISPOSABLE: confirmed
         run: |
           set -euo pipefail

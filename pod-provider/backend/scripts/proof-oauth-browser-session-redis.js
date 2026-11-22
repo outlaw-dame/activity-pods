@@ -118,6 +118,91 @@ async function main(){
       {params:{...grantParams,ownerSessionId:signed.sessionId}});
     assert.equal(grantBefore.revoked,false);
     assert.equal(grantBefore.canonicalAccountId,webId);
+    // Real two-client post-enrollment owner consent management. The client
+    // cannot enumerate another owner's grant, mint a bearer-only session,
+    // replay a one-use CSRF challenge or revoke a newer grant generation.
+    const ownerRead=()=>context(b,raw,{
+      query:{client_id:grantParams.clientId}
+    });
+    const ownerPost=(proof,headers={})=>context(b,raw,{
+      params:{
+        client_id:grantParams.clientId,grant_id:proof.grant_id,
+        challenge_id:proof.challenge_id,csrf_token:proof.csrf_token
+      },
+      headers:{origin:'https://paper.example.org',
+        'content-type':'application/json','sec-fetch-site':'same-origin',
+        ...headers}
+    });
+    await rejected(()=>apiSchema.actions.getOwnerGrant.call(
+      service,context(b,null,{query:{client_id:grantParams.clientId}})),401);
+    const otherClient=await apiSchema.actions.getOwnerGrant.call(service,
+      context(b,raw,{query:{client_id:'https://other.example.org/app'}}));
+    assert.deepEqual(otherClient,{client_id:'https://other.example.org/app',consented:false});
+    await rejected(()=>apiSchema.actions.getOwnerGrant.call(service,
+      context(b,raw,{query:{client_id:'http://other.example.org/app'}})),400);
+    const grantView=await apiSchema.actions.getOwnerGrant.call(service,ownerRead());
+    assert.equal(grantView.consented,true);
+    assert.equal(grantView.grant_id,grantBefore.grantId);
+    assert.equal(grantView.scope,grantBefore.scope);
+    assert.match(grantView.challenge_id,/^[A-Za-z0-9_-]{32}$/u);
+    assert.match(grantView.csrf_token,/^[A-Za-z0-9_-]{32}$/u);
+    const badOrigin=ownerPost(grantView,{origin:'https://attacker.example.org'});
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(service,badOrigin),403);
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(service,
+      ownerPost(grantView,{'sec-fetch-site':'cross-site'})),403);
+    const invalidBearer=ownerPost(grantView,{authorization:'Bearer forged'});
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(service,invalidBearer),401);
+    const revoked=await apiSchema.actions.revokeOwnerGrant.call(
+      service,ownerPost(grantView));
+    assert.deepEqual(revoked,{revoked:true,client_id:grantParams.clientId});
+    const revokedGrant=await consentSchema.actions.get.handler.call(consent,
+      {params:{canonicalAccountId:webId,clientId:grantParams.clientId}});
+    assert.equal(revokedGrant.revoked,true);
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(
+      service,ownerPost(grantView)),403);
+    assert.equal((await apiSchema.actions.getOwnerGrant.call(
+      service,ownerRead())).consented,false);
+
+    // Stale GET read must never overwrite/revoke a subsequent reapproval.
+    const nextGrant=await consentSchema.actions.upsert.handler.call(consent,
+      {params:{...grantParams,ownerSessionId:signed.sessionId}});
+    const oldView=await apiSchema.actions.getOwnerGrant.call(service,ownerRead());
+    assert.equal(oldView.grant_id,nextGrant.grantId);
+    const latestGrant=await consentSchema.actions.upsert.handler.call(consent,
+      {params:{...grantParams,ownerSessionId:signed.sessionId}});
+    const staleAttempt=ownerPost(oldView);
+    const conflict=await apiSchema.actions.revokeOwnerGrant.call(service,staleAttempt);
+    assert.deepEqual(conflict,{revoked:false,error:'consent_changed',
+      client_id:grantParams.clientId});
+    assert.equal(staleAttempt.meta.$statusCode,409);
+    const retained=await consentSchema.actions.get.handler.call(consent,
+      {params:{canonicalAccountId:webId,clientId:grantParams.clientId}});
+    assert.equal(retained.grantId,latestGrant.grantId);
+    assert.equal(retained.revoked,false);
+    const currentView=await apiSchema.actions.getOwnerGrant.call(service,ownerRead());
+    // Password update/refreshed account disables even a still-live Redis
+    // owner session before its one-use revocation challenge is consumed.
+    const outdated=ownerPost(currentView);
+    outdated.call=async(name,params)=>{
+      if(name==='auth.account.findByWebId')return {webId,hashedPassword:replacementHash};
+      if(name.startsWith('oauth-session-registry.'))
+        return action(b,name.split('.')[1],params);
+      throw Error('Unexpected changed-password action '+name);
+    };
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(service,outdated),401);
+    // A bad CSRF hash burns its challenge, so a later replay cannot succeed.
+    const tampered=ownerPost(currentView);
+    tampered.params.csrf_token=crypto.randomBytes(24).toString('base64url');
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(service,tampered),403);
+    await rejected(()=>apiSchema.actions.revokeOwnerGrant.call(
+      service,ownerPost(currentView)),403);
+    const freshView=await apiSchema.actions.getOwnerGrant.call(service,ownerRead());
+    assert.equal((await apiSchema.actions.revokeOwnerGrant.call(
+      service,ownerPost(freshView))).revoked,true);
+    const finalGrant=await consentSchema.actions.get.handler.call(consent,
+      {params:{canonicalAccountId:webId,clientId:grantParams.clientId}});
+    assert.equal(finalGrant.revoked,true);
+
     const outageApproval=context(a,raw,{outage:true});
     await rejected(()=>service.requireUserWebId(outageApproval),401);
     const outageLogout=context(a,raw,{outage:true});

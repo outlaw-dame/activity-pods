@@ -10,6 +10,8 @@ const attacker=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const webId='https://paper.example.org/users/alice';
 const now=Math.floor(Date.now()/1000);
 const sessionId=crypto.randomBytes(32).toString('base64url');
+const passwordHash='$2b$10$'+'a'.repeat(53);
+const replacementHash='$2b$10$'+'b'.repeat(53);
 const service={
  settings:{...schema.settings,sessionSecret:crypto.randomBytes(32).toString('hex'),
   sessionTtlSec:3600,sessionCookieName:'oauth_session',
@@ -38,7 +40,7 @@ function verifyServerToken(value){
   return payload;
  }catch{return false}
 }
-function context(header,cookie,{account={webId},accountThrows=false}={}){
+function context(header,cookie,{account={webId,hashedPassword:passwordHash},accountThrows=false}={}){
  const headers={};
  if(header!==undefined)headers.authorization=header;
  if(cookie!==undefined)headers.cookie='oauth_session='+encodeURIComponent(cookie);
@@ -72,7 +74,8 @@ async function rejected(ctx){
 }
 async function main(){
  const good=token({webId,iat:now,exp:now+300});
- const cookie=service.buildSessionToken(webId,sessionId);
+ const cookie=service.buildSessionToken(webId,sessionId,
+  service.credentialSealForAccount({webId,hashedPassword:passwordHash}));
  const ok=context('Bearer '+good);
  assert.equal(await service.requireUserWebId.call(service,ok),webId);
  assert.deepEqual(ok.calls,['auth.jwt.verifyServerSignedToken',
@@ -114,6 +117,10 @@ async function main(){
  // Cookie fallback is allowed only when there is *no* Authorization header.
  const cookieOnly=context(undefined,cookie);
  assert.equal(await service.requireUserWebId.call(service,cookieOnly),webId);
+ // Password set/reset/updateAccountSettings all replace the verifier;
+ // a copied but live Redis cookie must immediately fail owner approval.
+ await rejected(context(undefined,cookie,{account:{webId,hashedPassword:replacementHash}}));
+ await rejected(context(undefined,cookie,{account:{webId}}));
  assert.deepEqual(cookieOnly.calls,['oauth-session-registry.verify',
   'auth.account.findByWebId']);
  await rejected(context('Bearer invalid',cookie));
@@ -151,7 +158,7 @@ async function main(){
    }};
   return {ctx,login:()=>schema.actions.loginSession.call(service,ctx)};
  }
- const activeLogin=await runLogin({webId});
+ const activeLogin=await runLogin({webId,hashedPassword:passwordHash});
  const result=await activeLogin.login();
  assert.equal(result.ok,true);
  assert.equal(result.webId,webId);

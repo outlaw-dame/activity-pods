@@ -191,7 +191,8 @@ module.exports = {
       if (this.prefersHtml(ctx)) {
         const candidateSession = this.getSession(ctx);
         const existingSession = candidateSession &&
-          await this.isActiveBrowserSession(ctx, candidateSession) ? candidateSession : null;
+          await this.isActiveBrowserSession(ctx, candidateSession) &&
+          await this.isCurrentBrowserSessionAccount(ctx, candidateSession) ? candidateSession : null;
         this.setHtmlResponse(ctx);
         return this.renderAuthorizePage(payload, {
           csrfCookieName: this.settings.csrfCookieName,
@@ -246,8 +247,12 @@ module.exports = {
       // A signed cookie is never usable unless its random id was first
       // durably acknowledged by the shared session authority. Ambiguous
       // Redis writes do not emit a cookie, even if they may leave a TTL key.
+      const credentialSeal = this.credentialSealForAccount(account);
+      if (!credentialSeal) {
+        throw new MoleculerError('Invalid account credentials', 401, 'LOGIN_REQUIRED');
+      }
       const sessionId = crypto.randomBytes(32).toString('base64url');
-      const token = this.buildSessionToken(webId, sessionId);
+      const token = this.buildSessionToken(webId, sessionId, credentialSeal);
       let registered;
       try {
         registered = await ctx.call('oauth-session-registry.create', {
@@ -486,6 +491,40 @@ module.exports = {
       }
     },
 
+    credentialSealForAccount(account) {
+      const hash = account?.hashedPassword;
+      if (typeof account?.webId !== 'string' ||
+          typeof hash !== 'string' || hash.length < 40 || hash.length > 512) {
+        return null;
+      }
+      // HMAC domain separation prevents password-verifier disclosure and
+      // excludes raw bcrypt strings from browser storage or logs.
+      return crypto.createHmac('sha256', this.settings.sessionSecret)
+        .update('paper-oauth-credential-session-v1:')
+        .update(JSON.stringify([account.webId, hash]), 'utf8')
+        .digest('base64url');
+    },
+
+    sessionCredentialMatches(session, account) {
+      const expected = this.credentialSealForAccount(account);
+      return !!expected && typeof session?.credentialSeal === 'string' &&
+        /^[A-Za-z0-9_-]{43}$/u.test(session.credentialSeal) &&
+        crypto.timingSafeEqual(Buffer.from(expected, 'ascii'),
+          Buffer.from(session.credentialSeal, 'ascii'));
+    },
+
+    async isCurrentBrowserSessionAccount(ctx, signedSession) {
+      try {
+        const account = await ctx.call('auth.account.findByWebId', {
+          webId: signedSession.webId
+        });
+        return !this.ownerAccountUnsafe(account, signedSession.webId) &&
+          this.sessionCredentialMatches(signedSession, account);
+      } catch {
+        return false;
+      }
+    },
+
     async isActiveBrowserSession(ctx, signedSession) {
       if (!signedSession) return false;
       try {
@@ -514,7 +553,8 @@ module.exports = {
       } catch {
         throw new MoleculerError('Owner account is unavailable', 401, 'LOGIN_REQUIRED');
       }
-      if (this.ownerAccountUnsafe(account, webId)) {
+      if (this.ownerAccountUnsafe(account, webId) ||
+          (session && !this.sessionCredentialMatches(session, account))) {
         throw new MoleculerError('Owner account is unavailable', 401, 'LOGIN_REQUIRED');
       }
       return webId;
@@ -665,15 +705,18 @@ module.exports = {
         .digest('base64url');
     },
 
-    buildSessionToken(webId, sessionId) {
+    buildSessionToken(webId, sessionId, credentialSeal) {
       // Deliberately do not mint a legacy stateless cookie. Every new token
       // contains a CSPRNG nonce registered before the cookie is returned.
       if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(sessionId)) {
         throw new Error('Browser session id missing or malformed');
       }
+      if (typeof credentialSeal !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(credentialSeal)) {
+        throw new Error('Credential version proof is required');
+      }
       const iat = Math.floor(Date.now() / 1000);
       const exp = iat + this.settings.sessionTtlSec;
-      const payload = Buffer.from(JSON.stringify({ webId, iat, exp, sessionId }), 'utf8').toString('base64url');
+      const payload = Buffer.from(JSON.stringify({ webId, iat, exp, sessionId, credentialSeal }), 'utf8').toString('base64url');
       const sig = this.signSessionPayload(payload);
       return `${payload}.${sig}`;
     },
@@ -701,15 +744,18 @@ module.exports = {
       }
       const exp = decoded?.exp, iat = decoded?.iat;
       const webId = decoded?.webId, sessionId = decoded?.sessionId;
+      const credentialSeal = decoded?.credentialSeal;
       const now = Math.floor(Date.now() / 1000);
       if (!Number.isSafeInteger(exp) || !Number.isSafeInteger(iat) ||
           iat > now + 60 || iat < now - 86400 ||
           exp <= now || exp <= iat || exp > iat + this.settings.sessionTtlSec ||
           typeof webId !== 'string' || webId.length < 8 || webId.length > 2048 ||
-          typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(sessionId)) {
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(sessionId) ||
+          typeof credentialSeal !== 'string' ||
+          !/^[A-Za-z0-9_-]{43}$/u.test(credentialSeal)) {
         return null;
       }
-      return { webId, exp, sessionId };
+      return { webId, exp, sessionId, credentialSeal };
     },
 
     setSessionCookie(ctx, token) {

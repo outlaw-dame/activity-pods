@@ -821,3 +821,51 @@ Authenticated owner post-enrollment consent, fully integrated
 production PG/SAI/PDS admission, independent WORM with WAL failover proof,
 hosted positive browser/Solid/ActivityPub/ATProto signup and independent
 security review remain P0. Keep `release=CLOSED`.
+
+## Password-verifier-bound OAuth browser sessions — nonactivated hardening
+
+The SemApps account service has **three separate credential-mutation**
+actions: `auth.account.setPassword`, `setNewPassword`, and
+`updateAccountSettings`. They all replace the account's
+`hashedPassword`, while an event hook for a global revocation
+generation is not guaranteed. Adding a callback to just one endpoint
+would miss other password-reset paths and crash windows.
+
+Paper's browser-session candidate therefore requires a **current
+credential-version proof on each authorization**. At successful
+username/email + password login, the provider HMACs a domain-separated
+canonical [WebID, stored password verifier] pair using its existing
+private OAuth session signing secret. Only the resulting fixed-length
+MAC is included in the signed HttpOnly browser cookie; no raw bcrypt
+verifier or password is copied to browser storage. The cookie still
+requires the live Redis session registry.
+
+At each browser POST approval, the account record is freshly resolved
+and its current verifier recomputed and compared in constant time.
+A password change via any of the SemApps account mutation actions
+alters the underlying verifier and therefore refuses an older signed
+cookie, even if its Redis session key has not expired. The GET
+authorization UI likewise does not display this stale browser session
+as active. A missing, malformed or passwordless verifier fails closed
+for password-authenticated browser sessions, and older cookies lacking
+this proof are intentionally invalidated on deployment.
+
+Tests cover current password/session admission, changed-verifier
+denial despite a live Redis key, rejection of missing verifier,
+malformed legacy cookies, cross-replica logout, and the same-Redis
+atomic consent upsert. They use fabricated verifier strings, never
+live credentials.
+
+**Important limitations:** This is an effective password-change
+admission fence only while the current authoritative account record
+remains non-rewound. A simultaneous Jena account/password change and
+Redis consent write is not one cross-store PG transaction. Restoring
+the former hashedPassword plus Redis/session snapshot could revive
+pre-revocation admission without the independent WORM epoch. Existing
+SemApps RS256 bearer tokens do not contain this new verifier proof and
+can still authorize according to their separate max-one-hour age
+policy; password-change revocation of *all* bearer/refresh/session
+credentials requires provider-level canonical account/epoch authority.
+The production fuse remains `release=CLOSED` until those barriers,
+hosted owner OAuth and positive Solid/SAI/PDS/AP signup, and independent
+security review have genuine acceptance evidence.

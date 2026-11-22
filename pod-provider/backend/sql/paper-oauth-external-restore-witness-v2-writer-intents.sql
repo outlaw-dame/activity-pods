@@ -100,7 +100,7 @@ BEGIN
  -- Without this lock multiple concurrent COUNT+INSERT calls could exceed
  -- the strict bounded pending-intent cap.
  PERFORM pg_advisory_xact_lock(hashtextextended(
-  'paper:witness:writer:v1:'||p_owner||chr(0)||p_client,0));
+  'paper:witness:writer:v1:'||length(p_owner)::text||':'||p_owner||':'||p_client,0));
  SELECT true INTO allowed
  FROM paper_oauth_restore_witness.current_epochs c
  JOIN paper_oauth_restore_witness.events e ON

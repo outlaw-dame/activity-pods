@@ -88,6 +88,14 @@ export PAPER_WORM_CUSTODY_PHASE=preflight
 node pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs
 ```
 
+The probe forces the public AWS commercial-partition regional HTTPS
+STS and S3 endpoints. It refuses custom endpoint URLs, alternate CA
+bundles and disabled TLS verification, rather than accepting a mock
+service or a redirected SDK profile as real AWS custody. AWS GovCloud
+and China partitions need an independently reviewed endpoint policy
+before being supported. This does not replace operator review of
+trusted machine TLS roots or cross-account IAM role trust.
+
 The preflight checks actual, independent STS account IDs and restricts
 caller identities to IAM roles rather than root or IAM users. Every S3
 request carries the expected archive bucket owner. The command refuses

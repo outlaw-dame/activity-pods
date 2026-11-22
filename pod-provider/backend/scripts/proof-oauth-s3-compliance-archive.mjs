@@ -316,6 +316,10 @@ test('rewritten latest version, invalid retention and forged subject deny',async
  const key=bad.key;
  f.state.map.get(key).bytes=Buffer.from('forged receipt body');
  await deniesHighwater(f,'S3_HIGHWATER_LIST_UNSAFE');
+ const expiring=fixture();
+ await writeEpochs(expiring,[1]);
+ expiring.state.expiry=new Date(now+3*DAY);
+ await deniesHighwater(expiring,'S3_RECEIPT_RETENTION_UNVERIFIED');
  const wrong=fixture();
  await writeEpochs(wrong,[1]);
  await assert.rejects(wrong.archive.readLatestEpoch({

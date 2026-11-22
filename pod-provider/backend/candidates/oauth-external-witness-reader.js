@@ -70,6 +70,7 @@ function createDisposableOauthWitnessReader({
       result=await c.query({
         text:"SELECT current_setting('server_version_num')::integer AS version,"+
           "current_user=session_user AS own_login,"+
+          "NOT pg_catalog.pg_is_in_recovery() AS primary_host,"+
           "r.rolcanlogin AND NOT(r.rolsuper OR r.rolcreatedb OR r.rolcreaterole"+
           " OR r.rolreplication OR r.rolbypassrls) AS restricted,"+
           "pg_catalog.pg_has_role(current_user,'paper_oauth_witness_reader','USAGE') AS reader,"+
@@ -112,6 +113,7 @@ function createDisposableOauthWitnessReader({
     }catch{fail('PG_OAUTH_WITNESS_ROLE_UNSAFE')}
     const x=result?.rows?.[0];
     if(result.rowCount!==1||x.version<180000||x.own_login!==true||
+       x.primary_host!==true||
        x.restricted!==true||x.reader!==true||x.can_switch!==false||
        x.issuer!==false||x.revoker!==false||x.attestor!==false||
        x.schema_create!==false||x.direct_current!==false||

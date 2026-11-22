@@ -723,3 +723,18 @@ reconciliation and WAL abort barrier, nor the unresolved signed-intent
 receipt history requirements. The storage transport remains a test
 substitute, no production credential/runtime path has been wired,
 and `release=CLOSED` remains enforced.
+
+
+## Primary-only independent witness admission (NONACTIVATED)
+
+The restricted OAuth witness reader rejects PostgreSQL hot-standby connections
+using `NOT pg_catalog.pg_is_in_recovery()` in **every** per-request role
+admission query. A lagging replica can hold consistent but stale witness
+rows, including an authorization that the primary has revoked. A missing
+or false primary predicate denies the authorization before any grant lookup.
+The two physically separate PG18 / Redis fixture checks a real primary
+and fault-injects a valid-looking standby admission response. This rule
+is **not** a failover/PITR activation barrier: a newly promoted but rewound
+primary can return true and still must be fenced by independently immutable
+high-water receipts and verified WAL recovery. No production activation;
+`release=CLOSED`.

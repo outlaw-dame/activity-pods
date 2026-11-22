@@ -1,0 +1,45 @@
+name: Paper OAuth two independent PG18 physical WAL PITR — disposable
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/paper-oauth-dual-pg18-physical-pitr.yml'
+      - 'pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/paper-oauth-dual-pg18-physical-pitr.yml'
+      - 'pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-physical-pitr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  physical-pitr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PAPER_PITR_DISPOSABLE: confirmed
+    steps:
+      - name: Checkout exact-head code without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Refuse missing disposable guard and invalid Bash
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh
+          grep -q 'NONACTIVATED' pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh
+          grep -q 'PAPER_PITR_DISPOSABLE' pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh
+      - name: Prove two independent real PG18 physical backups and before/after WAL targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker info >/dev/null
+          bash pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh

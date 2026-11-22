@@ -37,7 +37,8 @@ let commands=Object.fromEntries(names.map(name=>[
 ]));
 if(process.env.PAPER_WORM_SDK_ROOT){
   const require=createRequire(path.join(process.env.PAPER_WORM_SDK_ROOT,'package.json'));
-  const sdk={...require('@aws-sdk/client-s3'),...require('@aws-sdk/client-sts')};
+  const servicePackages=['@aws-sdk/client-s3','@aws-sdk/client-sts'];
+  const sdk={...require(servicePackages[0]),...require(servicePackages[1])};
   for(const name of names){
     assert.equal(typeof sdk[name],'function','Missing real AWS constructor '+name);
   }

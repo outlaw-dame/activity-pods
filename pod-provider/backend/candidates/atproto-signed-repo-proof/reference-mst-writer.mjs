@@ -185,7 +185,7 @@ async function signedNewCommit({did,rev,rootCid,signer,publicKey}) {
  */
 export function createReferenceMstWriter({
   pool,reference,authorize,lockCanonicalConsent=null,
-  reserveWitnessIntent=null,
+  reserveWitnessIntent=null,verifyWitnessIntentSealed=null,
   restrictedProjectionTransition=false,fixtureOnly=false
 }={}) {
   if(fixtureOnly!==true || process.env.NODE_ENV==='production' ||
@@ -199,6 +199,8 @@ export function createReferenceMstWriter({
      typeof authorize!=='function' ||
      (lockCanonicalConsent!==null && typeof lockCanonicalConsent!=='function') ||
      (reserveWitnessIntent!==null && typeof reserveWitnessIntent!=='function') ||
+     (verifyWitnessIntentSealed!==null &&
+      typeof verifyWitnessIntentSealed!=='function') ||
      (restrictedProjectionTransition===true && lockCanonicalConsent===null) ||
      typeof restrictedProjectionTransition!=='boolean'){
     fail('REFERENCE_MST_CONFIGURATION_INVALID');
@@ -215,6 +217,17 @@ export function createReferenceMstWriter({
        typeof reserveWitnessIntent!=='function' ||
        lockCanonicalConsent===null){
       fail('REFERENCE_MST_EXTERNAL_WITNESS_NOT_RELEASED');
+    }
+  }
+  // v5 WORM receipt confirmation is an additional disposable-only gate.
+  // The callback is a separately privileged witness SQL verifier, not a
+  // result furnished by the HTTP client or by the signing worker itself.
+  const wormIntentFlag=process.env.PAPER_OAUTH_WORM_INTENTS_DISPOSABLE;
+  if(wormIntentFlag!==undefined || verifyWitnessIntentSealed!==null){
+    if(wormIntentFlag!=='confirmed' || witnessFlag!=='confirmed' ||
+       typeof reserveWitnessIntent!=='function' ||
+       typeof verifyWitnessIntentSealed!=='function'){
+      fail('REFERENCE_MST_WORM_INTENT_NOT_RELEASED');
     }
   }
   const auth=async(accountId,did,expectedCommitCid)=>{
@@ -408,6 +421,17 @@ export function createReferenceMstWriter({
         }));
       }catch{fail('REFERENCE_MST_EXTERNAL_WITNESS_UNAVAILABLE');}
       if(reserved!==true)fail('REFERENCE_MST_EXTERNAL_WITNESS_DENIED');
+      if(verifyWitnessIntentSealed!==null){
+        let sealed=false;
+        try{
+          sealed=await verifyWitnessIntentSealed(Object.freeze({
+            operationId:witnessOperationId,accountId,did,
+            expectedCommitCid:prior.commitCid,
+            proposedCommitCid:signed.cid
+          }));
+        }catch{fail('REFERENCE_MST_WORM_INTENT_UNAVAILABLE')}
+        if(sealed!==true)fail('REFERENCE_MST_WORM_INTENT_UNSEALED');
+      }
     }
 
     const client=await pool.connect();

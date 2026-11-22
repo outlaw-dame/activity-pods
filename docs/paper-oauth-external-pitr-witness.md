@@ -571,3 +571,71 @@ including after the archive reader or database restarts. Signed-write
 pending/resolved receipt chain replay and WAL-based aborted-transaction
 evidence remain prerequisites. This nonactivated candidate cannot open
 production signup; `release=CLOSED` and federation P0 #186 stay in force.
+
+
+## S3 Object Lock COMPLIANCE archive transport — NONACTIVATED integration candidate
+
+`pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs` is a
+concrete AWS S3 API **COMPLIANCE** mode archival transport, not another
+Map-based archive. It accepts independently constructed S3 write/read
+clients and the upstream `@aws-sdk/client-s3` command constructors; it
+holds no credentials, provider token or storage administrative role.
+Nothing in a production Moleculer service imports it. The factory
+requires the explicit test-only gate until independent operational
+approval and final admission wiring.
+
+For an **exact witness-generated epoch receipt or v5 pending/resolved
+signed-intent receipt** the transport validates a strict bounded,
+privacy-pseudonymous wire format, then:
+
+1. Independently query `GetBucketVersioning` and
+   `GetObjectLockConfiguration` with the **read principal**. Both S3
+   versioning and Object Lock must be enabled. The bucket *default*
+   retention must be **COMPLIANCE**, never GOVERNANCE, with at least
+   400 days configured in the current disposable proof.
+2. Attempt `PutObject` with `If-None-Match: *`, MD5 and SHA-256
+   checksums. It does **not** create an overwrite path, change
+   retention or delete a previous version. A lost PUT acknowledgment
+   or existing-key conflict remains **uncertain**, never a positive
+   attestation by itself.
+3. Independently `HeadObject` for a current, non-null S3
+   `VersionId`; `GetObjectRetention` for **that specific version**
+   must report `COMPLIANCE` with the minimum retained-until date.
+   Perform a separately authenticated version-targeted `GetObject`,
+   bounded stream read and constant-time byte comparison. The S3
+   `ETag` is *never* accepted as a cryptographic digest.
+4. Recheck the **current** S3 version and the bucket lock
+   configuration after readback. A delete marker, replacement,
+   permissions failure, expired retention, wrong version, oversized
+   stream, malformed receipt or unavailable storage fails closed.
+
+This transport is intended for the isolated attestor that reads the
+expected bytes from witness SQL, not from user requests. The independent
+operator must still audit and enforce all of the following **before
+production use**: dedicated S3 COMPLIANCE account under independently
+controlled lifecycle; no writer/reader/admin credential reuse; separate
+read-only verifier with `GetObjectVersion`/retention/lock permissions;
+write-only conditional PUT policy, with no `DeleteObject`,
+`DeleteObjectVersion`, `PutObjectRetention`, `BypassGovernanceRetention`,
+`PutBucketObjectLockConfiguration`, versioning/lifecycle policy or
+account-deletion authority on runtime identities; immutable audit of
+configuration and credentials; backup plus token lifetime shorter than
+retention; globally fenced restore epoch. An SDK client's JavaScript
+identity inequality alone **does not prove principal isolation**.
+
+The matching CI
+`.github/workflows/paper-oauth-s3-compliance-archive.yml`
+exercises negative paths and both deterministic fake transport and
+**actual pinned Apache-2.0 AWS S3 SDK command objects**. This is
+still NOT a live S3 server, not a real COMPLIANCE retained object,
+not a verified deployment, and not independent security certification.
+The object archive cannot by itself prove that a PG transaction can no
+longer commit, nor can it solve historical high-water completeness
+without complete independently retained enumeration and a WAL
+failover barrier. An independently managed production bucket and
+positive hosted signup are still required.
+
+Normative sources:
+https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html
+https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
+https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/s3/command/GetObjectRetentionCommand/

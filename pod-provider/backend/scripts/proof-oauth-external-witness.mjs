@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
 import pg from 'pg';
 import Redis from 'ioredis';
 import {generateKeyPair,exportJWK} from 'jose';
@@ -27,7 +28,7 @@ if(process.env.NODE_ENV!=='test'||
    process.env.PAPER_OAUTH_EPOCH_REDIS_URL!==redisUrl){
   throw Error('Refusing non-disposable recovery witness fixture');
 }
-const {Client}=pg;
+const {Client,Pool}=pg;
 const main=new Client({connectionString:mainDsn,connectionTimeoutMillis:3000,query_timeout:9000});
 const root=new Client({connectionString:witnessDsn,connectionTimeoutMillis:3000,query_timeout:9000});
 const redis=new Redis(redisUrl,{lazyConnect:true,enableOfflineQueue:false,
@@ -55,7 +56,8 @@ const roles={issuer:'paper_oauth_witness_issuer',
 const clients=[],accounts=[];
 const id=s=>'"'+s.replaceAll('"','""')+'"';
 const sql=path=>fs.readFile(new URL(path,import.meta.url),'utf8');
-let madeMain=false,madeWitness=false,error=null;
+let madeMain=false,madeWitness=false,madeRepo=false,error=null;
+let repoPool=null;
 const current=(c,grant,rev)=>c.query(
   'SELECT paper_atproto_authority.verify_oauth_generation('+
   '$1,$2,$3,$4,$5,$6::bigint) AS allowed',
@@ -357,6 +359,109 @@ async function mainTest(){
   assert.equal(await resolve(uncertain,1,'aborted',null),true);
   assert.equal((await readIntent(uncertain)).state,'aborted');
 
+  // The same witness also fences a *real signed* reference-MST commit on
+  // canonical PG: the UUID is journaled atomically with the signed head
+  // and the independently verified native outbox, not merely in memory.
+  if(process.env.PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE==='confirmed'){
+    const entry=process.env.ATPROTO_REFERENCE_REPO_ENTRY||'';
+    if(!entry.startsWith('/'))throw Error('Pinned ATProto reference is mandatory');
+    const reference=await import(pathToFileURL(entry).href);
+    const {createSignedRepoProofStore}=await import(
+      '../candidates/atproto-signed-repo-proof/store.mjs');
+    const {createReferenceMstWriter}=await import(
+      '../candidates/atproto-signed-repo-proof/reference-mst-writer.mjs');
+    await main.query(await sql('../candidates/atproto-signed-repo-proof/schema.sql'));
+    madeRepo=true;
+    await main.query(await sql(
+      '../candidates/atproto-signed-repo-proof/single-record-mutation.sql'));
+    await main.query(await sql(
+      '../candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql'));
+    repoPool=new Pool({connectionString:mainDsn,max:4,
+      connectionTimeoutMillis:3000,query_timeout:9000,
+      idleTimeoutMillis:2000,allowExitOnIdle:true});
+    const keypair=crypto.generateKeyPairSync('ec',{namedCurve:'secp256k1'});
+    const signing={
+      publicKeyPem:keypair.publicKey.export({type:'spki',format:'pem'}).toString(),
+      signer:async bytes=>crypto.sign('sha256',bytes,{
+        key:keypair.privateKey,dsaEncoding:'ieee-p1363'})
+    };
+    const genesis=await createSignedRepoProofStore({
+      pool:repoPool,fixtureOnly:true
+    }).bootstrap({accountId:owner,did,...signing});
+    const ready=await repoPool.query(
+      "UPDATE paper_atproto_repo_proof.rdf_projection_jobs SET "+
+      "state='applied',lease_epoch=lease_epoch+1,applied_at=clock_timestamp() "+
+      "WHERE account_id=$1 AND did=$2 AND head_cid=$3 AND state='pending' "+
+      "RETURNING generation",[owner,did,genesis.commitCid]);
+    assert.equal(ready.rowCount,1);
+    const witnessed=[];
+    const repoWriter=createReferenceMstWriter({
+      pool:repoPool,reference,fixtureOnly:true,
+      authorize:async({accountId, did:subject,scope})=>
+        accountId===owner&&subject===did&&scope==='atproto:record-write'&&
+        await admitted(reader,grant1,1),
+      lockCanonicalConsent:async(tx,{accountId,did:subject})=>{
+        if(accountId!==owner||subject!==did)return false;
+        const r=await tx.query(
+          'SELECT paper_atproto_authority.lock_oauth_generation_for_write('+
+          '$1,$2,$3,$4,$5,$6::bigint) AS ok',
+          [owner,app,clientId,grant1,scopeHash,1]);
+        return r.rows[0]?.ok===true;
+      },
+      reserveWitnessIntent:async(scope)=>{
+        assert.equal(scope.accountId,owner);
+        assert.equal(scope.did,did);
+        assert.equal(scope.expectedCommitCid,genesis.commitCid);
+        assert.match(scope.proposedCommitCid,/^bafyre[a-z2-7]{53}$/u);
+        const ok=await reserve(writer,grant1,1,scope.operationId,
+          scope.expectedCommitCid);
+        if(ok)witnessed.push(scope);
+        return ok;
+      }
+    });
+    const signed=await repoWriter.write({
+      accountId:owner,did,expectedCommitCid:genesis.commitCid,
+      expectedRev:genesis.rev,action:'create',
+      path:'app.bsky.feed.post/3jzm3xwpf342a',
+      record:{$type:'app.bsky.feed.post',
+        text:'Independent witness-fenced reference MST',
+        createdAt:'2026-11-21T00:00:00.000Z'},...signing
+    });
+    assert.equal(signed.verified,true);
+    assert.notEqual(signed.commitCid,genesis.commitCid);
+    assert.equal(witnessed.length,1);
+    const op=witnessed[0].operationId;
+    assert.equal((await readIntent(op)).state,'pending');
+    const audit=await repoPool.query(
+      'SELECT witness_operation_id::text AS op FROM '+
+      'paper_atproto_repo_proof.record_mutations '+
+      'WHERE did=$1 AND commit_cid=$2',[did,signed.commitCid]);
+    assert.equal(audit.rowCount,1);
+    assert.equal(audit.rows[0].op,op);
+    const outbox=await repoPool.query(
+      'SELECT kind,status,blocked_at FROM '+
+      'paper_atproto_repo_proof.native_event_outbox '+
+      'WHERE did=$1 AND commit_cid=$2',[did,signed.commitCid]);
+    assert.equal(outbox.rowCount,1);
+    assert.equal(outbox.rows[0].kind,'at.commit.v1');
+    assert.equal(outbox.rows[0].blocked_at,null);
+    assert.equal((await repoWriter.verify({
+      accountId:owner,did,publicKeyPem:signing.publicKeyPem,
+      path:'app.bsky.feed.post/3jzm3xwpf342a'
+    })).commitCid,signed.commitCid);
+    await assert.rejects(transition(revoker,'blocked',grant1,1,crypto.randomUUID()),
+      e=>e?.code==='P0001');
+    await assert.rejects(repoPool.query(
+      'UPDATE paper_atproto_repo_proof.record_mutations '+
+      'SET witness_operation_id=NULL WHERE did=$1 AND commit_cid=$2',
+      [did,signed.commitCid]),e=>e?.code==='P0001');
+    assert.equal(await resolve(op,1,'committed',signed.commitCid),true);
+    assert.equal((await readIntent(op)).state,'committed');
+    console.log('PASS: real signed reference MST, atomic canonical PG witness UUID/outbox and independent PG18 revoke barrier until verified signed head settlement');
+  }else if(process.env.PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE!==undefined){
+    throw Error('Invalid signed reference MST disposable gate');
+  }
+
   assert.equal(JSON.parse(await redis.get(consentKey)).revoked,false,
     'Active Redis grant remains the pre-revocation snapshot');
 
@@ -446,6 +551,8 @@ finally{
  for(const role of accounts.reverse())try{await root.query('DROP ROLE IF EXISTS '+id(role))}catch(e){errs.push(e)}
  if(madeWitness)for(const role of Object.values(roles).filter(Boolean))
   try{await root.query('DROP ROLE IF EXISTS '+id(role))}catch(e){errs.push(e)}
+ if(repoPool)try{await repoPool.end()}catch(e){errs.push(e)}
+ if(madeRepo)try{await main.query('DROP SCHEMA paper_atproto_repo_proof CASCADE')}catch(e){errs.push(e)}
  if(madeMain)try{await main.query('DROP SCHEMA paper_atproto_authority CASCADE')}catch(e){errs.push(e)}
  if(madeMain)for(const role of [
   'paper_oauth_epoch_issuer','paper_oauth_epoch_revoker','paper_oauth_epoch_reader',

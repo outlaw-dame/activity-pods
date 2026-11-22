@@ -185,6 +185,7 @@ async function signedNewCommit({did,rev,rootCid,signer,publicKey}) {
  */
 export function createReferenceMstWriter({
   pool,reference,authorize,lockCanonicalConsent=null,
+  reserveWitnessIntent=null,
   restrictedProjectionTransition=false,fixtureOnly=false
 }={}) {
   if(fixtureOnly!==true || process.env.NODE_ENV==='production' ||
@@ -197,9 +198,24 @@ export function createReferenceMstWriter({
      typeof pool?.connect!=='function' ||
      typeof authorize!=='function' ||
      (lockCanonicalConsent!==null && typeof lockCanonicalConsent!=='function') ||
+     (reserveWitnessIntent!==null && typeof reserveWitnessIntent!=='function') ||
      (restrictedProjectionTransition===true && lockCanonicalConsent===null) ||
      typeof restrictedProjectionTransition!=='boolean'){
     fail('REFERENCE_MST_CONFIGURATION_INVALID');
+  }
+  // A witness reservation MUST be a trusted, private-PG write derived from
+  // this same DPoP-authorized request. An injected callback with a missing
+  // canonical PG consent lock is not a safe release configuration.
+  const witnessFlag=process.env.PAPER_OAUTH_WITNESS_DISPOSABLE;
+  if(witnessFlag!==undefined || reserveWitnessIntent!==null){
+    if(witnessFlag!=='confirmed' ||
+       process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE!=='confirmed' ||
+       process.env.PAPER_OAUTH_PG_RESTORE_DISPOSABLE!=='confirmed' ||
+       process.env.PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE!=='confirmed' ||
+       typeof reserveWitnessIntent!=='function' ||
+       lockCanonicalConsent===null){
+      fail('REFERENCE_MST_EXTERNAL_WITNESS_NOT_RELEASED');
+    }
   }
   const auth=async(accountId,did,expectedCommitCid)=>{
     if((await authorize({
@@ -374,6 +390,26 @@ export function createReferenceMstWriter({
     await addBlock(signed.cid,signed.bytes);
     await auth(accountId,did,expectedCommitCid);
 
+    // A unique durable intent is reserved in the INDEPENDENT witness PG18
+    // before the primary-PG signed repository transaction begins. The
+    // separate witness revoker MUST refuse an ACK while this intent is
+    // unresolved. Neither this writer nor Redis may settle the intent.
+    // A lost COMMIT response or crash intentionally strands this intent
+    // pending until a separate recovery actor establishes the real outcome.
+    let witnessOperationId=null;
+    if(reserveWitnessIntent!==null){
+      witnessOperationId=crypto.randomUUID();
+      let reserved;
+      try{
+        reserved=await reserveWitnessIntent(Object.freeze({
+          operationId:witnessOperationId,accountId,did,
+          expectedCommitCid:prior.commitCid,expectedRev:prior.rev,
+          proposedCommitCid:signed.cid
+        }));
+      }catch{fail('REFERENCE_MST_EXTERNAL_WITNESS_UNAVAILABLE');}
+      if(reserved!==true)fail('REFERENCE_MST_EXTERNAL_WITNESS_DENIED');
+    }
+
     const client=await pool.connect();
     let inTransaction=false,commitAttempted=false,discard=false;
     try{
@@ -450,14 +486,17 @@ export function createReferenceMstWriter({
         'INSERT INTO '+TABLE+'.native_event_outbox(did,commit_cid,rev,kind) '+
         "VALUES($1,$2,$3,'at.commit.v1')",[did,signed.cid,rev]
       );
+      const witnessed=witnessOperationId!==null;
       await client.query(
         'INSERT INTO '+TABLE+'.record_mutations'+
         '(did,commit_cid,previous_commit_cid,previous_root_cid,'+
         'previous_rev,rev,action,path,previous_record_cid,'+
-        'record_cid,generation) '+
-        'VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+        'record_cid,generation'+(witnessed?',witness_operation_id':'')+') '+
+        'VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11'+
+        (witnessed?',$12':'')+')',
         [did,signed.cid,prior.commitCid,prior.rootCid,prior.rev,rev,
-          action,path,prior.recordCid,newCid,generation]
+          action,path,prior.recordCid,newCid,generation,
+          ...(witnessed?[witnessOperationId]:[])]
       );
       if(testFailAfterOutbox)fail('REFERENCE_MST_TEST_INJECTED_FAILURE');
       // When the provider runs with its least-privileged signed-writer

@@ -222,3 +222,48 @@ revocation while an ambiguous write remains unresolved,
 irreversible resolved intents and a new sealed epoch. Test program
 validates database transactions and authority ordering, **not**
 a production reference-MST signed PDS runtime or physical PITR.
+
+## Reference-MST signed write correlation (NONACTIVATED integration candidate)
+
+The reviewed `createReferenceMstWriter` accepts an optional
+`reserveWitnessIntent` callback from the **trusted provider PDS
+authorizer only**, not an HTTP or ActivityPub request. Whenever the
+disposable witness flag is present, it requires all PG/Redis witness
+fixture flags plus `lockCanonicalConsent` in the SAME primary PG
+transaction. It signs a prospective reference-MST commit using the
+pinned upstream `@atproto/repo`, then generates a cryptographically
+random writer operation UUID, asks the separately credentialed
+witness writer to reserve that operation against the sealed current
+epoch **before** opening the primary repository transaction, and
+records this exact UUID alongside the signed commit in the
+`record_mutations` audit. That operation UUID and the native event
+outbox are committed atomically with the signed head. No caller can
+submit or reuse an operation ID through a public XRPC body.
+
+The additional canonical-PG migration
+`pod-provider/backend/candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql`
+adds a unique immutable operation UUID to the existing signed
+mutation audit, **without** creating a new account identity. Missing
+this migration fails the signed writer transaction closed; it must
+not silently drop the witness correlation. The writer is forbidden
+from settling a pending intent itself, even after it receives a
+positive PostgreSQL COMMIT acknowledgement. A **different privileged
+reconciler** must independently verify the durable signed commit,
+immutable CAR/MST/record CID, native outbox and canonical PG
+transaction status, and only then resolve the witness intent.
+An uncertain COMMIT may never be guessed aborted. If PG and witness
+become partitioned, no successful revoke ACK is possible while the
+pending intent remains; this availability tradeoff is explicit.
+
+The dedicated two-PostgreSQL18-cluster + Redis8.2 witness test now
+also installs the separately pinned `@atproto/repo@0.11.0`, signs
+a real reference-MST post with secp256k1, performs canonical PG
+OAuth+native SAI consent lock in the primary transaction, verifies
+the native signed-head/outbox and immutable witness audit UUID,
+proves the **independent** witness blocks revoke ACK while that
+commit is unresolved, then allows independently checked settlement.
+It is a **disposable cryptographic integration proof**, not a
+real hosted OAuth gateway or a deployed PDS. Real WORM receipts for
+each witness epoch AND pending-intent mutation, independent witness
+PITR/failover reconciliation, operational abort proof and remote
+federation acceptance remain required for production.

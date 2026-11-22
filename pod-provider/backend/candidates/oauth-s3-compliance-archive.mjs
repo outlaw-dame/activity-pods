@@ -289,9 +289,6 @@ export function createS3ComplianceReceiptArchive({
   }
   deny('S3_HIGHWATER_CAPACITY_EXCEEDED');
  }
- return Object.freeze({key,versionId:version,
-   sha256:crypto.createHash('sha256').update(actual).digest('hex')});
- }
  return Object.freeze({
   readLatestEpoch:latestVersion,
   async putAndVerify({key,bytes}={}){

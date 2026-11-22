@@ -513,3 +513,61 @@ high-water enumeration, chain/fork and epoch+intent cross-check after
 witness PITR; physical primary/witness PostgreSQL WAL recovery; safe
 issuer/owner OAuth and real hosted cross-protocol account acceptance.
 All releases remain **CLOSED**.
+
+
+## v6 immutable epoch high-water on OAuth admission — NONACTIVATED
+
+A restored primary PostgreSQL **and** an independently restored witness
+PostgreSQL can both agree on an old, cryptographically valid consent grant,
+even when Redis and JWTs are similarly restored. v5's receipt state machine
+prevents missing archive writes in an intact witness, but does not itself
+detect **a witness database rollback**. The operator must not infer
+anti-PITR protection from separate PostgreSQL instances alone.
+
+The additive independent witness migration
+`paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql`
+adds a narrowly granted read-only `active_checkpoint` function. It returns
+only the exact sealed active epoch's revision, SHA-256 event digest and
+operation UUID, and only when current and historical event rows match on
+owner/client, epoch, grant hash, state, operation and digest. The restricted
+`paper_oauth_witness_reader` receives no table DML or attestor privileges.
+
+The disposable `createDisposableOauthWitnessReader` can enable a **separate**
+high-water admission path only with the additional explicit
+`PAPER_OAUTH_WORM_HIGHWATER_DISPOSABLE=confirmed` test gate and a private,
+independently credentialed `readImmutableHeadReceipt` callback. That
+callback must select the **highest independently retained epoch** from a
+separately administered immutable archive, verify Object Lock policy and
+exact readback, and return the raw bounded immutable epoch receipt bytes.
+The OAuth request does not select the archive object, digest, revision or
+key; a boolean from the client is not authoritative.
+
+Each fresh admission verifies the restricted current witness checkpoint,
+reads and validates the immutable high-water body (including the exact
+owner/client domain-separated subject SHA, operation UUID and event digest),
+then reads the restricted checkpoint **again**. A restore, rotation,
+missing/corrupt archive object, stale read, mismatched high-water, foreign
+subject, concurrent witness generation change or archive partition fails
+closed. No positive authorization cache or automatic network retry exists.
+
+The expanded two-physical-PG18+Redis8.2 proof starts with a genuinely
+sealed current grant, then acknowledges a newer revocation and stores its
+epoch in an **in-memory** write-once archive substitute. It deliberately
+rewinds the primary PostgreSQL OAuth row, Redis grant and independent
+witness PostgreSQL current row to their old active revision. Ordinary
+SQL-only authorization and a signed JWT introspection would accept that
+snapshot. The external-high-water path rejects it, including through
+the real signed JWT introspection service; it also rejects absent and
+foreign-owner archive receipts. The restricted witness row is restored to
+its newer blocked state before the rest of the test continues.
+
+**Critical production gap:** The test performs privileged **logical-row**
+rewinds, NOT physical `pg_basebackup`/`restore_command`/WAL replay/PITR
+of both clusters. The test's Map has no independent administrator,
+retention guarantees or authoritative proof of complete highest-object
+enumeration. A real deployment must independently prove that the
+high-water lookup can never itself rewind or omit later retained receipts,
+including after the archive reader or database restarts. Signed-write
+pending/resolved receipt chain replay and WAL-based aborted-transaction
+evidence remain prerequisites. This nonactivated candidate cannot open
+production signup; `release=CLOSED` and federation P0 #186 stay in force.

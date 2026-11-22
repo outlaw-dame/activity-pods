@@ -123,7 +123,8 @@ export function createIndependentWitnessCommitReconciler({
    const q=await client.query(
     'SELECT r.account_id,r.did,r.generation AS repo_generation,'+
     'm.commit_cid,m.previous_commit_cid,m.previous_root_cid,'+
-    'm.previous_rev,m.rev,m.action,m.path,m.record_cid,'+
+    'm.previous_rev,m.rev,m.action,m.path,m.previous_record_cid,'+
+    'm.record_cid,'+
     'm.generation,m.witness_operation_id::text AS operation_id,'+
     'o.rev AS outbox_rev,o.kind AS outbox_kind,'+
     'o.status AS outbox_status,o.blocked_at,'+
@@ -200,10 +201,23 @@ export function createIndependentWitnessCommitReconciler({
    const decoded=decodeCanonical(commitBytes);
    const root=CID.asCID(decoded?.data)?.toString();
    if(!validCid(root))fail('WITNESS_RECONCILER_ROOT_INVALID');
+   // Independently verify the historic BEFORE and AFTER MST states:
+   // a forged mutation audit saying 'create', 'update' or 'delete' may
+   // not hide a no-op or modify a different path, even with a valid
+   // signed commit and a matching witness operation ID.
+   const before=reference.MST.load(blocks,CID.parse(row.previous_root_cid));
+   const beforeLink=await before.get(row.path);
+   const beforeCid=beforeLink?.toString()??null;
+   if((row.action==='create' &&
+      (beforeCid!==null||row.previous_record_cid!==null))||
+      (row.action!=='create'&&
+       (!validCid(beforeCid)||beforeCid!==row.previous_record_cid)))
+     fail('WITNESS_RECONCILER_PREVIOUS_RECORD_MISMATCH');
    const mst=reference.MST.load(blocks,CID.parse(root));
    const recordLink=await mst.get(row.path);
    const recordCid=recordLink?.toString()??null;
-   if((row.action==='delete'&&recordCid!==null)||
+   if((row.action==='delete'&&
+      (recordCid!==null||row.record_cid!==null))||
       (row.action!=='delete'&&
        (!validCid(recordCid)||recordCid!==row.record_cid)))
      fail('WITNESS_RECONCILER_RECORD_MISMATCH');

@@ -307,7 +307,9 @@ It verifies exactly one immutable signed mutation UUID with the
 expected/proposed commit CIDs, owner WebID, managed DID, native
 outbox and valid generation. It loads CID-addressed immutable DAG
 blocks and the historical upstream `@atproto/repo` MST under bounded
-read/byte limits; verifies the exact post path and record digest; then
+read/byte limits; verifies the exact post path and before/after MST record digests,
+checking that create/update/delete change precisely the claimed historical
+path; then
 independently validates the canonical signed secp256k1 commit using a
 server-resolved historic DID PLC signing key, never a public client
 supplied signing key. Only then does a **different** witness reconciler

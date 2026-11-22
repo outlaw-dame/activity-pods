@@ -47,7 +47,7 @@ function fixture(opts={}){
  const state={map:new Map(),reads:[],writes:[],headReads:0,mode:opts.mode??'COMPLIANCE',
   versioning:opts.versioning??'Enabled',enabled:opts.enabled??'Enabled',
   years:opts.years??0,days:opts.days??401,
-  expiry:opts.expiry??new Date(now+401*DAY)};
+  expiry:Object.hasOwn(opts,'expiry')?opts.expiry:new Date(now+401*DAY)};
  const writer={send:async cmd=>{
   assert.equal(cmd.kind??cmd.constructor.name,'PutObjectCommand');
   assert.equal(cmd.input.Bucket,'paper-immutable-archive');
@@ -122,7 +122,7 @@ test('real S3 compliance contract: conditional PUT, exact locked version, indepe
  const result=await f.archive.putAndVerify({key:epochKey,bytes:epochBody});
  assert.equal(result.versionId,'s3-version-0');
  assert.equal(result.sha256,crypto.createHash('sha256').update(epochBody).digest('hex'));
- assert.equal(f.state.reads.filter(x=>x==='GetBucketObjectLockConfigurationCommand').length,2);
+ assert.equal(f.state.reads.filter(x=>x==='GetObjectLockConfigurationCommand').length,2);
  assert.equal(f.state.reads.filter(x=>x==='GetBucketVersioningCommand').length,2);
  assert.equal(f.state.reads.filter(x=>x==='HeadObjectCommand').length,2);
  assert.equal(f.state.reads.filter(x=>x==='GetObjectRetentionCommand').length,1);

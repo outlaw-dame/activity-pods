@@ -190,6 +190,16 @@ function createDisposableOauthWitnessReader({
          !HASH.test(archive.eventSha256||'')||
          !HASH.test(archive.subject||''))
         fail('PG_OAUTH_HIGHWATER_INVALID');
+      // Reject alternate JSON serialization or extra whitespace. The
+      // immutable archive must expose exactly the bytes authored by the
+      // separate epoch receipt attestor, not an attacker-authored summary.
+      const canonical=Buffer.from(JSON.stringify({
+        kind:archive.kind,subject:archive.subject,revision:archive.revision,
+        operationId:archive.operationId,eventSha256:archive.eventSha256
+      }),'utf8');
+      if(canonical.length!==raw.length||
+         !crypto.timingSafeEqual(raw,canonical))
+        fail('PG_OAUTH_HIGHWATER_INVALID');
       const subject=crypto.createHash('sha256')
         .update('paper:witness:subject:v1\0')
         .update(p.canonicalAccountId).update('\0').update(p.clientId)

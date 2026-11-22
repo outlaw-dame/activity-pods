@@ -54,6 +54,32 @@ jobs:
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs
           node pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
+      - name: Reject operator endpoint and custom CA spoofing before SDK startup
+        shell: bash
+        env:
+          NODE_ENV: production
+          PAPER_WORM_CUSTODY_OPERATOR_CONFIRM: read-only-verified
+          PAPER_WORM_SDK_ROOT: /tmp/nonexistent-worm-sdk
+          PAPER_WORM_PROVIDER_PROFILE: provider-fake
+          PAPER_WORM_READER_PROFILE: archive-fake
+          PAPER_WORM_PROVIDER_ACCOUNT_ID: "111122223333"
+          PAPER_WORM_ARCHIVE_ACCOUNT_ID: "999988887777"
+          PAPER_WORM_BUCKET: paper-disposable-only
+          PAPER_WORM_REGION: us-east-1
+          PAPER_WORM_CUSTODY_PHASE: preflight
+        run: |
+          set -euo pipefail
+          for override in AWS_ENDPOINT_URL_S3 AWS_ENDPOINT_URL_STS AWS_CA_BUNDLE NODE_EXTRA_CA_CERTS; do
+            if env "$override=https://mock.example.invalid" node \
+              pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs \
+              > /tmp/paper-worm-operator-denial.log 2>&1; then
+              echo "::error::Unsafe operator override admitted: $override"
+              exit 1
+            fi
+            grep -qx 'REFUSED: WORM_CUSTODY_OPERATOR_CONFIGURATION' \
+              /tmp/paper-worm-operator-denial.log
+          done
+          rm -f /tmp/paper-worm-operator-denial.log
       - name: Install exact-version upstream Apache-2.0 AWS S3 SDK only in disposable runner
         shell: bash
         run: |

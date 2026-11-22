@@ -36,7 +36,8 @@ module.exports = {
         consentChallenge: { type: 'string', min: 8 },
         requestFingerprint: { type: 'string', min: 8 },
         csrfToken: { type: 'string', min: 16 },
-        canonicalAccountId: { type: 'string', min: 1 }
+        canonicalAccountId: { type: 'string', min: 1 },
+        ownerSessionId: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$', optional: true }
       },
       async handler(ctx) {
         const requestUri = String(ctx.params.request_uri).trim();
@@ -94,7 +95,8 @@ module.exports = {
         const currentGrant = await ctx.call('oauth-consent.upsert', {
           canonicalAccountId: binding.canonicalAccountId,
           clientId: parRecord.clientId,
-          scope: parRecord.scope
+          scope: parRecord.scope,
+          ownerSessionId: ctx.params.ownerSessionId
         });
         if(!/^[A-Za-z0-9_-]{32}$/u.test(currentGrant?.grantId||'')||
            currentGrant.revoked!==false||

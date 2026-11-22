@@ -19,9 +19,16 @@ function fromCookie(value) {
   return { meta: { $headers: { cookie: 'oauth_session=' + value } } };
 }
 const webId = 'https://provider.paper.example.org/alice';
-const token = service.buildSessionToken(webId);
+const sessionId = crypto.randomBytes(32).toString('base64url');
+const token = service.buildSessionToken(webId, sessionId);
+assert.throws(() => service.buildSessionToken(webId), /session id missing/u);
 const good = service.getSession(fromCookie(encodeURIComponent(token)));
 assert.equal(good.webId, webId);
+assert.equal(good.sessionId, sessionId);
+const oldStatelessPayload = Buffer.from(JSON.stringify({ webId, exp: Math.floor(Date.now()/1000)+1800 })).toString('base64url');
+const oldStatelessToken = oldStatelessPayload + '.' + service.signSessionPayload(oldStatelessPayload);
+assert.equal(service.getSession(fromCookie(oldStatelessToken)), null,
+  'Legacy stateless signed cookie must not regain OAuth approval authority');
 assert.ok(good.exp > Date.now() / 1000);
 
 for (const wrong of [

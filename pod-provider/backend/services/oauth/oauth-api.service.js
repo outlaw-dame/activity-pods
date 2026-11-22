@@ -18,7 +18,8 @@ module.exports = {
     'oauth-authorization',
     'oauth-consent-challenge',
     'oauth-token',
-    'oauth-refresh-session'
+    'oauth-refresh-session',
+    'oauth-session-registry'
   ],
 
   settings: {
@@ -188,7 +189,9 @@ module.exports = {
       };
 
       if (this.prefersHtml(ctx)) {
-        const existingSession = this.getSession(ctx);
+        const candidateSession = this.getSession(ctx);
+        const existingSession = candidateSession &&
+          await this.isActiveBrowserSession(ctx, candidateSession) ? candidateSession : null;
         this.setHtmlResponse(ctx);
         return this.renderAuthorizePage(payload, {
           csrfCookieName: this.settings.csrfCookieName,
@@ -240,7 +243,23 @@ module.exports = {
         throw new MoleculerError('Invalid credentials', 401, 'LOGIN_REQUIRED');
       }
 
-      this.setSessionCookie(ctx, webId);
+      // A signed cookie is never usable unless its random id was first
+      // durably acknowledged by the shared session authority. Ambiguous
+      // Redis writes do not emit a cookie, even if they may leave a TTL key.
+      const sessionId = crypto.randomBytes(32).toString('base64url');
+      const token = this.buildSessionToken(webId, sessionId);
+      let registered;
+      try {
+        registered = await ctx.call('oauth-session-registry.create', {
+          webId, sessionId, ttlSec: this.settings.sessionTtlSec
+        });
+      } catch {
+        throw new MoleculerError('Browser session authority unavailable', 503, 'SESSION_AUTHORITY_UNAVAILABLE');
+      }
+      if (registered !== true) {
+        throw new MoleculerError('Browser session authority unavailable', 503, 'SESSION_AUTHORITY_UNAVAILABLE');
+      }
+      this.setSessionCookie(ctx, token);
       if (this.prefersHtml(ctx)) {
         const requestUri = encodeURIComponent(String(body.request_uri || ''));
         ctx.meta.$statusCode = 303;
@@ -257,6 +276,22 @@ module.exports = {
 
     async logoutSession(ctx) {
       this.noStore(ctx);
+      const signed = this.getSession(ctx);
+      if (signed) {
+        let result;
+        try {
+          result = await ctx.call('oauth-session-registry.revoke', {
+            webId: signed.webId, sessionId: signed.sessionId
+          });
+        } catch {
+          throw new MoleculerError('Browser session revocation unavailable', 503, 'SESSION_AUTHORITY_UNAVAILABLE');
+        }
+        if (!result || typeof result.revoked !== 'boolean') {
+          throw new MoleculerError('Browser session revocation unavailable', 503, 'SESSION_AUTHORITY_UNAVAILABLE');
+        }
+      }
+      // Missing, expired or already revoked cookies are harmless; do not
+      // claim any active grant was revoked without the Redis acknowledgement.
       this.clearSessionCookie(ctx);
       return { ok: true };
     },
@@ -451,10 +486,23 @@ module.exports = {
       }
     },
 
+    async isActiveBrowserSession(ctx, signedSession) {
+      if (!signedSession) return false;
+      try {
+        return await ctx.call('oauth-session-registry.verify', {
+          webId: signedSession.webId, sessionId: signedSession.sessionId
+        }) === true;
+      } catch {
+        // Missing Redis or a stale replica is DENY, never a positive cache.
+        return false;
+      }
+    },
+
     async requireUserWebId(ctx) {
       const fromBearer = await this.tryUserBearerWebId(ctx);
-      const webId = fromBearer || this.getSession(ctx)?.webId;
-      if (!webId) {
+      const session = fromBearer ? null : this.getSession(ctx);
+      const webId = fromBearer || session?.webId;
+      if (!webId || (session && !await this.isActiveBrowserSession(ctx, session))) {
         throw new MoleculerError('Login is required to approve authorization', 401, 'LOGIN_REQUIRED');
       }
       // A previously authenticated HMAC cookie or verified JWT is not
@@ -617,9 +665,15 @@ module.exports = {
         .digest('base64url');
     },
 
-    buildSessionToken(webId) {
-      const exp = Math.floor(Date.now() / 1000) + this.settings.sessionTtlSec;
-      const payload = Buffer.from(JSON.stringify({ webId, exp }), 'utf8').toString('base64url');
+    buildSessionToken(webId, sessionId) {
+      // Deliberately do not mint a legacy stateless cookie. Every new token
+      // contains a CSPRNG nonce registered before the cookie is returned.
+      if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(sessionId)) {
+        throw new Error('Browser session id missing or malformed');
+      }
+      const iat = Math.floor(Date.now() / 1000);
+      const exp = iat + this.settings.sessionTtlSec;
+      const payload = Buffer.from(JSON.stringify({ webId, iat, exp, sessionId }), 'utf8').toString('base64url');
       const sig = this.signSessionPayload(payload);
       return `${payload}.${sig}`;
     },
@@ -645,16 +699,20 @@ module.exports = {
       } catch {
         return null;
       }
-      const exp = Number(decoded?.exp || 0);
-      const webId = String(decoded?.webId || '').trim();
-      if (!webId || !Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) {
+      const exp = decoded?.exp, iat = decoded?.iat;
+      const webId = decoded?.webId, sessionId = decoded?.sessionId;
+      const now = Math.floor(Date.now() / 1000);
+      if (!Number.isSafeInteger(exp) || !Number.isSafeInteger(iat) ||
+          iat > now + 60 || iat < now - 86400 ||
+          exp <= now || exp <= iat || exp > iat + this.settings.sessionTtlSec ||
+          typeof webId !== 'string' || webId.length < 8 || webId.length > 2048 ||
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(sessionId)) {
         return null;
       }
-      return { webId, exp };
+      return { webId, exp, sessionId };
     },
 
-    setSessionCookie(ctx, webId) {
-      const token = this.buildSessionToken(webId);
+    setSessionCookie(ctx, token) {
       const secure = this.settings.issuer.startsWith('https://');
       const parts = [
         `${this.settings.sessionCookieName}=${encodeURIComponent(token)}`,
@@ -710,6 +768,12 @@ module.exports = {
     },
 
     async authorizeDecision(ctx, body, csrfToken, canonicalAccountId) {
+      const headers = ctx.meta?.$headers || {};
+      // A browser approval carries its exact live nonce to the atomic
+      // consent grant write, serializing logout against owner approval.
+      // Explicitly verified provider bearers have no browser session.
+      const ownerSessionId = headers.authorization === undefined &&
+        headers.Authorization === undefined ? this.getSession(ctx)?.sessionId : undefined;
       return this.runSafely(() =>
         ctx.call('oauth-authorization.authorize', {
           request_uri: body.request_uri,
@@ -717,7 +781,8 @@ module.exports = {
           consentChallenge: body.consent_challenge,
           requestFingerprint: this.requestFingerprint(ctx),
           csrfToken,
-          canonicalAccountId
+          canonicalAccountId,
+          ownerSessionId
         })
       );
     },

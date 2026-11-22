@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/paper-oauth-consent-epoch-proof.yml'
       - 'pod-provider/backend/services/oauth/oauth-api.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-session-registry.service.js'
+      - 'pod-provider/backend/utils/oauth-browser-session-policy.js'
       - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
       - 'pod-provider/backend/services/oauth/oauth-consent-challenge.service.js'
       - 'pod-provider/backend/services/oauth/oauth-par.service.js'
@@ -17,6 +19,7 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js'
+      - 'pod-provider/backend/scripts/proof-oauth-browser-session-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-owner-bearer-signature.cjs'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
@@ -28,6 +31,7 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js'
       - 'pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js'
+      - 'pod-provider/backend/scripts/proof-oauth-browser-session-redis.js'
       - 'pod-provider/backend/scripts/proof-provider-pds-oauth.js'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs'
   workflow_dispatch:
@@ -77,6 +81,8 @@ jobs:
         run: |
           set -euo pipefail
           node --check pod-provider/backend/services/oauth/oauth-api.service.js
+          node --check pod-provider/backend/services/oauth/oauth-session-registry.service.js
+          node --check pod-provider/backend/utils/oauth-browser-session-policy.js
           node --check pod-provider/backend/services/oauth/oauth-consent.service.js
           node --check pod-provider/backend/services/oauth/oauth-consent-challenge.service.js
           node --check pod-provider/backend/services/oauth/oauth-par.service.js
@@ -103,6 +109,7 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-consent-refresh-redis.js
           node --check pod-provider/backend/scripts/proof-oauth-frontchannel-single-use-redis.js
           node --check pod-provider/backend/scripts/proof-oauth-session-cookie-boundary.js
+          node --check pod-provider/backend/scripts/proof-oauth-browser-session-redis.js
           node --check pod-provider/backend/scripts/proof-oauth-owner-bearer-signature.cjs
           node --check pod-provider/backend/scripts/proof-provider-pds-oauth.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/provider-pds-write-oauth.mjs
@@ -118,6 +125,10 @@ jobs:
         run: |
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-owner-bearer-signature.cjs
+      - name: Verify cross-replica Redis browser-session logout and denial
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-browser-session-redis.js
       - name: Verify Redis 8.2 single-use PAR, consent challenge and DPoP nonce
         run: |
           set -euo pipefail

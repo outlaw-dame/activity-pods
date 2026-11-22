@@ -772,7 +772,52 @@ suspension/disable policy and atomic ownership/consent proof, strong
 browser session invalidation on logout/password change, externally
 retained non-rewindable independent witness, real post-enrollment
 owner grant/revoke, hosted positive cross-protocol signup and
-independent security review. The browser session remains stateless
-HMAC with finite TTL; this patch does not claim server-side cookie
+independent security review. At the #282 baseline, the browser session remained stateless
+HMAC with finite TTL; that change did not provide server-side cookie
 revocation or fully released OAuth grant authority. Staging signup
 must stay CLOSED.
+
+## Cross-replica browser logout and consent-write ordering — nonactivated gate
+
+The previous HMAC-only session was retained after logout in any copied
+browser cookie until its expiration. The next candidate replaces cookie-only
+authority with a 32-byte CSPRNG session id, server-signed `iat/exp/WebID/id`
+cookie and a **Redis 8.2 live allowlist**. The registry persists only SHA-256
+session-id and WebID digests with bounded expiry; a session must receive an
+acknowledged `SET ... NX EX` before login sends a cookie. Existing HMAC
+cookies without the id/issued-at fields are intentionally rejected.
+`POST /oauth/authorize` performs a fresh registry read and the existing
+non-tombstoned account lookup, with no positive admission cache. The
+`GET /oauth/authorize` browser UI does not advertise an already revoked
+cookie as signed in. Logout atomically compares the exact owner digest and
+deletes the session id, requiring a successful Redis result before sending
+the cookie-expiration response. Inaccessible Redis fails closed; an
+ambiguous delete/write acknowledgement never claims successful revocation.
+
+**Critical same-store race fix:** For browser approval, `oauth-api` passes the
+validated cookie session id through `oauth-authorization.authorize` to
+`oauth-consent.upsert`. The consent service evaluates live session and
+owner digest **in the same Redis Lua operation** that writes the new grant.
+It therefore cannot issue a new grant *after* the same Redis has processed
+logout, even if the HTTP request previously verified the session before the
+logout. Provider-verified signed bearer flows retain their separate owner
+signature and live-account checks.
+
+Dedicated disposable `proof-oauth-browser-session-redis.js` uses two
+independent Redis clients/provider contexts to verify cross-replica
+revocation, wrong-owner denial, legacy-cookie invalidation, failure to issue
+a cookie without create acknowledgement, outage denial, and post-logout
+consent-upsert refusal without mutating the earlier grant. No live
+production-session secrets or Redis data are read or logged.
+
+**Not a production-restoration certificate:** Redis backup restoration
+can restore an older live session key or consent. This candidate does NOT
+seal each browser-session issuance/revocation against the independent
+witness or guarantee its survival under Redis/PG PITR. Password changes
+and credential reset still require a canonical revocation-generation
+integration for all existing sessions; no general revoke-all service
+or account-deletion/disable transaction fencing is asserted.
+Authenticated owner post-enrollment consent, fully integrated
+production PG/SAI/PDS admission, independent WORM with WAL failover proof,
+hosted positive browser/Solid/ActivityPub/ATProto signup and independent
+security review remain P0. Keep `release=CLOSED`.

@@ -1,4 +1,7 @@
 const Redis = require('ioredis');
+const { MoleculerError } = require('moleculer').Errors;
+const { KEY_PREFIX, digest, sessionKey, UPSERT_CONSENT_IF_SESSION_LIVE } =
+  require('../../utils/oauth-browser-session-policy');
 const crypto = require('node:crypto');
 const { parseIntWithBounds, nowEpochSec } = require('../../utils/oauth-security');
 const { consentKey } = require('../../utils/oauth-refresh-atomic-policy');
@@ -30,6 +33,7 @@ module.exports = {
   settings: {
     redisUrl: process.env.SEMAPPS_REDIS_CACHE_URL || 'redis://localhost:6379',
     keyPrefix: 'oauth:grant',
+    sessionKeyPrefix: KEY_PREFIX,
     ttlSec: parseIntWithBounds(process.env.OAUTH_GRANT_TTL_SECONDS, 60 * 60 * 24 * 30, 60, 60 * 60 * 24 * 180, 'OAUTH_GRANT_TTL_SECONDS')
   },
   created() {
@@ -55,10 +59,11 @@ module.exports = {
       params: {
         canonicalAccountId: { type: 'string', min: 1 },
         clientId: { type: 'string', min: 1 },
-        scope: { type: 'string', min: 1 }
+        scope: { type: 'string', min: 1 },
+        ownerSessionId: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$', optional: true }
       },
       async handler(ctx) {
-        const {canonicalAccountId,clientId,scope}=ctx.params;
+        const {canonicalAccountId,clientId,scope,ownerSessionId}=ctx.params;
         if(scope.length>8192)throw Error('OAuth consent scope invalid');
         const now = nowEpochSec();
         const key = consentKey(this.settings.keyPrefix,canonicalAccountId,clientId);
@@ -67,12 +72,25 @@ module.exports = {
           grantId: crypto.randomBytes(24).toString('base64url'),
           grantedAt: now, updatedAt: now, revoked: false
         };
-        // One SET linearizes owner approval against concurrent revocation.
-        // Only a new authenticated authorization challenge may call upsert.
-        const accepted=await this.redis.set(
-          key, JSON.stringify(record), 'EX', this.settings.ttlSec
-        );
-        if(accepted!=='OK')throw Error('OAuth consent persistence unavailable');
+        // Browser approval and logout serialize through the same Redis
+        // command queue. Earlier HTTP session checks alone can race logout.
+        if (ownerSessionId) {
+          const accepted = await this.redis.eval(
+            UPSERT_CONSENT_IF_SESSION_LIVE, 2,
+            key, sessionKey(this.settings.sessionKeyPrefix, ownerSessionId),
+            digest(canonicalAccountId), JSON.stringify(record),
+            String(this.settings.ttlSec)
+          );
+          if (accepted !== 1) {
+            throw new MoleculerError('Owner session expired or revoked', 403, 'LOGIN_REQUIRED');
+          }
+        } else {
+          // Provider-verified bearer flows have no browser session.
+          const accepted=await this.redis.set(
+            key, JSON.stringify(record), 'EX', this.settings.ttlSec
+          );
+          if(accepted!=='OK')throw Error('OAuth consent persistence unavailable');
+        }
         return record;
       }
     },

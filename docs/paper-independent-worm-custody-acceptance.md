@@ -80,10 +80,10 @@ export PAPER_WORM_SDK_ROOT="$HOME/.local/share/paper-worm-sdk"
 export PAPER_WORM_CUSTODY_OPERATOR_CONFIRM=read-only-verified
 export PAPER_WORM_PROVIDER_PROFILE=paper-restricted-writer
 export PAPER_WORM_READER_PROFILE=paper-independent-archive-reader
-export PAPER_WORM_PROVIDER_ACCOUNT_ID=<the-real-provider-account-id>
-export PAPER_WORM_ARCHIVE_ACCOUNT_ID=<the-real-archive-owner-account-id>
-export PAPER_WORM_BUCKET=<independent-s3-bucket>
-export PAPER_WORM_REGION=<actual-aws-region>
+export PAPER_WORM_PROVIDER_ACCOUNT_ID="<the-real-provider-account-id>"
+export PAPER_WORM_ARCHIVE_ACCOUNT_ID="<the-real-archive-owner-account-id>"
+export PAPER_WORM_BUCKET="<independent-s3-bucket>"
+export PAPER_WORM_REGION="<actual-aws-region>"
 export PAPER_WORM_CUSTODY_PHASE=preflight
 node pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs
 ```

@@ -317,6 +317,30 @@ async function mainTest(){
   });
   await assert.rejects(unsuitableReader.verify(identity(grant1,'1')),
     e=>e?.code==='PG_OAUTH_WITNESS_ROLE_UNSAFE');
+  // A coherent but lagging PostgreSQL standby must never authorize a grant.
+  const standbyReader=createDisposableOauthWitnessReader({
+    pool:{async connect(){
+      return {
+        async query(q){
+          const result=await reader.query(q);
+          if(typeof q?.text==='string'&&
+             q.text.includes('pg_catalog.pg_is_in_recovery()')){
+            assert.equal(result.rowCount,1);
+            return {...result,rows:[{...result.rows[0],primary_host:false}]};
+          }
+          return result;
+        },
+        release(){}
+      };
+    }},
+    clientIds:[clientId],fixtureOnly:true
+  });
+  await assert.rejects(standbyReader.verify(identity(grant1,'1')),
+    e=>e?.code==='PG_OAUTH_WITNESS_ROLE_UNSAFE',
+    'An otherwise consistent standby may lag an already acknowledged revoke');
+  assert.equal((await root.query('SELECT pg_is_in_recovery() AS standby'))
+    .rows[0].standby,false);
+
   await assert.rejects(witnessReader.verify({...identity(grant1,'1'),
     clientId:'https://attacker.example.org/oauth'}),
     e=>e?.code==='PG_OAUTH_WITNESS_SCOPE_INVALID');

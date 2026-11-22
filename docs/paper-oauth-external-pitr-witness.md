@@ -639,3 +639,57 @@ Normative sources:
 https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html
 https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
 https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/s3/command/GetObjectRetentionCommand/
+
+## S3 immutable version history high-water — NONACTIVATED reader candidate
+
+The S3 COMPLIANCE transport also implements
+`readLatestEpoch({owner,clientId})` as a private archive-only helper for
+the existing `oauth-external-witness-reader.js`
+`readImmutableHeadReceipt` callback. This is not a production
+connection and cannot be used outside the explicit disposable CI gate.
+
+**Important S3 Object Lock property:** COMPLIANCE protects a *specific
+version* against deletion; the ordinary `DeleteObject` operation can
+still create a **delete marker** that obscures that locked version from
+`ListObjectsV2` or unversioned `GET`. Therefore no OAuth high-water
+algorithm may simply list visible current objects or trust an ETag.
+Source:
+https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-managing.html
+https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectVersions.html
+
+The helper derives the exact SHA-256 owner/client pseudonym used by the
+epoch receipt writer, queries the **entire historical version list**
+with `ListObjectVersions`, including `DeleteMarkers`, and checks
+monotonic zero-padded revisions from **1** with no missing sequence,
+unexpected keys, duplicate/multiple versions, masked objects, false
+`IsLatest`, or skipped pages. All operations are bounded (max 4096
+receipts, at most eight 1000-item pages); exceeding the cap **denies**
+authorization, never guessing a latest head. It then verifies the
+**specific latest version**, COMPLIANCE retain-until-date with a
+configurable minimum **remaining** lifetime (separate from the bucket's
+initial ≥400-day retention), exact bounded canonical bytes, current
+HEAD version and second independent bucket-lock configuration check.
+
+An authenticated caller must pass the resulting **uncached bytes**
+to the witness reader's SQL `active_checkpoint` comparison
+**before AND after** S3 IO; read/list failure or any changed PG head
+must fail closed. The archive transport alone does not know whether
+the current PG primary has been physically rewound, and this helper
+does **not** itself authorize any token or signed PDS write. An S3
+reader missing `s3:ListBucketVersions` or
+`s3:GetObjectVersion` / `s3:GetObjectRetention` must fail closed.
+Document and audit actual IAM policies, not just JavaScript client
+instance inequality.
+
+**Still P0:** A malicious/incorrectly configured storage intermediary
+that silently omits a **newer** version can return an apparently
+contiguous **older** history. The disposable test explicitly models
+that limitation. Independent bucket-account ownership, complete
+version-list IAM, strong-consistency operational verification, an
+independent monotonic anti-rollback/incarnation anchor, cross-object
+signed-write intent receipt chain replay and real dual PostgreSQL
+WAL/PITR recovery remain requirements. Listing every version on each
+JWT check is also an O(n) cost that must be resolved before high-scale
+release without caching positive authorization across restore
+boundaries. The provider currently does **not** load this candidate
+and `release=CLOSED` remains mandatory.

@@ -105,6 +105,7 @@ async function getBounded(body){
  */
 export function createS3ComplianceReceiptArchive({
  writer,reader,commands,bucket,minRetentionDays=400,
+ minRemainingDays=30,maxReceipts=4096,
  clock=()=>Date.now(),fixtureOnly=false
 }={}){
  // The archive is intentionally NOT connected to production services yet.
@@ -118,10 +119,13 @@ export function createS3ComplianceReceiptArchive({
     typeof bucket!=='string'||!BUCKET.test(bucket)||
     !Number.isSafeInteger(minRetentionDays)||
     minRetentionDays<365||minRetentionDays>3650||
+    !Number.isSafeInteger(minRemainingDays)||minRemainingDays<1||
+    minRemainingDays>minRetentionDays||
+    !Number.isSafeInteger(maxReceipts)||maxReceipts<1||maxReceipts>4096||
     typeof clock!=='function')deny('S3_RECEIPT_CONFIGURATION_INVALID');
  const names=['PutObjectCommand','HeadObjectCommand','GetObjectCommand',
   'GetObjectRetentionCommand','GetBucketVersioningCommand',
-  'GetObjectLockConfigurationCommand'];
+  'GetObjectLockConfigurationCommand','ListObjectVersionsCommand'];
  if(names.some(n=>typeof commands?.[n]!=='function'))
   deny('S3_RECEIPT_CONFIGURATION_INVALID');
  const send=(client,command)=>client.send(command,{
@@ -144,7 +148,7 @@ export function createS3ComplianceReceiptArchive({
      days<minRetentionDays)
    deny('S3_RECEIPT_LOCK_UNVERIFIED');
  }
- async function independentlyVerify({key,bytes,retentionFloor}){
+ async function independentlyReadVersion({key,expectedVersion,retentionFloor}){
   await lockPolicy();
   let head;
   try{head=await send(reader,command('HeadObjectCommand',{Bucket:bucket,Key:key}))}
@@ -152,8 +156,11 @@ export function createS3ComplianceReceiptArchive({
   const version=head?.VersionId;
   if(typeof version!=='string'||!version||version==='null'||
      version.length>1024||head.DeleteMarker===true||
-     head.ContentLength!==bytes.length)
+     !Number.isSafeInteger(head.ContentLength)||head.ContentLength<1||
+     head.ContentLength>MAX_BYTES)
    deny('S3_RECEIPT_HEAD_INVALID');
+  if(expectedVersion!==undefined&&version!==expectedVersion)
+   deny('S3_RECEIPT_VERSION_CHANGED');
   let retention;
   try{
    retention=await send(reader,command('GetObjectRetentionCommand',{
@@ -163,7 +170,7 @@ export function createS3ComplianceReceiptArchive({
   const expiry=validDate(retention?.Retention?.RetainUntilDate);
   if(retention?.Retention?.Mode!=='COMPLIANCE'||
      !Number.isFinite(expiry)||expiry<retentionFloor)
-    deny('S3_RECEIPT_RETENTION_UNVERIFIED');
+   deny('S3_RECEIPT_RETENTION_UNVERIFIED');
   let read;
   try{
    read=await send(reader,command('GetObjectCommand',{
@@ -173,8 +180,8 @@ export function createS3ComplianceReceiptArchive({
   if(read?.VersionId!==version)
    deny('S3_RECEIPT_VERSION_MISMATCH');
   const actual=await getBounded(read.Body);
-  if(actual.length!==bytes.length||
-     !crypto.timingSafeEqual(actual,bytes))deny('S3_RECEIPT_BYTES_MISMATCH');
+  if(actual.length!==head.ContentLength)
+   deny('S3_RECEIPT_BYTES_MISMATCH');
   let current;
   try{current=await send(reader,command('HeadObjectCommand',{
    Bucket:bucket,Key:key
@@ -182,10 +189,108 @@ export function createS3ComplianceReceiptArchive({
   if(current?.VersionId!==version||current.DeleteMarker===true)
    deny('S3_RECEIPT_VERSION_CHANGED');
   await lockPolicy();
-  return Object.freeze({key,versionId:version,
-   sha256:crypto.createHash('sha256').update(actual).digest('hex')});
+  return {bytes:actual,version};
+ }
+ async function independentlyVerify({key,bytes,retentionFloor}){
+  const verified=await independentlyReadVersion({key,retentionFloor});
+  if(verified.bytes.length!==bytes.length||
+     !crypto.timingSafeEqual(verified.bytes,bytes))
+   deny('S3_RECEIPT_BYTES_MISMATCH');
+  return Object.freeze({key,versionId:verified.version,
+   sha256:crypto.createHash('sha256').update(verified.bytes).digest('hex')});
+ }
+ async function latestVersion({owner,clientId}={}){
+  function validOwner(s){
+   if(typeof s!=='string'||s.length<8||s.length>2048)return false;
+   try{
+    const u=new URL(s);
+    return u.protocol==='https:'&&!!u.hostname&&!u.username&&!u.password&&
+     !u.search&&!u.hash&&u.href===s;
+   }catch{return false}
+  }
+  if(!validOwner(owner)||!validOwner(clientId))
+   deny('S3_HIGHWATER_SCOPE_INVALID');
+  const now=clock();
+  if(!Number.isSafeInteger(now)||now<=0)
+   deny('S3_RECEIPT_CLOCK_UNSAFE');
+  const remainingFloor=now+minRemainingDays*DAY;
+  if(!Number.isSafeInteger(remainingFloor))
+   deny('S3_RECEIPT_CLOCK_UNSAFE');
+  const subject=crypto.createHash('sha256')
+   .update('paper:witness:subject:v1\0').update(owner)
+   .update('\0').update(clientId).digest('hex');
+  const prefix='paper/oauth-witness/epochs/v1/'+subject+'/';
+  // Object Lock protects *versions*. A normal DELETE can still create a
+  // delete marker that hides a retained revocation from ListObjectsV2.
+  // List ALL versions AND delete markers. Never use current-key listing.
+  await lockPolicy();
+  let cursorKey,cursorVersion,seq=0n,last=null,previousKey='';
+  const markers=new Set();
+  for(let page=0;page<8;page++){
+   let result;
+   const args={Bucket:bucket,Prefix:prefix,MaxKeys:1000};
+   if(cursorKey!==undefined){args.KeyMarker=cursorKey;
+    args.VersionIdMarker=cursorVersion;}
+   try{
+    result=await send(reader,command('ListObjectVersionsCommand',args));
+   }catch{deny('S3_HIGHWATER_LIST_UNAVAILABLE')}
+   if(!result||typeof result.IsTruncated!=='boolean'||
+      !Array.isArray(result.Versions||[])||
+      !Array.isArray(result.DeleteMarkers||[])||
+      (result.DeleteMarkers||[]).length!==0||
+      (result.CommonPrefixes||[]).length!==0)
+    deny('S3_HIGHWATER_LIST_UNSAFE');
+   const versions=result.Versions||[];
+   if(versions.length===0)
+    deny('S3_HIGHWATER_LIST_UNSAFE');
+   for(const entry of versions){
+    const key=entry?.Key;
+    if(typeof key!=='string'||!key.startsWith(prefix)||
+       key.length!==prefix.length+19||!/^[0-9]{19}$/u.test(key.slice(-19))||
+       typeof entry.VersionId!=='string'||!entry.VersionId||
+       entry.VersionId==='null'||entry.VersionId.length>1024||
+       entry.IsLatest!==true||key<=previousKey||
+       !Number.isSafeInteger(entry.Size)||entry.Size<32||
+       entry.Size>MAX_BYTES)
+     deny('S3_HIGHWATER_LIST_UNSAFE');
+    const revision=BigInt(key.slice(-19));
+    if(revision!==seq+1n||revision>MAX)
+     deny('S3_HIGHWATER_GAP_OR_FORK');
+    previousKey=key;seq=revision;
+    last={key,version:entry.VersionId,subject,revision:seq};
+    if(seq>BigInt(maxReceipts))
+     deny('S3_HIGHWATER_CAPACITY_EXCEEDED');
+   }
+   if(result.IsTruncated===false){
+    if(!last||last.revision<1n)
+     deny('S3_HIGHWATER_LIST_UNSAFE');
+    // The positive witness reader compares this exact canonical payload
+    // against SQL snapshots both BEFORE and AFTER this remote call.
+    const proof=await independentlyReadVersion({
+     key:last.key,expectedVersion:last.version,
+     retentionFloor:remainingFloor
+    });
+    assertReceipt(last.key,proof.bytes);
+    const e=JSON.parse(proof.bytes.toString('utf8'));
+    if(e.subject!==subject||e.revision!==last.revision.toString())
+     deny('S3_HIGHWATER_SCOPE_INVALID');
+    return Buffer.from(proof.bytes);
+   }
+   if(typeof result.NextKeyMarker!=='string'||
+      !result.NextKeyMarker.startsWith(prefix)||
+      typeof result.NextVersionIdMarker!=='string'||
+      !result.NextVersionIdMarker||
+      result.NextKeyMarker<= (cursorKey??'')||
+      markers.has(result.NextKeyMarker+':'+result.NextVersionIdMarker))
+    deny('S3_HIGHWATER_PAGINATION_INVALID');
+   cursorKey=result.NextKeyMarker;
+   cursorVersion=result.NextVersionIdMarker;
+   markers.add(cursorKey+':'+cursorVersion);
+  }
+  deny('S3_HIGHWATER_CAPACITY_EXCEEDED');
  }
  return Object.freeze({
+  readLatestEpoch:latestVersion,
   async putAndVerify({key,bytes}={}){
    assertReceipt(key,bytes);
    const now=clock();

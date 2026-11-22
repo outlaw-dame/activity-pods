@@ -31,7 +31,7 @@ const resolvedBody=Buffer.from([
 const now=Date.UTC(2026,10,22),DAY=86400000;
 const commandNames=['PutObjectCommand','HeadObjectCommand','GetObjectCommand',
  'GetObjectRetentionCommand','GetBucketVersioningCommand',
- 'GetObjectLockConfigurationCommand'];
+ 'GetObjectLockConfigurationCommand','ListObjectVersionsCommand'];
 let commands=Object.fromEntries(commandNames.map(kind=>
  [kind,class {constructor(input){this.kind=kind;this.input=input}}]));
 if(process.env.PAPER_OAUTH_S3_SDK_ENTRY){
@@ -91,6 +91,32 @@ function fixture(opts={}){
     if(opts.retentionUnavailable)throw Error('Denied retention read');
     return {Retention:{Mode:opts.retentionMode??'COMPLIANCE',
       RetainUntilDate:state.expiry}};
+   case 'ListObjectVersionsCommand':{
+    if(opts.listUnavailable)throw Error('Denied version history listing');
+    const prefix=cmd.input.Prefix;
+    assert.ok(prefix.endsWith('/'));
+    assert.equal(cmd.input.MaxKeys,1000);
+    let versions=[...state.map.entries()]
+     .filter(([key])=>key.startsWith(prefix))
+     .sort(([a],[b])=>a.localeCompare(b))
+     .map(([key,item])=>({
+      Key:key,VersionId:item.version,IsLatest:true,Size:item.bytes.length
+     }));
+    if(opts.listMissingLast)versions=versions.slice(0,-1);
+    if(opts.duplicateVersion&&versions.length)
+     versions.splice(1,0,{...versions[0],VersionId:'unexpected-other-version'});
+    const start=cmd.input.KeyMarker;
+    if(start)versions=versions.filter(item=>item.Key>start);
+    const batch=versions.slice(0,opts.pageSize??1000);
+    const truncated=versions.length>batch.length;
+    return {Versions:batch,DeleteMarkers:opts.deleteMarkerVersion?
+      [{Key:prefix+'0000000000000000001',VersionId:'deleted',IsLatest:true}]:[],
+     IsTruncated:truncated,
+     ...(truncated&&!opts.missingMarker?{
+      NextKeyMarker:batch.at(-1).Key,
+      NextVersionIdMarker:batch.at(-1).VersionId
+     }:{})};
+   }
    case 'GetObjectCommand':
     if(!obj)throw Error('NoSuchKey');
     if(opts.getUnavailable)throw Error('Denied content read');
@@ -109,7 +135,8 @@ function fixture(opts={}){
  }};
  const archive=createS3ComplianceReceiptArchive({
   writer,reader,commands,bucket:'paper-immutable-archive',
-  minRetentionDays:400,clock:()=>now,fixtureOnly:true
+  minRetentionDays:400,minRemainingDays:30,
+  maxReceipts:opts.maxReceipts??4096,clock:()=>now,fixtureOnly:true
  });
  return {archive,state,writer,reader};
 }
@@ -217,4 +244,89 @@ function fixtureConfig(){
  const f=fixture();
  return {writer:f.writer,reader:f.reader,commands,
   bucket:'paper-immutable-archive',minRetentionDays:400,clock:()=>now};
+}
+
+
+const highOwner='https://paper.example.org/users/alice';
+const highClient='https://paper-client.example.org/oauth';
+const highSubject=crypto.createHash('sha256')
+ .update('paper:witness:subject:v1\0')
+ .update(highOwner).update('\0').update(highClient).digest('hex');
+const scope={owner:highOwner,clientId:highClient};
+function epoch(revision){
+ const rev=String(revision);
+ return {
+  key:'paper/oauth-witness/epochs/v1/'+highSubject+'/'+rev.padStart(19,'0'),
+  bytes:Buffer.from(JSON.stringify({
+   kind:'paper.witness.epoch.v1',subject:highSubject,revision:rev,
+   operationId:crypto.randomUUID(),
+   eventSha256:crypto.createHash('sha256').update('event'+rev).digest('hex')
+  }))
+ };
+}
+async function writeEpochs(f,revisions){
+ for(const n of revisions)await f.archive.putAndVerify(epoch(n));
+}
+test('independently discover latest contiguous locked version, paginated and uncached',async()=>{
+ const f=fixture({pageSize:2});
+ await writeEpochs(f,[1,2,3]);
+ for(let attempt=0;attempt<2;attempt++){
+  const b=await f.archive.readLatestEpoch(scope);
+  assert.equal(JSON.parse(b).revision,'3');
+  assert.equal(JSON.parse(b).subject,highSubject);
+ }
+ assert.equal(f.state.reads.filter(x=>x==='ListObjectVersionsCommand').length,4,
+  'Every admission must enumerate current versions; never cache a positive head');
+});
+test('older and latest delete markers deny even when immutable versions survive',async()=>{
+ const f=fixture({deleteMarkerVersion:true});
+ await writeEpochs(f,[1,2]);
+ await deniesHighwater(f,'S3_HIGHWATER_LIST_UNSAFE');
+});
+test('duplicate historical version, missing earlier epoch and withheld latest deny',async()=>{
+ const duplicated=fixture({duplicateVersion:true});
+ await writeEpochs(duplicated,[1,2]);
+ await deniesHighwater(duplicated,'S3_HIGHWATER_LIST_UNSAFE');
+ const gap=fixture();
+ await writeEpochs(gap,[1,3]);
+ await deniesHighwater(gap,'S3_HIGHWATER_GAP_OR_FORK');
+ const missing=fixture({listMissingLast:true});
+ await writeEpochs(missing,[1,2,3]);
+ // Missing the latest version can look like valid old history. No client
+ // can independently prove the S3 server omitted a key; production
+ // requires a separately administered, complete ListBucketVersions grant
+ // and a monotonic external checkpoint/inventory audit.
+ assert.equal(JSON.parse(await missing.archive.readLatestEpoch(scope)).revision,'2');
+});
+test('listing unavailable, malformed pagination or bounded history deny',async()=>{
+ const fail=fixture({listUnavailable:true});
+ await writeEpochs(fail,[1]);
+ await deniesHighwater(fail,'S3_HIGHWATER_LIST_UNAVAILABLE');
+ const bad=fixture({pageSize:1,missingMarker:true});
+ await writeEpochs(bad,[1,2]);
+ await deniesHighwater(bad,'S3_HIGHWATER_PAGINATION_INVALID');
+ const capped=fixture({maxReceipts:2});
+ await writeEpochs(capped,[1,2,3]);
+ await deniesHighwater(capped,'S3_HIGHWATER_CAPACITY_EXCEEDED');
+});
+test('rewritten latest version, invalid retention and forged subject deny',async()=>{
+ const f=fixture();
+ await writeEpochs(f,[1,2]);
+ const bad=epoch(2);
+ const key=bad.key;
+ f.state.map.get(key).bytes=Buffer.from('forged receipt body');
+ await deniesHighwater(f,'S3_HIGHWATER_LIST_UNSAFE');
+ const expiring=fixture();
+ await writeEpochs(expiring,[1]);
+ expiring.state.expiry=new Date(now+3*DAY);
+ await deniesHighwater(expiring,'S3_RECEIPT_RETENTION_UNVERIFIED');
+ const wrong=fixture();
+ await writeEpochs(wrong,[1]);
+ await assert.rejects(wrong.archive.readLatestEpoch({
+  owner:'https://paper.example.org/users/attacker',
+  clientId:highClient
+ }),e=>e?.code==='S3_HIGHWATER_LIST_UNSAFE');
+});
+async function deniesHighwater(f,code){
+ await assert.rejects(f.archive.readLatestEpoch(scope),e=>e?.code===code);
 }

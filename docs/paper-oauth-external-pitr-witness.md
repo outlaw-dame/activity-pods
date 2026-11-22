@@ -965,3 +965,43 @@ bearer from forged/unsigned bearer; assert denial of public consent
 even with a valid old token and HMAC cookie, changed-password cookie
 denial, and success of a valid browser owner approval carrying its
 exact Redis session ID to the consent grant authorization action.
+
+## Browser POST same-origin enforcement — provider login/consent/logout
+
+The provider-generated `/oauth/authorize` HTML form posts login
+credentials and consent decisions to the issuer's **own** origin.
+Until this gate, the request handlers relied on password verification,
+one-use CSRF and SameSite cookies but did not check the browser's
+`Origin` before minting a new signed session. A third-party form
+could attempt login CSRF (placing a victim's browser into an
+attacker-controlled account context).
+
+The browser mutators now share one `requireBrowserPostOrigin`
+policy: exact canonical HTTPS issuer origin; reject missing, null
+or conflicting `Origin` headers; reject supplied cross-site
+`Sec-Fetch-Site` and conflicting metadata; reject cross-origin
+credential/approval requests **before account password verification
+or any Redis session/grant mutations**. JSON and
+`application/x-www-form-urlencoded` submissions are accepted for
+the provider's legitimate form UI. Owner grant revoke remains
+JSON-only. Empty-body, same-origin logout is allowed without a
+`Content-Type` header, but not without matching `Origin`.
+
+The policy applies to `POST /oauth/session/login`,
+`POST /oauth/session/logout`, `POST /oauth/authorize` and
+`POST /oauth/owner/grant/revoke`. It deliberately does **not**
+change protocol-level cross-origin clients' `/oauth/par`,
+`/oauth/token`, `/oauth/revoke`, or the separately authenticated
+production-disabled internal authorization fallback. No wildcard
+CORS or new trusted client origins are introduced; the existing
+OAuth HTML form is hosted at the issuer. A future separately hosted
+UI must use a deliberate, reviewed first-party origin design rather
+than silently widening this issuer gate.
+
+Live Redis8.2 and RS256 cryptographic proofs cover malicious
+Origin, absent Origin, conflicting case headers, cross-site
+Fetch-Metadata, invalid `Content-Type`, no password verification
+or session mutation on denial, positive form/JSON owner flows,
+and empty-body logout. This boundary does not independently
+attest WORM receipts, canonical PG/Jena/SAI/PDS epoch ordering,
+or positive hosted signup. The release remains `CLOSED`.

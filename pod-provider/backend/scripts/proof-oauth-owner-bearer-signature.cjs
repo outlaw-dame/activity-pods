@@ -129,6 +129,11 @@ async function main(){
  // OAuth consent. The Authorization Interface requires a live owner cookie.
  const withCsrf=(header,accountCookie,options={})=>{
   const ctx=context(header,accountCookie,options);
+  Object.assign(ctx.meta.$headers,{
+   origin:'https://paper.example.org',
+   'content-type':'application/x-www-form-urlencoded',
+   'sec-fetch-site':'same-origin'
+  });
   ctx.meta.$headers.cookie=(ctx.meta.$headers.cookie ?
    ctx.meta.$headers.cookie+'; ' : '')+'oauth_csrf=one-use-proof';
   ctx.params={request_uri:'urn:ietf:params:oauth:request_uri:proof',
@@ -143,6 +148,20 @@ async function main(){
    e=>e?.code===401&&e?.type==='LOGIN_REQUIRED');
   assert.ok(!bearerApproval.calls.includes('oauth-authorization.authorize'),
    'Even a cryptographically verified old bearer must not create consent');
+ }
+ for(const headers of [
+  {origin:'https://attacker.example.org'},
+  {origin:undefined},
+  {'sec-fetch-site':'cross-site'},
+  {'content-type':'text/plain'},
+  {Origin:'https://conflict.example.org'}
+ ]){
+  const crossSiteApproval=withCsrf(undefined,cookie);
+  Object.assign(crossSiteApproval.meta.$headers,headers);
+  await assert.rejects(
+   schema.actions.postAuthorizeUser.call(service,crossSiteApproval),
+   e=>e?.code===403&&e?.type==='LOGIN_REQUIRED');
+  assert.deepEqual(crossSiteApproval.calls,[]);
  }
  const changedApproval=withCsrf(undefined,cookie,
   {account:{webId,hashedPassword:replacementHash}});
@@ -184,10 +203,12 @@ async function main(){
  }
  // Login must trust ONLY the verified record, never a later unscoped
  // findByUsername (which breaks email-based sign-ins and may race a delete).
- async function runLogin(record){
+ async function runLogin(record,headers={}){
   const calls=[];
   const ctx={params:{username:'alice@example.org',password:'correct-password'},
-   meta:{$headers:{}},calls,async call(action,p){
+   meta:{$headers:{origin:'https://paper.example.org',
+    'content-type':'application/json','sec-fetch-site':'same-origin',
+    ...headers}},calls,async call(action,p){
     calls.push(action);
     if(action==='auth.account.verify'){
      assert.deepEqual(p,{username:'alice@example.org',password:'correct-password'});
@@ -202,6 +223,22 @@ async function main(){
     throw Error('Unexpected login action '+action);
    }};
   return {ctx,login:()=>schema.actions.loginSession.call(service,ctx)};
+ }
+ // Prevent login-CSRF account confusion: an attacker cannot set a
+ // signed-in browser cookie using a hidden cross-origin POST.
+ for(const headers of [
+  {origin:'https://attacker.example.org'},
+  {origin:undefined},
+  {'sec-fetch-site':'cross-site'},
+  {'content-type':'text/plain'},
+  {Origin:'https://conflict.example.org'}
+ ]){
+  const attack=await runLogin({webId,hashedPassword:passwordHash},headers);
+  await assert.rejects(attack.login(),
+   e=>e?.code===403&&e?.type==='LOGIN_REQUIRED');
+  assert.deepEqual(attack.ctx.calls,[],
+   'Origin/content gate runs before any password verification');
+  assert.ok(!attack.ctx.meta.$responseHeaders?.['Set-Cookie']);
  }
  const activeLogin=await runLogin({webId,hashedPassword:passwordHash});
  const result=await activeLogin.login();

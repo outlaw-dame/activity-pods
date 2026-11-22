@@ -209,6 +209,7 @@ module.exports = {
 
     async postAuthorizeUser(ctx) {
       this.noStore(ctx);
+      this.requireBrowserPostOrigin(ctx, {allowForm:true});
       const body = this.body(ctx);
       const csrfToken = this.getCookie(ctx, this.settings.csrfCookieName);
       if (!csrfToken) {
@@ -229,6 +230,7 @@ module.exports = {
 
     async loginSession(ctx) {
       this.noStore(ctx);
+      this.requireBrowserPostOrigin(ctx, {allowForm:true});
       const body = this.body(ctx);
       const username = String(body.username || '').trim();
       const password = String(body.password || '');
@@ -289,6 +291,7 @@ module.exports = {
 
     async logoutSession(ctx) {
       this.noStore(ctx);
+      this.requireBrowserPostOrigin(ctx, {allowForm:true,allowEmptyBody:true});
       const signed = this.getSession(ctx);
       if (signed) {
         let result;
@@ -395,7 +398,7 @@ module.exports = {
 
     async revokeOwnerGrant(ctx) {
       this.noStore(ctx);
-      this.requireOwnerGrantPostOrigin(ctx);
+      this.requireBrowserPostOrigin(ctx);
       const session=await this.requireBrowserOwnerSession(ctx);
       const body=this.body(ctx);
       const clientId=this.requireOwnerGrantClientId(body.client_id);
@@ -657,26 +660,38 @@ module.exports = {
           .digest('hex');
     },
 
-    requireOwnerGrantPostOrigin(ctx) {
+    requireBrowserPostOrigin(ctx, {allowForm=false,allowEmptyBody=false}={}) {
+      // The authorization/login forms are hosted at this provider origin,
+      // never at an attacker-controlled OAuth client redirect origin.
+      // No Referer fallback or absent Origin bypass for legacy browsers.
       const headers=ctx.meta?.$headers || {};
-      const origin=headers.origin===undefined ? headers.Origin : headers.origin;
       let expected;
       try {
         const parsed=new URL(this.settings.issuer);
-        if (parsed.protocol!=='https:') throw Error('Issuer is not HTTPS');
+        if (parsed.protocol!=='https:' || parsed.username ||
+            parsed.password || parsed.hash || parsed.search) throw Error('Bad issuer');
         expected=parsed.origin;
       } catch {
-        throw new MoleculerError('Owner origin unavailable',503,'SESSION_AUTHORITY_UNAVAILABLE');
+        throw new MoleculerError('Browser session origin unavailable',
+          503,'SESSION_AUTHORITY_UNAVAILABLE');
       }
-      const contentType=headers['content-type']===undefined ?
-        headers['Content-Type'] : headers['content-type'];
-      const site=headers['sec-fetch-site']===undefined ?
-        headers['Sec-Fetch-Site'] : headers['sec-fetch-site'];
+      const both=(lower,upper)=>{
+        if (headers[lower]!==undefined && headers[upper]!==undefined &&
+            headers[lower]!==headers[upper]) return null;
+        return headers[lower]===undefined ? headers[upper] : headers[lower];
+      };
+      const origin=both('origin','Origin');
+      const contentType=both('content-type','Content-Type');
+      const site=both('sec-fetch-site','Sec-Fetch-Site');
+      const format=allowForm ?
+        /^application\/(?:json|x-www-form-urlencoded)(?:\s*;|\s*$)/iu :
+        /^application\/json(?:\s*;|\s*$)/iu;
       if (typeof origin!=='string' || origin!==expected ||
-          typeof contentType!=='string' ||
-          !/^application\/json(?:\s*;|\s*$)/iu.test(contentType) ||
+          (!(allowEmptyBody && contentType===undefined) &&
+            (typeof contentType!=='string' || !format.test(contentType))) ||
           (site!==undefined && site!=='same-origin')) {
-        throw new MoleculerError('Same-origin JSON owner request required',403,'LOGIN_REQUIRED');
+        throw new MoleculerError('Same-origin browser request required',
+          403,'LOGIN_REQUIRED');
       }
     },
 

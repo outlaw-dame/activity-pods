@@ -23,11 +23,18 @@ function deny(code){
   e.code=code;
   throw e;
 }
+function unsafeIdentifier(value){
+  for(const character of value){
+    const code=character.codePointAt(0);
+    if(code<=31||code===127||/\s/u.test(character))return true;
+  }
+  return false;
+}
 function validRole(identity,account){
   const arn=identity?.Arn;
   return identity?.Account===account&&
     typeof arn==='string'&&arn.length<=512&&
-    !/[\s\u0000-\u001f]/u.test(arn)&&
+    !unsafeIdentifier(arn)&&
     (arn.startsWith('arn:aws:iam::'+account+':role/')||
      arn.startsWith('arn:aws:sts::'+account+':assumed-role/'))&&
     !arn.endsWith('/')&&
@@ -160,7 +167,7 @@ export async function inspectIndependentS3Custody({
      typeof sample.sha256!=='string'||!HEX.test(sample.sha256)||
      typeof sample.versionId!=='string'||sample.versionId.length<1||
      sample.versionId.length>1024||sample.versionId==='null'||
-     /[\s\u0000-\u001f]/u.test(sample.versionId))
+     unsafeIdentifier(sample.versionId))
     deny('WORM_CUSTODY_RECEIPT_INPUT_INVALID');
 
   const history=await s3('ListObjectVersionsCommand',{

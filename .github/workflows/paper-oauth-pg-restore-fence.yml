@@ -19,6 +19,7 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs'
       - 'pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs'
@@ -40,6 +41,7 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
   workflow_dispatch:
@@ -119,6 +121,7 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs
           node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql
           node --check pod-provider/backend/candidates/oauth-pg-epoch-reader.js
           node --check pod-provider/backend/utils/oauth-pg-epoch-policy.js
           node --check pod-provider/backend/services/oauth/oauth-token.service.js

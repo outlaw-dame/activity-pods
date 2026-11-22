@@ -493,6 +493,11 @@ it cannot read raw rows, seal, settle or revoke.
 The disposable proof
 `proof-oauth-worm-signed-intents.mjs` uses two actual independent PG18
 clusters, restricted role logins, and an in-process write-once Map.
+The existing two-PG18+Redis8.2 witness proof also applies **v5**
+and routes the *real signed reference-MST writer* through a separate
+pending-archive attestor and exact sealed-intent SQL verifier **before
+its primary signed transaction**, then routes independent positive
+reconciliation through resolved-receipt sealing before revocation.
 It covers unsafe historical-intent migration rejection, unsealed
 reservation denial, forgery/privilege checks, exact receipt bytes,
 SQL seal idempotency, committed-but-unarchived revocation denial,

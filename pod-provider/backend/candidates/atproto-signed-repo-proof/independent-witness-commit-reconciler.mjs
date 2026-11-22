@@ -213,6 +213,11 @@ export function createIndependentWitnessCommitReconciler({
       (row.action!=='create'&&
        (!validCid(beforeCid)||beforeCid!==row.previous_record_cid)))
      fail('WITNESS_RECONCILER_PREVIOUS_RECORD_MISMATCH');
+   if(beforeCid!==null){
+    const previousRecordBytes=await blocks.getBytes(CID.parse(beforeCid));
+    if(!previousRecordBytes)fail('WITNESS_RECONCILER_PREVIOUS_RECORD_MISSING');
+    checkRecord(decodeCanonical(previousRecordBytes),row.path);
+   }
    const mst=reference.MST.load(blocks,CID.parse(root));
    const recordLink=await mst.get(row.path);
    const recordCid=recordLink?.toString()??null;
@@ -221,6 +226,8 @@ export function createIndependentWitnessCommitReconciler({
       (row.action!=='delete'&&
        (!validCid(recordCid)||recordCid!==row.record_cid)))
      fail('WITNESS_RECONCILER_RECORD_MISMATCH');
+   if(row.action==='update'&&recordCid===beforeCid)
+    fail('WITNESS_RECONCILER_NOOP_MUTATION');
    if(recordCid!==null){
     const recordBytes=await blocks.getBytes(CID.parse(recordCid));
     if(!recordBytes)fail('WITNESS_RECONCILER_RECORD_MISSING');

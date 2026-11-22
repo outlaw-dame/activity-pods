@@ -30,8 +30,11 @@ trap cleanup EXIT
 wait_ready() {
   local name="$1" i
   for ((i=0;i<80;i++)); do
-    if docker exec "$name" pg_isready -U postgres -d proof \
-      >/dev/null 2>&1; then
+    # pg_isready can succeed against PostgreSQL's temporary initialization
+    # server BEFORE the entrypoint creates POSTGRES_DB=proof. Readiness must
+    # prove the actual named database exists and accepts a real SQL query.
+    if [[ "$(docker exec -u postgres "$name" psql -X -v ON_ERROR_STOP=1 \
+      -U postgres -d proof -Atqc 'SELECT 1' 2>/dev/null || true)" == 1 ]]; then
       return 0
     fi
     sleep 0.5

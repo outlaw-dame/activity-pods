@@ -200,8 +200,35 @@ async function fixture(){
  await assert.rejects(revoke(revoker,1,crypto.randomUUID()),
   e=>e?.code==='P0001',
   'Committed SQL alone cannot permit revoke ACK before WORM resolution');
+ // Eight unresolved receipts cap includes committed-but-UNARCHIVED
+ // outcomes, not only pending SQL rows. Otherwise pending-only v3 counting
+ // permits unbounded witness WAL/table growth and revocation starvation.
+ const unarchived=[];
+ for(let i=0;i<7;i++){
+  const item=crypto.randomUUID();
+  assert.equal(await reserve(writer,item),true);
+  assert.equal(await archiveIntent(attestor,item,'pending'),true);
+  assert.equal((await reconciler.query(
+   'SELECT paper_oauth_restore_witness.settle_verified_committed('+
+   '$1::uuid,$2,$3,$4::bigint,$5) AS ok',
+   [item,owner,client,1,cid2])).rows[0].ok,true);
+  unarchived.push(item);
+ }
+ await assert.rejects(reserve(writer,crypto.randomUUID()),
+  e=>e?.code==='P0001',
+  'Eight committed-but-unarchived outcomes must enforce bounded admission');
  assert.equal(await archiveIntent(attestor,op,'resolved',{loss:true}),true,
   'Ambiguous PUT ACK resolves only through separate exact readback');
+ // Sealing one outcome releases exactly one slot, not the entire fence.
+ const regained=crypto.randomUUID();
+ assert.equal(await reserve(writer,regained),true);
+ assert.equal(await archiveIntent(attestor,regained,'pending'),true);
+ assert.equal((await reconciler.query(
+   'SELECT paper_oauth_restore_witness.settle_verified_committed('+
+   '$1::uuid,$2,$3,$4::bigint,$5) AS ok',
+   [regained,owner,client,1,cid2])).rows[0].ok,true);
+ for(const item of [...unarchived,regained])
+  assert.equal(await archiveIntent(attestor,item,'resolved'),true);
  const committed=(await intent(reconciler,op));
  assert.equal(committed.state,'committed');
  assert.equal(committed.result_head_cid,cid2);
@@ -214,8 +241,8 @@ async function fixture(){
  assert.equal((await reader.query(
   'SELECT paper_oauth_restore_witness.verify($1,$2,$3,$4::bigint) AS ok',
   [owner,client,grantHash,1])).rows[0].ok,false);
- assert.equal(objects.size,2,
-  'One immutable pending and one immutable resolved receipt');
+ assert.equal(objects.size,18,
+  'All nine operations require their own pending and resolved receipts');
  console.log('PASS: witness v5 rejects unsafe migration, seals pending before writer, seals committed outcome before revoke ACK; two PG18 physical domains; NO real WORM or PITR; release CLOSED');
 }
 const watchdog=setTimeout(()=>{console.error('Intent receipt fixture timed out');process.exit(1)},80000);

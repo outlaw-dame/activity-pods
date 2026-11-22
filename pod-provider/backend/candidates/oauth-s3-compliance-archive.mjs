@@ -28,7 +28,7 @@ function asRevision(value){
  if(!REV.test(value)||BigInt(value)>MAX)deny('S3_RECEIPT_FORMAT_INVALID');
  return value;
 }
-function assertReceipt(key,bytes){
+export function assertReceipt(key,bytes){
  if(typeof key!=='string'||!Buffer.isBuffer(bytes)||bytes.length<32||
     bytes.length>MAX_BYTES)deny('S3_RECEIPT_FORMAT_INVALID');
  const s=bytes.toString('utf8');

@@ -85,10 +85,11 @@ start_source() {
   docker exec -u postgres "$name" pg_basebackup -U postgres \
     -D /backup/base -Fp -X stream --checkpoint=fast
   docker exec -u postgres "$name" pg_verifybackup /backup/base
-  local base="$work/backup-$role/base"
-  [[ -s "$base/backup_manifest" && -s "$base/PG_VERSION" ]] || {
-    echo "Missing physical base backup for $role" >&2; return 1;
-  }
+  # pg_basebackup creates a root folder owned by the container's
+  # dedicated postgres UID (0700); the host runner must NOT assume it
+  # can stat inside that folder without the corresponding identity.
+  docker exec -u postgres "$name" test -s /backup/base/backup_manifest
+  docker exec -u postgres "$name" test -s /backup/base/PG_VERSION
   local old_segment last_segment
   old_segment="$(sql "$name" -Atqc \
     "SELECT pg_walfile_name(pg_create_restore_point('paper_before_revoke'));")"

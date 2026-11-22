@@ -122,8 +122,8 @@ test('real S3 compliance contract: conditional PUT, exact locked version, indepe
  const result=await f.archive.putAndVerify({key:epochKey,bytes:epochBody});
  assert.equal(result.versionId,'s3-version-0');
  assert.equal(result.sha256,crypto.createHash('sha256').update(epochBody).digest('hex'));
- assert.equal(f.state.reads.filter(x=>x==='GetObjectLockConfigurationCommand').length,2);
- assert.equal(f.state.reads.filter(x=>x==='GetBucketVersioningCommand').length,2);
+ assert.equal(f.state.reads.filter(x=>x==='GetObjectLockConfigurationCommand').length,3);
+ assert.equal(f.state.reads.filter(x=>x==='GetBucketVersioningCommand').length,3);
  assert.equal(f.state.reads.filter(x=>x==='HeadObjectCommand').length,2);
  assert.equal(f.state.reads.filter(x=>x==='GetObjectRetentionCommand').length,1);
  assert.equal(f.state.writes.length,1);

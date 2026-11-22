@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import crypto from 'node:crypto';
+import {pathToFileURL} from 'node:url';
 import {createS3ComplianceReceiptArchive} from
  '../candidates/oauth-s3-compliance-archive.mjs';
 
@@ -31,22 +32,31 @@ const now=Date.UTC(2026,10,22),DAY=86400000;
 const commandNames=['PutObjectCommand','HeadObjectCommand','GetObjectCommand',
  'GetObjectRetentionCommand','GetBucketVersioningCommand',
  'GetObjectLockConfigurationCommand'];
-const commands=Object.fromEntries(commandNames.map(kind=>
+let commands=Object.fromEntries(commandNames.map(kind=>
  [kind,class {constructor(input){this.kind=kind;this.input=input}}]));
+if(process.env.PAPER_OAUTH_S3_SDK_ENTRY){
+ const path=process.env.PAPER_OAUTH_S3_SDK_ENTRY;
+ if(!path.startsWith('/'))throw Error('S3 SDK proof requires an absolute pin');
+ const sdk=await import(pathToFileURL(path).href);
+ const exports=sdk.default??sdk;
+ for(const kind of commandNames)
+  assert.equal(typeof exports[kind],'function','Missing published SDK '+kind);
+ commands=exports;
+}
 function fixture(opts={}){
  const state={map:new Map(),reads:[],writes:[],headReads:0,mode:opts.mode??'COMPLIANCE',
   versioning:opts.versioning??'Enabled',enabled:opts.enabled??'Enabled',
   years:opts.years??0,days:opts.days??401,
   expiry:opts.expiry??new Date(now+401*DAY)};
  const writer={send:async cmd=>{
-  assert.equal(cmd.kind,'PutObjectCommand');
+  assert.equal(cmd.kind??cmd.constructor.name,'PutObjectCommand');
   assert.equal(cmd.input.Bucket,'paper-immutable-archive');
   assert.equal(cmd.input.IfNoneMatch,'*');
   assert.equal(cmd.input.ContentMD5,
    crypto.createHash('md5').update(cmd.input.Body).digest('base64'));
   assert.equal(cmd.input.ChecksumSHA256,
    crypto.createHash('sha256').update(cmd.input.Body).digest('base64'));
-  state.writes.push(cmd.kind);
+  state.writes.push(cmd.kind??cmd.constructor.name);
   if(opts.write==='fail-before')throw Error('lost before write');
   if(state.map.has(cmd.input.Key))throw Error('PreconditionFailed');
   const version='s3-version-'+state.map.size;
@@ -57,9 +67,10 @@ function fixture(opts={}){
   return {VersionId:version};
  }};
  const reader={send:async cmd=>{
-  state.reads.push(cmd.kind);
+  const kind=cmd.kind??cmd.constructor.name;
+  state.reads.push(kind);
   const obj=state.map.get(cmd.input.Key);
-  switch(cmd.kind){
+  switch(kind){
    case 'GetBucketVersioningCommand':
     if(opts.policyUnavailable)throw Error('Denied lock policy');
     return {Status:state.versioning};
@@ -93,7 +104,7 @@ function fixture(opts={}){
     return {VersionId:obj.version,Body:(async function*(){
      yield bytes.subarray(0,9);yield bytes.subarray(9);
     })()};
-   default:throw Error('Unsupported command '+cmd.kind);
+   default:throw Error('Unsupported command '+kind);
   }
  }};
  const archive=createS3ComplianceReceiptArchive({

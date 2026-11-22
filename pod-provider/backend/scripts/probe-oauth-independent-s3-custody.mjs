@@ -51,13 +51,14 @@ async function main(){
   const require=createRequire(path.join(env.PAPER_WORM_SDK_ROOT,'package.json'));
   let s3,sts,providers;
   try {
-    for(const name of ['@aws-sdk/client-s3','@aws-sdk/client-sts',
-      '@aws-sdk/credential-providers']){
+    const names=['@aws-sdk/client-s3','@aws-sdk/client-sts',
+      '@aws-sdk/credential-providers'];
+    for(const name of names){
       if(require(name+'/package.json').version!=='3.1174.0')invalid();
     }
-    s3=require('@aws-sdk/client-s3');
-    sts=require('@aws-sdk/client-sts');
-    providers=require('@aws-sdk/credential-providers');
+    s3=require(names[0]);
+    sts=require(names[1]);
+    providers=require(names[2]);
   }catch{invalid()}
   const providerCredentials=providers.fromIni({
     profile:env.PAPER_WORM_PROVIDER_PROFILE

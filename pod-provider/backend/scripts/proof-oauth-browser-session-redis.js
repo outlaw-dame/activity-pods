@@ -47,7 +47,9 @@ function context(instance, cookie, options={}) {
   const calls=[];
   const ctx={
     params: options.params || {},
-    meta: {$headers: {...(cookie ? {cookie: 'oauth_session='+encodeURIComponent(cookie)} : {}),
+    meta: {$headers: {origin:'https://paper.example.org',
+      'content-type':'application/json','sec-fetch-site':'same-origin',
+      ...(cookie ? {cookie: 'oauth_session='+encodeURIComponent(cookie)} : {}),
       ...(options.headers || {})},$query:options.query||{}},
     calls,
     async call(name, p){
@@ -83,6 +85,11 @@ async function main(){
   try{
     await Promise.all([registrySchema.started.call(a), registrySchema.started.call(b),
       consentSchema.started.call(consent),challengeSchema.started.call(challenges)]);
+    const stolenLogin=context(a,null,{params:{username:'session-owner@example.org',password:'correct'},
+      headers:{origin:'https://attacker.example.org'}});
+    await rejected(()=>apiSchema.actions.loginSession.call(service,stolenLogin),403);
+    assert.equal(stolenLogin.calls.length,0,
+      'Cross-site form must be refused before password verification');
     const login=context(a,null,{params:{username:'session-owner@example.org',password:'correct'}});
     const result=await apiSchema.actions.loginSession.call(service,login);
     assert.equal(result.ok,true);
@@ -212,6 +219,11 @@ async function main(){
     await rejected(()=>apiSchema.actions.logoutSession.call(service,outageLogout),503);
     assert.equal(outageLogout.meta.$responseHeaders?.['Set-Cookie'],undefined,
       'Unacknowledged logout must not claim revocation');
+    const forgedLogout=context(b,raw,{headers:{origin:'https://attacker.example.org'}});
+    await rejected(()=>apiSchema.actions.logoutSession.call(service,forgedLogout),403);
+    assert.equal(await action(a,'verify',{sessionId:signed.sessionId,webId}),true,
+      'Cross-origin logout may not revoke an innocent owner session');
+    assert.equal(forgedLogout.meta.$responseHeaders?.['Set-Cookie'],undefined);
     const signedOut=context(b,raw);
     const signedOutResult=await apiSchema.actions.logoutSession.call(service,signedOut);
     assert.equal(signedOutResult.ok,true);

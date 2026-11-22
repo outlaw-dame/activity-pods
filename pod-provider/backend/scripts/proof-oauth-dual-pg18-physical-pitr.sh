@@ -72,11 +72,11 @@ start_source() {
     -c max_wal_senders=10 -c archive_timeout=0 >/dev/null
   containers+=("$name")
   wait_ready "$name"
-  sql "$name" -c 'CREATE TABLE paper_pitr_probe (
+  sql "$name" -c "CREATE TABLE paper_pitr_probe (
     id text PRIMARY KEY,
     epoch bigint NOT NULL CHECK(epoch>0),
-    state text NOT NULL CHECK(state IN (''active'',''blocked''))
-  );'
+    state text NOT NULL CHECK(state IN ('active','blocked'))
+  );"
   sql "$name" -c \
     "INSERT INTO paper_pitr_probe VALUES('paper',1,'active');"
   assert_epoch "$name" 1 active

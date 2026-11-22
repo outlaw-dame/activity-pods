@@ -869,3 +869,57 @@ credentials requires provider-level canonical account/epoch authority.
 The production fuse remains `release=CLOSED` until those barriers,
 hosted owner OAuth and positive Solid/SAI/PDS/AP signup, and independent
 security review have genuine acceptance evidence.
+
+## Post-enrollment owner grant revocation — staged live-session CAS
+
+The prior OAuth flow could record owner approval during authorization but
+did not expose a session-authenticated *post-enrollment* owner grant
+inspection/revoke endpoint. Ordinary `POST /oauth/revoke` is a refresh-family
+token revocation operation, **not** owner consent revocation.
+
+A dedicated browser-owner-only API adds:
+
+- `GET /oauth/owner/grant?client_id=<canonical HTTPS OAuth client-id>`:
+  requires a current signed, Redis-registered, password-verifier-bound
+  browser session and live non-tombstoned account lookup. Reports
+  `consented=false` if that owner has no active grant. For a current grant
+  it returns that exact opaque grant generation, scope and an independently
+  random one-use revocation challenge and CSRF token. It never lists
+  another owner's grants or exposes a raw password verifier.
+- `POST /oauth/owner/grant/revoke`: **same-origin HTTPS**
+  `Origin`, `Content-Type: application/json`, and same-origin
+  `Sec-Fetch-Site` when supplied; signed browser session mandatory,
+  historical RS256 bearer fallback is rejected. The JSON body requires
+  `client_id`, `grant_id`, `challenge_id`, `csrf_token`, all
+  returned by the preceding GET. The challenge is consumed via Redis
+  `GETDEL` exactly once and binds WebID/session/client/grant, stable
+  user-agent/IP fingerprint and CSRF hash. Malformed, expired and reused
+  challenges are denied without a grant mutation.
+
+The actual consent change is one **Redis Lua** operation that verifies
+the owner session key and SHA-256 owner digest, checks the existing
+consent record's canonical owner/client and **exact grantId**, and marks
+that precise generation revoked while preserving the original TTL.
+A lost Redis ACK is not retried. If a later owner reapproval creates a
+new consent generation after GET and before POST, revocation returns
+HTTP `409 consent_changed` and **cannot overwrite the new grant**.
+The revoke and concurrent logout serialize on the same Redis instance.
+No unbounded Redis key scans, O(N) token-family walks or positive caches
+are introduced.
+
+The existing real Redis 8.2 two-provider proof exercises enrollment
+session, live owner grant GET/POST, stale-generation conflict, repeated
+CSRF, bad Origin and Fetch-Site, bearer rejection, changed-password
+session rejection, unrelated client absence, subsequent grant readback,
+and cross-provider logout. The two OAuth endpoints remain available for
+staging under the **closed signup fuse**, and are not evidence of
+production positive hosted signup.
+
+**Critical boundary:** `oauth-consent.revokeOwnerGeneration` marks the
+Redis grant. It does not yet issue an independently retained immutable
+PostgreSQL/Jena/Solid/SAI/PDS revocation epoch. It cannot promise denial
+after simultaneous Redis/PG/Jena rollback; the per-token PG/witness
+candidate remains strictly `NODE_ENV=test` and nonactivated.
+Any real Paper permission-management UI must distinguish application
+OAuth/ATProto consent from independently delegated Solid storage grants
+until cross-store release criteria are met. Keep `release=CLOSED`.

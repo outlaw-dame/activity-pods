@@ -9,6 +9,7 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs'
+      - 'pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql'
       - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
       - 'pod-provider/backend/utils/oauth-pg-epoch-policy.js'
@@ -92,6 +93,7 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs
+          node --check pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql

@@ -295,3 +295,42 @@ not sufficient to prove a commit occurred; the independent
 signing-key/CAR/outbox reconciler, actual physical recovery barrier and
 external WORM receipts are still required. Only candidate migrations
 are supplied, not a production witness or a safe release.
+
+## Independent positive-commit reconciler (NONACTIVATED candidate)
+
+`pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs`
+implements **positive commit reconciliation only**. It uses the v3
+witness's read-only operation view, a dedicated primary-PostgreSQL
+read-only LOGIN (no superuser, role escalation, or mutation privileges),
+and a single REPEATABLE READ, READ ONLY **primary** PG transaction.
+It verifies exactly one immutable signed mutation UUID with the
+expected/proposed commit CIDs, owner WebID, managed DID, native
+outbox and valid generation. It loads CID-addressed immutable DAG
+blocks and the historical upstream `@atproto/repo` MST under bounded
+read/byte limits; verifies the exact post path and before/after MST record digests,
+checking that create/update/delete change precisely the claimed historical
+path. It independently verifies **both previous and proposed v3 commit
+signatures**, resolving the historic DID signing key separately at each
+revision to accommodate legitimate signing-key rotation. A merely valid
+CID or current-head signature does not authenticate the old MST state.
+Keys must be obtained by a trusted resolver, never from a public client
+supplied signing key. Only then does a **different** witness reconciler
+role ask the independent database to settle that exact operation as
+`committed`.
+
+The disposable proof verifies that a forced rolled-back signed
+transaction leaves the witness pending, a superuser primary database
+connection cannot serve as independent evidence, the wrong signer
+cannot settle the intent, and the correct restricted primary proof
+settles exactly once. This module cannot decide `aborted`; a missing
+row, a stale read replica or an unavailable host is never evidence of
+a committed or aborted signed mutation.
+
+This is **not** a production-ready recovery service. The signed
+receipt and pending intent still require independent immutable
+Object-Lock storage, historic DID PLC key authenticity and rotation
+validation, a real primary-PG/WAL failover recovery barrier, and
+strict runtime wiring/credential separation. The canonical primary
+DB can itself be rewound; positive historical verification must be
+backed by independently immutable high-water evidence before
+production release.

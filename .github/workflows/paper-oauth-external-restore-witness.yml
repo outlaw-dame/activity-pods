@@ -72,7 +72,6 @@ jobs:
       PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE: confirmed
       ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
-      ATPROTO_REFERENCE_REPO_ENTRY: ${{ runner.temp }}/witness-atproto-reference/node_modules/@atproto/repo/dist/index.js
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
       PAPER_OAUTH_WITNESS_DSN: postgres://witness_probe:fixture_witness_only@127.0.0.1:5550/oauth_witness_disposable
       PAPER_OAUTH_EPOCH_REDIS_URL: redis://127.0.0.1:6398
@@ -117,9 +116,10 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/witness-atproto-reference" \
             --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
             @atproto/repo@0.11.0 kafkajs@2.2.4
-          test -f "$ATPROTO_REFERENCE_REPO_ENTRY"
+          test -f "$RUNNER_TEMP/witness-atproto-reference/node_modules/@atproto/repo/dist/index.js"
       - name: Prove independent PG18 witness blocks restored PG and Redis
         shell: bash
         run: |
           set -euo pipefail
-          node pod-provider/backend/scripts/proof-oauth-external-witness.mjs
+          ATPROTO_REFERENCE_REPO_ENTRY="$RUNNER_TEMP/witness-atproto-reference/node_modules/@atproto/repo/dist/index.js" \
+            node pod-provider/backend/scripts/proof-oauth-external-witness.mjs

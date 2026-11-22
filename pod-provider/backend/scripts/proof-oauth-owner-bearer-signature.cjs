@@ -67,6 +67,9 @@ async function main(){
   iat:now,exp:now+300},attacker.privateKey);
  await rejected(context('Bearer '+forged,cookie));
  await rejected(context('Bearer '+token({webId,iat:now,exp:now-10}),cookie));
+ await rejected(context('Bearer '+token({webId,iat:now-3601}),cookie));
+ await rejected(context('Bearer '+token({webId,iat:now+61}),cookie));
+ await rejected(context('Bearer '+token({webId,exp:now+300}),cookie));
  await rejected(context('Bearer '+token({webId,exp:now+300},null,'none'),cookie));
  await rejected(context('Basic '+good,cookie));
  await rejected(context('Bearer '+good+' garbage',cookie));
@@ -86,6 +89,9 @@ async function main(){
   {webId:{url:webId},exp:now+300},
   {webId:'anon',exp:now+300}
  ]){
+  // Include a fresh valid iat so each case really tests its identity
+  // failure, rather than passing solely because timestamp is absent.
+  payload.iat=now;
   await rejected(context('Bearer '+token(payload),cookie));
  }
  const signatureFailure=context('Bearer '+good,cookie);
@@ -96,6 +102,6 @@ async function main(){
  assert.equal(await service.requireUserWebId.call(service,cookieOnly),webId);
  assert.deepEqual(cookieOnly.calls,[]);
  await rejected(context('Bearer invalid',cookie));
- console.log('PASS: OAuth bearer owner is server-RS256 verified; forged, expired, unsigned, malformed and wrong identity claims denied; no invalid-bearer cookie fallback');
+ console.log('PASS: OAuth bearer owner RS256 verified and <=1h old; forged, stale, unsigned, malformed and wrong identity claims denied; no invalid-bearer cookie fallback');
 }
 main().catch(e=>{console.error(e?.stack||e);process.exitCode=1});

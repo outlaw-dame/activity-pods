@@ -9,6 +9,7 @@ const keys=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const attacker=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
 const webId='https://paper.example.org/users/alice';
 const now=Math.floor(Date.now()/1000);
+const sessionId=crypto.randomBytes(32).toString('base64url');
 const service={
  settings:{...schema.settings,sessionSecret:crypto.randomBytes(32).toString('hex'),
   sessionTtlSec:3600,sessionCookieName:'oauth_session',
@@ -50,6 +51,10 @@ function context(header,cookie,{account={webId},accountThrows=false}={}){
     assert.deepEqual(Object.keys(p),['token']);
     return verifyServerToken(p.token);
    }
+   if(action==='oauth-session-registry.verify'){
+    assert.deepEqual(p,{webId,sessionId});
+    return true;
+   }
    if(action==='auth.account.findByWebId'){
     assert.equal(p.webId,webId);
     if(accountThrows)throw Error('Account directory unavailable');
@@ -67,7 +72,7 @@ async function rejected(ctx){
 }
 async function main(){
  const good=token({webId,iat:now,exp:now+300});
- const cookie=service.buildSessionToken(webId);
+ const cookie=service.buildSessionToken(webId,sessionId);
  const ok=context('Bearer '+good);
  assert.equal(await service.requireUserWebId.call(service,ok),webId);
  assert.deepEqual(ok.calls,['auth.jwt.verifyServerSignedToken',
@@ -109,7 +114,8 @@ async function main(){
  // Cookie fallback is allowed only when there is *no* Authorization header.
  const cookieOnly=context(undefined,cookie);
  assert.equal(await service.requireUserWebId.call(service,cookieOnly),webId);
- assert.deepEqual(cookieOnly.calls,['auth.account.findByWebId']);
+ assert.deepEqual(cookieOnly.calls,['oauth-session-registry.verify',
+  'auth.account.findByWebId']);
  await rejected(context('Bearer invalid',cookie));
 
  // A correctly signed bearer or HMAC cookie is NOT proof of an active
@@ -131,9 +137,17 @@ async function main(){
   const ctx={params:{username:'alice@example.org',password:'correct-password'},
    meta:{$headers:{}},calls,async call(action,p){
     calls.push(action);
-    assert.equal(action,'auth.account.verify');
-    assert.deepEqual(p,{username:'alice@example.org',password:'correct-password'});
-    return record;
+    if(action==='auth.account.verify'){
+     assert.deepEqual(p,{username:'alice@example.org',password:'correct-password'});
+     return record;
+    }
+    if(action==='oauth-session-registry.create'){
+     assert.equal(p.webId,webId);
+     assert.match(p.sessionId,/^[A-Za-z0-9_-]{43}$/u);
+     assert.equal(p.ttlSec,3600);
+     return true;
+    }
+    throw Error('Unexpected login action '+action);
    }};
   return {ctx,login:()=>schema.actions.loginSession.call(service,ctx)};
  }
@@ -141,7 +155,8 @@ async function main(){
  const result=await activeLogin.login();
  assert.equal(result.ok,true);
  assert.equal(result.webId,webId);
- assert.deepEqual(activeLogin.ctx.calls,['auth.account.verify']);
+ assert.deepEqual(activeLogin.ctx.calls,['auth.account.verify',
+  'oauth-session-registry.create']);
  assert.match(activeLogin.ctx.meta.$responseHeaders['Set-Cookie'],
   /oauth_session=/u);
  for(const record of [
@@ -156,6 +171,6 @@ async function main(){
    'Refused/tombstoned account must never receive a session cookie');
  }
 
- console.log('PASS: OAuth verified bearer and HMAC cookie require current non-tombstoned owner; signed JWT forged, stale, unsigned and malformed denied; verified email login resolves the authenticated account only');
+ console.log('PASS: OAuth verified bearer and registered HMAC session require current non-tombstoned owner; signed JWT forged, stale, unsigned and malformed denied; verified email login resolves the authenticated account only');
 }
 main().catch(e=>{console.error(e?.stack||e);process.exitCode=1});

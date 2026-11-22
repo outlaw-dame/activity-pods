@@ -49,6 +49,8 @@ const roles={issuer:'paper_oauth_witness_issuer',
   revoker:'paper_oauth_witness_revoker',
   attestor:'paper_oauth_witness_attestor',
   reader:'paper_oauth_witness_reader',
+  writer:'paper_oauth_witness_writer',
+  reconciler:'paper_oauth_witness_reconciler',
   ordinary:null};
 const clients=[],accounts=[];
 const id=s=>'"'+s.replaceAll('"','""')+'"';
@@ -100,6 +102,12 @@ async function actor(kind){
     )).rows[0];
     assert.equal(role.tables,false);assert.equal(role.events,false);
     assert.equal(role.can_set,false);
+    const intentRights=(await c.query(
+      "SELECT pg_catalog.has_table_privilege(current_user,"+
+      "'paper_oauth_restore_witness.signed_write_intents',"+
+      "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AS direct"
+    )).rows[0];
+    assert.equal(intentRights.direct,false);
   }
   await assert.rejects(c.query('SELECT * FROM paper_oauth_restore_witness.current_epochs'),
     e=>e?.code==='42501');
@@ -141,12 +149,15 @@ async function mainTest(){
   await main.query(await sql('../sql/paper-atproto-canonical-authority-v4-oauth-generations.sql'));
   await main.query(await sql('../sql/paper-atproto-canonical-authority-v5-oauth-current.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v1.sql'));madeWitness=true;
+  await root.query(await sql('../sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'));
   // pg@9 no longer guarantees queued concurrent query() calls on one
   // connection; create each independently authenticated role serially.
   const issuer=await actor('issuer');
   const revoker=await actor('revoker');
   const attestor=await actor('attestor');
   const reader=await actor('reader');
+  const writer=await actor('writer');
+  const reconciler=await actor('reconciler');
   const ordinary=await actor('ordinary');
   await assert.rejects(ordinary.query(
     'SELECT paper_oauth_restore_witness.verify($1,$2,$3,$4)',
@@ -160,6 +171,19 @@ async function mainTest(){
   await assert.rejects(reader.query(
     'SELECT paper_oauth_restore_witness.seal($1,$2,$3,$4,$5)',
     [owner,clientId,1,crypto.randomUUID(),hash(grant1)]),e=>e?.code==='42501');
+  await assert.rejects(writer.query(
+    'SELECT paper_oauth_restore_witness.block($1,$2,$3,$4,$5)',
+    [owner,clientId,hash(grant1),1,crypto.randomUUID()]),e=>e?.code==='42501');
+  await assert.rejects(writer.query(
+    'SELECT paper_oauth_restore_witness.resolve_signed_write('+
+    '$1,$2,$3,$4,$5,$6)',
+    [crypto.randomUUID(),owner,clientId,1,'aborted',null]),
+    e=>e?.code==='42501');
+  await assert.rejects(reconciler.query(
+    'SELECT paper_oauth_restore_witness.reserve_signed_write('+
+    '$1,$2,$3,$4,$5,$6)',
+    [owner,clientId,hash(grant1),1,crypto.randomUUID(),'bafyre'+'a'.repeat(53)]),
+    e=>e?.code==='42501');
   await main.query(
     'INSERT INTO paper_atproto_authority.identities '+
     '(owner_webid,did,state,managed,revision,source_proof_sha256) '+
@@ -180,6 +204,25 @@ async function mainTest(){
     '$1,$2,$3,$4::bigint) AS rev',
     [owner,clientId,grant,expected]
   )).rows[0].rev);
+  const genesisCid='bafyre'+'a'.repeat(53);
+  const signedCid='bafyre'+'b'.repeat(53);
+  const reserve=async(db,grant,revision,operation,expectedHead=genesisCid)=>{
+    const r=await db.query(
+      'SELECT paper_oauth_restore_witness.reserve_signed_write('+
+      '$1,$2,$3,$4::bigint,$5::uuid,$6) AS ok',
+      [owner,clientId,hash(grant),revision,operation,expectedHead]);
+    return r.rows[0].ok===true;
+  };
+  const resolve=async(operation,revision,state,head)=>{
+    const r=await reconciler.query(
+      'SELECT paper_oauth_restore_witness.resolve_signed_write('+
+      '$1::uuid,$2,$3,$4::bigint,$5,$6) AS ok',
+      [operation,owner,clientId,revision,state,head]);
+    return r.rows[0].ok===true;
+  };
+  const readIntent=async operation=>(await reconciler.query(
+    'SELECT * FROM paper_oauth_restore_witness.read_signed_write($1::uuid)',
+    [operation])).rows[0];
 
   const witnessReader=createDisposableOauthWitnessReader({
     pool:{async connect(){return {query:q=>reader.query(q),release(){}}}},
@@ -278,6 +321,42 @@ async function mainTest(){
   assert.equal((await introspect(firstJwt)).active,true,
     'Witness recovery may resume without cached positive authority');
 
+  // A signer reserves a durable witness intent BEFORE primary PG commit.
+  // The revoker cannot ACK while a process crash/unknown COMMIT might
+  // still materialize a signed repo mutation after that ACK.
+  const writeOp=crypto.randomUUID();
+  assert.equal(await reserve(writer,grant1,1,writeOp),true);
+  assert.equal((await readIntent(writeOp)).state,'pending');
+  assert.equal(await reserve(writer,grant1,1,writeOp),false,
+    'A replay must not allocate a second signing operation');
+  assert.equal(await reserve(writer,grant2,1,crypto.randomUUID()),false,
+    'A signer cannot reserve with an unrelated grant hash');
+  assert.equal(await reserve(writer,grant1,2,crypto.randomUUID()),false,
+    'A signer cannot reserve a noncurrent generation');
+  const wouldBlock=crypto.randomUUID();
+  await assert.rejects(transition(revoker,'blocked',grant1,1,wouldBlock),
+    e=>e?.code==='P0001',
+    'Revocation must NOT ACK while any signed write could still COMMIT');
+  assert.equal((await introspect(firstJwt)).active,true,
+    'Failed revocation leaves previous witness generation unchanged');
+  assert.equal(await resolve(writeOp,1,'committed',genesisCid),false,
+    'Reconciler cannot attest a write without a changed signed head');
+  assert.equal(await resolve(writeOp,1,'committed',signedCid),true);
+  assert.equal((await readIntent(writeOp)).state,'committed');
+  assert.equal(await resolve(writeOp,1,'aborted',null),false,
+    'A resolved intent is immutable');
+
+  // Fail closed on an unresolved writer crash; no timeout or cache may
+  // silently clear the barrier. An independent reconciler alone can
+  // attest an aborted write AFTER proving the primary commit impossible.
+  const uncertain=crypto.randomUUID();
+  assert.equal(await reserve(writer,grant1,1,uncertain),true);
+  await assert.rejects(transition(revoker,'blocked',grant1,1,crypto.randomUUID()),
+    e=>e?.code==='P0001');
+  assert.equal((await readIntent(uncertain)).state,'pending');
+  assert.equal(await resolve(uncertain,1,'aborted',null),true);
+  assert.equal((await readIntent(uncertain)).state,'aborted');
+
   assert.equal(JSON.parse(await redis.get(consentKey)).revoked,false,
     'Active Redis grant remains the pre-revocation snapshot');
 
@@ -287,6 +366,8 @@ async function mainTest(){
   assert.equal(await transition(revoker,'blocked',grant1,1,revokeOp),'2');
   assert.equal(await admitted(reader,grant1,1),false,
     'Independent witness must deny old token immediately');
+  assert.equal(await reserve(writer,grant1,1,crypto.randomUUID()),false,
+    'No new durable write intent after revocation ACK');
   assert.equal((await introspect(firstJwt)).active,false,
     'The signed JWT must be denied immediately on witness ACK');
   await assert.rejects(issueToken(grant1,'1'),e=>e?.type==='INVALID_GRANT');
@@ -328,6 +409,8 @@ async function mainTest(){
     canonicalAccountId:owner,clientId,scope,grantId:grant2,revoked:false
   }),'EX',180),'OK');
   assert.equal(await admitted(reader,grant2,3),false);
+  assert.equal(await reserve(writer,grant2,3,crypto.randomUUID()),false,
+    'Unsealed new epoch cannot reserve a signed repo transaction');
   await assert.rejects(issueToken(grant2,'3'),
     e=>e?.type==='INVALID_GRANT',
     'A real JWT signer must reject an unsealed new epoch');
@@ -335,6 +418,11 @@ async function mainTest(){
   putOnce(objectKey(3),digest3);
   assert.equal(await seal(attestor,op3,3,digest3),true);
   assert.equal(await admitted(reader,grant2,3),true);
+  const freshWrite=crypto.randomUUID();
+  assert.equal(await reserve(writer,grant2,3,freshWrite),true);
+  await assert.rejects(transition(revoker,'blocked',grant2,3,crypto.randomUUID()),
+    e=>e?.code==='P0001');
+  assert.equal(await resolve(freshWrite,3,'aborted',null),true);
   const secondJwt=await issueToken(grant2,'3');
   assert.equal((await introspect(secondJwt)).active,true);
   assert.equal((await introspect(firstJwt)).active,false);
@@ -347,7 +435,7 @@ async function mainTest(){
   assert.equal(await admitted(reader,grant2,3),false);
   assert.equal((await introspect(secondJwt)).active,false);
   assert.equal(await transition(revoker,'blocked',grant2,3,crypto.randomUUID()),'0');
-  console.log('PASS: two independent PostgreSQL18 clusters, restricted reader, real signed JWT issue/introspection fail closed on witness outage, unsealed transition and restored PG/Redis, stale epoch replay; release CLOSED');
+  console.log('PASS: independent PG18 witness durable signed-write intents block revocation ACK, isolated writer/reconciler roles, fail-closed uncertain COMMIT, separate read-only JWT admission, restored PG and Redis cannot revive revoked grants; release CLOSED');
 }
 const watchdog=setTimeout(()=>{console.error('Witness proof timed out');process.exit(1)},100000);
 try{await mainTest()}catch(e){error=e;process.exitCode=1;console.error(e?.stack||String(e))}

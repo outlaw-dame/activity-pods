@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/paper-oauth-external-restore-witness.yml'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
       - 'pod-provider/backend/utils/oauth-pg-epoch-policy.js'
@@ -86,6 +87,7 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql
           if grep -R -n 'paper-oauth-external-restore-witness-v1.sql' pod-provider/backend/services; then
             echo '::error::The independent witness candidate must not be auto-migrated by the production provider'
             exit 1

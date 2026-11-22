@@ -15,6 +15,7 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
   push:
@@ -30,6 +31,7 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v1.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/candidates/oauth-external-witness-reader.js'
   workflow_dispatch:

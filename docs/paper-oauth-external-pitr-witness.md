@@ -174,3 +174,51 @@ external witness revocation. A separate writer/witness lock lease
 or comparably rigorous commit protocol must be verified under
 crashes, partitions and backup restore. A passing two-PG SQL test
 does not eliminate these blockers or permit production release.
+
+## Durable signed-PDS writer admission barrier (v2, NONACTIVATED)
+
+The independent witness migration
+`pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql`
+introduces **durable pending signed-write intents**. Only the
+independently privileged `paper_oauth_witness_writer` role may reserve
+a unique UUID while the exact grant's sealed witness epoch is active.
+It records the *prior signed repository head*; it cannot change OAuth
+grants, acknowledge revocations or resolve its own uncertain writes.
+A separate `paper_oauth_witness_reconciler` role alone may resolve
+`committed` versus `aborted`, based on independently verified
+PRIMARY PostgreSQL signed head, MST, native outbox, immutable blocks,
+and (for abort) evidence of a completed crash/recovery barrier. No
+client-supplied ACK, age-based release or Redis transient state counts.
+
+A PostgreSQL trigger enforces that the revoker cannot transition the
+witness generation to `blocked` while ANY intent remains pending.
+Reservation and revocation race on the same PostgreSQL row lock; a
+bounded per-owner/client advisory transaction lock serializes
+reservation count/insert and caps pending writes. A crashed signer
+leaves an unresolved intent that blocks a successful revoke ACK until
+the independent reconciler has durable proof of the outcome.
+This favors safety over availability: users may temporarily be
+unable to complete revocation during a real database outage, which
+must surface as an unavailable/pending revocation, NEVER as success.
+
+**Required future integration:** the actual signed reference-MST
+writer must reserve the witness intent before entering its primary
+PostgreSQL commit transaction and must use the same immutable
+operation UUID for the signed outbox/reconciliation journal. A
+separately credentialed completion attestor must verify and
+resolve after the primary commit; a lost/ambiguous COMMIT reply may
+NEVER resolve as aborted from a transient missing-row read. The
+witness may acknowledge a revoke only after that reconciliation.
+Independent WORM writer-intent receipts and high-water recovery
+are required: if witness PITR loses a pending intent, protection
+degrades unless the external nonrewindable archive restores it.
+Do not activate the v2 scheme before those guarantees are proven
+in the hosted signer and after independent witness restoration.
+
+The CI witness proof exercises two PostgreSQL18 clusters, restricted
+writer vs reconciler vs revoker roles, duplicate/foreign epoch
+reservations, denied unsealed and revoked reservations, blocked
+revocation while an ambiguous write remains unresolved,
+irreversible resolved intents and a new sealed epoch. Test program
+validates database transactions and authority ordering, **not**
+a production reference-MST signed PDS runtime or physical PITR.

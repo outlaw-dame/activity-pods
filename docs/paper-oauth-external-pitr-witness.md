@@ -423,3 +423,84 @@ and verified event/intent chain replay, immutable receipt coverage for
 pending/resolved signed-write intents, hosted owner consent and full
 cross-protocol positive account signup. The module does not and cannot
 authorize `release=OPEN`.
+
+
+## v5 immutable signed-write intent receipts — NONACTIVATED
+
+The independent witness's v2–v4 SQL prevented a successful revocation while
+a write was `pending`, but a signed write could be marked `committed`
+before its **settlement receipt** existed in an independently immutable
+archive. A witness PITR rollback could then erase either a pending intent
+or its settlement evidence. This gate is **not production complete** without
+external archive high-water restoration.
+
+`paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql`
+fails closed on **any existing signed intent**; no automatic migration,
+backfill or guessed outcome is permitted. For new intents, a BEFORE INSERT
+trigger captures the exact sealed epoch event SHA-256 within the v3
+reservation transaction. Two irreversible bits track independent receipt
+sealing: `pending_receipt_sealed` and `resolution_receipt_sealed`.
+The existing epoch-transition trigger is tightened so **either** an
+unresolved intent **or a resolved intent lacking its archived outcome**
+prevents a revocation ACK. The v4 positive-only runtime reconciler remains
+unable to mark an intent `aborted`; settlement requires the pending
+receipt already sealed.
+
+The restricted attestor's `signed_intent_receipt(operation,phase)`
+returns bounded deterministic line-framed UTF-8 bytes containing a
+SHA-256 pseudonym of the length-framed owner/client tuple, operation UUID,
+revision, hashed grant, captured epoch event digest, *both* exact signed
+commit CIDs, receipt phase, and (on resolution) the exact committed CID or
+privileged recovery result. Neither raw WebID, client URL, bearer grant,
+nor private signing key enters the archived body. The `seal_signed_intent_receipt`
+function accepts only SHA-256 of those **database-derived bytes**.
+Sealing is monotonic and exact, with idempotent lost SQL ACK handling.
+The writer role can query only
+`verify_sealed_signed_intent(operation,owner,client,revision,old,new)`;
+it cannot read raw rows, seal, settle or revoke.
+
+**Required transaction sequence (not a deployed runtime):**
+
+1. Privileged writer reserves the exact immutable operation ID and
+   old/new signed heads in independent witness PG18. Unsealed `pending`
+   blocks revocation immediately.
+2. Independent archive writer conditionally creates object
+   `paper/oauth-witness/signed-intents/v1/<UUID>/pending` with
+   `If-None-Match: *`, after verifying independently controlled
+   retention. Separate read-only credentials perform uncached exact
+   readback, byte/digest comparison and retention revalidation. Only
+   the *distinct* witness attestor may seal this pending receipt.
+3. The trusted PDS signer must call the v5 sealed-intent verifier before
+   BEGIN on canonical primary PG. The optional
+   `verifyWitnessIntentSealed` callback is accepted by the disposable
+   reference-MST writer **only** under the additional explicit
+   `PAPER_OAUTH_WORM_INTENTS_DISPOSABLE=confirmed` test gate.
+   Reservation alone is never sufficient when v5 is enabled.
+4. Once a separately credentialed reconciler independently verifies the
+   real signed commit, it calls **commit-only** settlement. The witness
+   now has `state=committed` but still blocks revocation while
+   `resolution_receipt_sealed=false`.
+5. The independent archive attestor conditionally stores and reads back
+   the immutable `.../<UUID>/resolved` receipt, including exact
+   resolved outcome, before sealing. ONLY THEN can the witness revoker
+   acknowledge a new epoch; the previously issued OAuth grant is
+   invalidated on that ACK.
+6. An unresolved or unprovable rollback remains **pending indefinitely**
+   until a separate physical WAL recovery barrier and WORM-backed abort
+   attestation have been proven. The ordinary runtime remains
+   **incapable** of invoking generic `aborted` settlement.
+
+The disposable proof
+`proof-oauth-worm-signed-intents.mjs` uses two actual independent PG18
+clusters, restricted role logins, and an in-process write-once Map.
+It covers unsafe historical-intent migration rejection, unsealed
+reservation denial, forgery/privilege checks, exact receipt bytes,
+SQL seal idempotency, committed-but-unarchived revocation denial,
+and successful revocation only after separate resolved receipt seal.
+**A Map and a fixture-only assumed-retention boolean are not WORM.**
+Production still requires separately administered real Object Lock
+storage with independently verified IAM/retention; a complete immutable
+high-water enumeration, chain/fork and epoch+intent cross-check after
+witness PITR; physical primary/witness PostgreSQL WAL recovery; safe
+issuer/owner OAuth and real hosted cross-protocol account acceptance.
+All releases remain **CLOSED**.

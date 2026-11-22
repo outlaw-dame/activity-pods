@@ -138,6 +138,9 @@ async function main(){
     const otherClient=await apiSchema.actions.getOwnerGrant.call(service,
       context(b,raw,{query:{client_id:'https://other.example.org/app'}}));
     assert.deepEqual(otherClient,{client_id:'https://other.example.org/app',consented:false});
+    const queriedClient='https://other.example.org/app?tenant=one';
+    assert.equal((await apiSchema.actions.getOwnerGrant.call(service,
+      context(b,raw,{query:{client_id:queriedClient}}))).consented,false);
     await rejected(()=>apiSchema.actions.getOwnerGrant.call(service,
       context(b,raw,{query:{client_id:'http://other.example.org/app'}})),400);
     const grantView=await apiSchema.actions.getOwnerGrant.call(service,ownerRead());

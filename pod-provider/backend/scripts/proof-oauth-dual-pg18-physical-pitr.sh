@@ -56,7 +56,8 @@ assert_epoch() {
   fi
 }
 start_source() {
-  local role="$1" name="paper-pitr-${suffix}-${role}"
+  local role="$1"
+  local name="paper-pitr-${suffix}-${role}"
   mkdir -p "$work/source-$role" "$work/archive-$role" "$work/backup-$role"
   # Every subdirectory is inside the private mktemp parent; the fixture
   # postgres UNIX user must be able to create archived WAL and backups.
@@ -110,7 +111,8 @@ start_source() {
   }
 }
 restore_at() {
-  local role="$1" point="$2" name="paper-pitr-${suffix}-${role}-${point}"
+  local role="$1" point="$2"
+  local name="paper-pitr-${suffix}-${role}-${point}"
   local dest="$work/restore-$role-$point"
   mkdir -p "$dest/18/docker"
   # Copy the already verified physical backup; NEVER link the source PGDATA.

@@ -37,17 +37,25 @@ function verifyServerToken(value){
   return payload;
  }catch{return false}
 }
-function context(header,cookie){
+function context(header,cookie,{account={webId},accountThrows=false}={}){
  const headers={};
  if(header!==undefined)headers.authorization=header;
  if(cookie!==undefined)headers.cookie='oauth_session='+encodeURIComponent(cookie);
  return {meta:{$headers:headers},calls:[],
   async call(action,p){
    this.calls.push(action);
-   assert.equal(action,'auth.jwt.verifyServerSignedToken',
-    'Never use auth.jwt.decodeToken to establish an OAuth owner identity');
-   assert.deepEqual(Object.keys(p),['token']);
-   return verifyServerToken(p.token);
+   assert.notEqual(action,'auth.jwt.decodeToken',
+    'Never use unverified JWT claims to establish an OAuth owner');
+   if(action==='auth.jwt.verifyServerSignedToken'){
+    assert.deepEqual(Object.keys(p),['token']);
+    return verifyServerToken(p.token);
+   }
+   if(action==='auth.account.findByWebId'){
+    assert.equal(p.webId,webId);
+    if(accountThrows)throw Error('Account directory unavailable');
+    return account;
+   }
+   throw Error('Unexpected provider OAuth action '+action);
   }
  };
 }
@@ -62,7 +70,8 @@ async function main(){
  const cookie=service.buildSessionToken(webId);
  const ok=context('Bearer '+good);
  assert.equal(await service.requireUserWebId.call(service,ok),webId);
- assert.deepEqual(ok.calls,['auth.jwt.verifyServerSignedToken']);
+ assert.deepEqual(ok.calls,['auth.jwt.verifyServerSignedToken',
+  'auth.account.findByWebId']);
  const forged=token({webId:'https://paper.example.org/users/victim',
   iat:now,exp:now+300},attacker.privateKey);
  await rejected(context('Bearer '+forged,cookie));
@@ -100,8 +109,53 @@ async function main(){
  // Cookie fallback is allowed only when there is *no* Authorization header.
  const cookieOnly=context(undefined,cookie);
  assert.equal(await service.requireUserWebId.call(service,cookieOnly),webId);
- assert.deepEqual(cookieOnly.calls,[]);
+ assert.deepEqual(cookieOnly.calls,['auth.account.findByWebId']);
  await rejected(context('Bearer invalid',cookie));
- console.log('PASS: OAuth bearer owner RS256 verified and <=1h old; forged, stale, unsigned, malformed and wrong identity claims denied; no invalid-bearer cookie fallback');
+
+ // A correctly signed bearer or HMAC cookie is NOT proof of an active
+ // account after deletion. Upstream SemApps findByWebId exposes tombstones.
+ for(const authHeader of [undefined,'Bearer '+good]){
+  for(const account of [
+   null,{webId,deletedAt:'2026-11-22T01:00:00Z'},
+   {webId:'https://paper.example.org/users/someone-else'},
+   {webId,deletedAt:''}
+  ]){
+   await rejected(context(authHeader,cookie,{account}));
+  }
+  await rejected(context(authHeader,cookie,{accountThrows:true}));
+ }
+ // Login must trust ONLY the verified record, never a later unscoped
+ // findByUsername (which breaks email-based sign-ins and may race a delete).
+ async function runLogin(record){
+  const calls=[];
+  const ctx={params:{username:'alice@example.org',password:'correct-password'},
+   meta:{$headers:{}},calls,async call(action,p){
+    calls.push(action);
+    assert.equal(action,'auth.account.verify');
+    assert.deepEqual(p,{username:'alice@example.org',password:'correct-password'});
+    return record;
+   }};
+  return {ctx,login:()=>schema.actions.loginSession.handler.call(service,ctx)};
+ }
+ const activeLogin=await runLogin({webId});
+ const result=await activeLogin.login();
+ assert.equal(result.ok,true);
+ assert.equal(result.webId,webId);
+ assert.deepEqual(activeLogin.ctx.calls,['auth.account.verify']);
+ assert.match(activeLogin.ctx.meta.$responseHeaders['Set-Cookie'],
+  /oauth_session=/u);
+ for(const record of [
+  null,{webId,deletedAt:'2026-11-22T01:00:00Z'},
+  {webId:'http://paper.example.org/users/alice'},
+  {webId,deletedAt:''}
+ ]){
+  const invalidLogin=await runLogin(record);
+  await assert.rejects(invalidLogin.login(),
+   e=>e?.code===401&&e?.type==='LOGIN_REQUIRED');
+  assert.ok(!invalidLogin.ctx.meta.$responseHeaders?.['Set-Cookie'],
+   'Refused/tombstoned account must never receive a session cookie');
+ }
+
+ console.log('PASS: OAuth verified bearer and HMAC cookie require current non-tombstoned owner; signed JWT forged, stale, unsigned and malformed denied; verified email login resolves the authenticated account only');
 }
 main().catch(e=>{console.error(e?.stack||e);process.exitCode=1});

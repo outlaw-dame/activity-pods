@@ -572,6 +572,15 @@ async function mainTest(){
     await assert.rejects(wrongSigner.reconcileCommitted(op),
       e=>e?.code==='WITNESS_RECONCILER_SIGNATURE_INVALID',
       'An unrelated key cannot attest a witnessed signed commit');
+    const wrongHistoricSigner=createIndependentWitnessCommitReconciler({
+      ...trustedSettlement,resolveSigningKey:async p=>
+        p.commitCid===genesis.commitCid
+          ?otherKey.publicKey.export({format:'pem',type:'spki'}).toString()
+          :signing.publicKeyPem
+    });
+    await assert.rejects(wrongHistoricSigner.reconcileCommitted(op),
+      e=>e?.code==='WITNESS_RECONCILER_SIGNATURE_INVALID',
+      'A valid proposed signature does not authenticate an older head');
     assert.equal((await readIntent(op)).state,'pending');
     assert.equal(await committedReconciler.reconcileCommitted(op),true,
       'Independent read-only primary proof matches exact signed CID');

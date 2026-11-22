@@ -8,6 +8,8 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs'
+      - 'pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/pg-witness-signed-head-correlation.sql'
@@ -72,6 +74,7 @@ jobs:
       PAPER_OAUTH_PG_RESTORE_DISPOSABLE: confirmed
       PAPER_OAUTH_EPOCH_REDIS_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
+      PAPER_OAUTH_WORM_READBACK_DISPOSABLE: confirmed
       PAPER_OAUTH_WITNESS_SIGNED_REPO_DISPOSABLE: confirmed
       ATPROTO_REPO_PROOF_DISPOSABLE: confirmed
       PAPER_OAUTH_PG_RESTORE_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test
@@ -91,6 +94,9 @@ jobs:
         run: |
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs
+          node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
+          grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-external-witness-reader.js
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs
           node --check pod-provider/backend/candidates/atproto-signed-repo-proof/independent-witness-commit-reconciler.mjs
@@ -121,6 +127,11 @@ jobs:
             --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
             @atproto/repo@0.11.0 kafkajs@2.2.4
           test -f "$RUNNER_TEMP/witness-atproto-reference/node_modules/@atproto/repo/dist/index.js"
+      - name: Prove independent immutable receipt readback candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs
       - name: Prove independent PG18 witness blocks restored PG and Redis
         shell: bash
         run: |

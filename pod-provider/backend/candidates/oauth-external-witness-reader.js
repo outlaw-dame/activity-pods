@@ -209,7 +209,8 @@ function createDisposableOauthWitnessReader({
          Buffer.from(after.event_sha256,'hex'));
     }catch(e) {
       discard=true;
-      throw e?.code?.startsWith('PG_OAUTH_WITNESS_')?e:
+      throw (e?.code?.startsWith('PG_OAUTH_WITNESS_')||
+        e?.code?.startsWith('PG_OAUTH_HIGHWATER_'))?e:
         Object.assign(new Error('Independent OAuth witness unavailable'),
           {code:'PG_OAUTH_WITNESS_UNAVAILABLE'});
     }finally{if(c)c.release(discard)}

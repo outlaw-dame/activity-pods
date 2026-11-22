@@ -624,7 +624,6 @@ async function mainTest(){
   await assert.rejects(issueToken(grant1,'1'),e=>e?.type==='INVALID_GRANT');
   assert.equal(await revokePg(grant1,1),'2');
   await redis.set(consentKey,JSON.stringify({owner,clientId,grantId:grant1,revoked:true}),'EX',180);
-  const digest2=await receipt(attestor,revokeOp,2);
   assert.equal(await attest(2,revokeOp),true);
   assert.equal(immutable.size,2);
 
@@ -664,7 +663,6 @@ async function mainTest(){
   await assert.rejects(issueToken(grant2,'3'),
     e=>e?.type==='INVALID_GRANT',
     'A real JWT signer must reject an unsealed new epoch');
-  const digest3=await receipt(attestor,op3,3);
   assert.equal(await attest(3,op3),true);
   assert.equal(immutable.size,3);
   assert.equal(await admitted(reader,grant2,3),true);

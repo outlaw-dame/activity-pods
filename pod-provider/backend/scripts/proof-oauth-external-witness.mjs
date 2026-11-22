@@ -153,6 +153,7 @@ async function mainTest(){
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v1.sql'));madeWitness=true;
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'));
+  await root.query(await sql('../sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'));
   assert.equal((await root.query(
     "SELECT to_regprocedure('paper_oauth_restore_witness.reserve_signed_write(text,text,bytea,bigint,uuid,text)') AS old"
   )).rows[0].old,null,'Legacy unbound writer function must no longer exist');
@@ -185,6 +186,19 @@ async function mainTest(){
     '$1,$2,$3,$4,$5,$6)',
     [crypto.randomUUID(),owner,clientId,1,'aborted',null]),
     e=>e?.code==='42501');
+  await assert.rejects(reconciler.query(
+    'SELECT paper_oauth_restore_witness.resolve_signed_write('+
+    '$1::uuid,$2,$3,$4::bigint,$5,$6)',
+    [crypto.randomUUID(),owner,clientId,1,'aborted',null]),
+    e=>e?.code==='42501',
+    'Positive-only runtime reconciler cannot attest an arbitrary abort');
+  await assert.rejects(revoker.query(
+    'SELECT paper_oauth_restore_witness.settle_verified_committed('+
+    '$1::uuid,$2,$3,$4::bigint,$5)',
+    [crypto.randomUUID(),owner,clientId,1,'bafyre'+'b'.repeat(53)]),
+    e=>e?.code==='42501',
+    'Witness revoker cannot manufacture positive signed commit settlement');
+
   await assert.rejects(reconciler.query(
     'SELECT paper_oauth_restore_witness.reserve_signed_write('+
     '$1,$2,$3,$4,$5,$6)',
@@ -230,10 +244,22 @@ async function mainTest(){
     return r.rows[0].ok===true;
   };
   const resolve=async(operation,revision,state,head)=>{
-    const r=await reconciler.query(
-      'SELECT paper_oauth_restore_witness.resolve_signed_write('+
-      '$1::uuid,$2,$3,$4::bigint,$5,$6) AS ok',
-      [operation,owner,clientId,revision,state,head]);
+    let r;
+    if(state==='committed'){
+      r=await reconciler.query(
+        'SELECT paper_oauth_restore_witness.settle_verified_committed('+
+        '$1::uuid,$2,$3,$4::bigint,$5) AS ok',
+        [operation,owner,clientId,revision,head]);
+    }else if(state==='aborted'){
+      // DISPOSABLE WAL/rollback fixture only. Use root migration principal
+      // and explicit proof that the primary signed transaction cannot
+      // COMMIT; the runtime reconciler NO LONGER has this authority.
+      // Do not export this fixture-only call into any hosted service.
+      r=await root.query(
+        'SELECT paper_oauth_restore_witness.resolve_signed_write('+
+        '$1::uuid,$2,$3,$4::bigint,$5,$6) AS ok',
+        [operation,owner,clientId,revision,'aborted',null]);
+    }else throw Error('Unsupported witness settlement state');
     return r.rows[0].ok===true;
   };
   const readIntent=async operation=>(await reconciler.query(
@@ -670,7 +696,7 @@ async function mainTest(){
   assert.equal(await admitted(reader,grant2,3),false);
   assert.equal((await introspect(secondJwt)).active,false);
   assert.equal(await transition(revoker,'blocked',grant2,3,crypto.randomUUID()),'0');
-  console.log('PASS: independent PG18 witness durable signed-write intents block revocation ACK, isolated writer/reconciler roles, fail-closed uncertain COMMIT, separate read-only JWT admission, restored PG and Redis cannot revive revoked grants; release CLOSED');
+  console.log('PASS: commit-only runtime witness reconciler cannot forge abort, independently restricted primary signed-head proof and separate privileged disposable rollback fixture; two PG18, Redis8.2 and signed JWT restore fence; release CLOSED');
 }
 const watchdog=setTimeout(()=>{console.error('Witness proof timed out');process.exit(1)},100000);
 try{await mainTest()}catch(e){error=e;process.exitCode=1;console.error(e?.stack||String(e))}

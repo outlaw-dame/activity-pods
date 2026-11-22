@@ -334,3 +334,31 @@ strict runtime wiring/credential separation. The canonical primary
 DB can itself be rewound; positive historical verification must be
 backed by independently immutable high-water evidence before
 production release.
+
+## v4 reconciler privilege split — commit-only admission (NONACTIVATED)
+
+`pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql`
+removes the runtime witness reconciler's EXECUTE grant on the generic
+`resolve_signed_write` function, which allowed both `committed` and
+`aborted` settlement. Giving the same runtime worker the ability
+to declare a write aborted would let a compromised positive-commit
+verifier erase a pending witness barrier and cause a revocation ACK
+before the primary signed transaction has definitely stopped.
+
+The replacement `settle_verified_committed` is a narrowly authorized
+SECURITY DEFINER wrapper that can ONLY settle `committed` and delegates
+the exact proposed-CID check to v3. The old generic entry point is
+revoked from all runtime roles and retained only for a privileged
+migration operator; its use in disposable tests is an explicitly
+separate root recovery fixture **after** independently verifying
+the primary transaction did roll back.
+
+No production runtime or auto-recovery service is granted an abort
+capability. Aborts that cannot yet be proven against a completed
+independent primary WAL/recovery barrier **remain pending indefinitely
+and prevent successful witness revocation**. A future isolated,
+independently audited abort attestor requires physical PITR failover
+and WORM readback acceptance before a separate, carefully scoped
+abort-only function/role may be contemplated. This v4 change is
+a deliberate security/availability tradeoff rather than a claim of
+completed self-healing.

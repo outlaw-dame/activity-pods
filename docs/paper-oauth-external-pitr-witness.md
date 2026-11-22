@@ -440,6 +440,10 @@ backfill or guessed outcome is permitted. For new intents, a BEFORE INSERT
 trigger captures the exact sealed epoch event SHA-256 within the v3
 reservation transaction. Two irreversible bits track independent receipt
 sealing: `pending_receipt_sealed` and `resolution_receipt_sealed`.
+The existing per-owner/client bounded admission cap also counts
+**committed or aborted but unarchived** outcomes through an indexed
+BEFORE INSERT check. Otherwise the original pending-only cap would
+permit unlimited committed-but-unarchived rows and WAL growth.
 The existing epoch-transition trigger is tightened so **either** an
 unresolved intent **or a resolved intent lacking its archived outcome**
 prevents a revocation ACK. The v4 positive-only runtime reconciler remains

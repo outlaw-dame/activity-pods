@@ -44,8 +44,8 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
           node --check pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs
-          if grep -R -n 'oauth-s3-compliance-archive' pod-provider/backend/services; then
-            echo '::error::Do not wire a disposable S3 adapter into production services'
+          if grep -R -nE 'oauth-s3-(compliance-archive|independent-custody)' pod-provider/backend/services; then
+            echo '::error::Do not wire an unapproved S3 adapter or custody probe into production services'
             exit 1
           fi
       - name: Run deterministic fail-closed archival contract

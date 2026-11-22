@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const registrySchema = require('../services/oauth/oauth-session-registry.service');
 const consentSchema = require('../services/oauth/oauth-consent.service');
+const challengeSchema = require('../services/oauth/oauth-consent-challenge.service');
 const { consentKey } = require('../utils/oauth-refresh-atomic-policy');
 const apiSchema = require('../services/oauth/oauth-api.service');
 
@@ -28,6 +29,9 @@ const consent = {settings:{...consentSchema.settings,
   sessionKeyPrefix:prefix}};
 const grantParams={canonicalAccountId:webId,clientId:'https://paper.example.org/oauth-test-app',
   scope:'atproto'};
+const challenges = {settings:{...challengeSchema.settings,
+  redisUrl:process.env.PAPER_OAUTH_EPOCH_REDIS_URL,
+  keyPrefix:'oauth:consent-challenge:owner-proof:'+crypto.randomBytes(16).toString('hex')}};
 const service = {
   settings: {...apiSchema.settings, sessionSecret: crypto.randomBytes(32).toString('hex'),
     issuer: 'https://paper.example.org', sessionTtlSec: 3600,
@@ -43,12 +47,21 @@ function context(instance, cookie, options={}) {
   const calls=[];
   const ctx={
     params: options.params || {},
-    meta: {$headers: cookie ? {cookie: 'oauth_session='+encodeURIComponent(cookie)} : {}},
+    meta: {$headers: {...(cookie ? {cookie: 'oauth_session='+encodeURIComponent(cookie)} : {}),
+      ...(options.headers || {})},$query:options.query||{}},
     calls,
     async call(name, p){
       calls.push(name);
       if(name==='auth.account.verify')return {webId,hashedPassword:options.passwordHash||passwordHash};
       if(name==='auth.account.findByWebId')return {webId,hashedPassword:options.passwordHash||passwordHash};
+      if(name.startsWith('oauth-consent-challenge.')) {
+        if(options.outage)throw Error('Redis challenge authority unavailable');
+        return challengeSchema.actions[name.split('.')[1]].handler.call(challenges,{params:p});
+      }
+      if(name.startsWith('oauth-consent.')) {
+        if(options.outage)throw Error('Redis consent authority unavailable');
+        return consentSchema.actions[name.split('.')[1]].handler.call(consent,{params:p});
+      }
       if(name.startsWith('oauth-session-registry.')) {
         if(options.outage)throw Error('Redis registry unavailable');
         return action(instance,name.split('.')[1],p);
@@ -66,9 +79,10 @@ async function main(){
   registrySchema.created.call(a);
   registrySchema.created.call(b);
   consentSchema.created.call(consent);
+  challengeSchema.created.call(challenges);
   try{
     await Promise.all([registrySchema.started.call(a), registrySchema.started.call(b),
-      consentSchema.started.call(consent)]);
+      consentSchema.started.call(consent),challengeSchema.started.call(challenges)]);
     const login=context(a,null,{params:{username:'session-owner@example.org',password:'correct'}});
     const result=await apiSchema.actions.loginSession.call(service,login);
     assert.equal(result.ok,true);
@@ -152,7 +166,7 @@ async function main(){
         webId,grantParams.clientId)); } catch { /* Disposable cleanup must not mask security assertion failures. */ }
     await Promise.allSettled([
       registrySchema.stopped.call(a),registrySchema.stopped.call(b),
-      consentSchema.stopped.call(consent)
+      consentSchema.stopped.call(consent),challengeSchema.stopped.call(challenges)
     ]);
   }
 }

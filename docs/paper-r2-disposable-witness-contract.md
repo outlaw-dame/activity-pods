@@ -23,7 +23,22 @@ This provisioned bucket is a **disposable integration fixture**, not a
 trusted production authority. The connector currently provides
 management API access; no S3 access-key credential was retrieved and no
 real S3 conditional PUT or object readback has yet been performed.
-No receipt was written to this bucket during creation.
+No canonical epoch or signed-intent receipt was written to this bucket.
+
+### Real Cloudflare management API smoke test (2026-11-22)
+
+A strictly disposable object was created at
+`paper/oauth-witness/fixtures/r2-management-readback-v1` using the
+account-scoped R2 **management API**, with 51 bytes of public nonsecret
+fixture content. GET returned the exact original 51 bytes. A second PUT
+to the same key with different test bytes failed with HTTP **409**;
+subsequent GET confirmed the original bytes were unchanged and the
+30-day prefix lock remained enabled. This directly verifies that the
+current R2 lock protects this test object from ordinary overwrite, but
+**does not test S3-HMAC If-None-Match, object version history, operator
+separation, delete-rule privilege, or post-PITR revocation safety.**
+This fixture is retained for 30 days under the configured bucket rule.
+
 
 ## Why the adapter differs from AWS S3
 

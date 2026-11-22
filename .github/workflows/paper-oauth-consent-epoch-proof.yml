@@ -6,6 +6,7 @@ on:
       - '.github/workflows/paper-oauth-consent-epoch-proof.yml'
       - 'pod-provider/backend/services/oauth/oauth-api.service.js'
       - 'pod-provider/backend/services/oauth/oauth-session-registry.service.js'
+      - 'pod-provider/backend/utils/oauth-browser-session-policy.js'
       - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
       - 'pod-provider/backend/services/oauth/oauth-consent-challenge.service.js'
       - 'pod-provider/backend/services/oauth/oauth-par.service.js'
@@ -81,6 +82,7 @@ jobs:
           set -euo pipefail
           node --check pod-provider/backend/services/oauth/oauth-api.service.js
           node --check pod-provider/backend/services/oauth/oauth-session-registry.service.js
+          node --check pod-provider/backend/utils/oauth-browser-session-policy.js
           node --check pod-provider/backend/services/oauth/oauth-consent.service.js
           node --check pod-provider/backend/services/oauth/oauth-consent-challenge.service.js
           node --check pod-provider/backend/services/oauth/oauth-par.service.js

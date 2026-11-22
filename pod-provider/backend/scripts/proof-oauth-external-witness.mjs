@@ -438,6 +438,15 @@ async function mainTest(){
   await assert.rejects(foreignArchiveReader.verify(identity(grant1,'1')),
     e=>e?.code==='PG_OAUTH_HIGHWATER_SCOPE_INVALID',
     'An immutable receipt for another owner/client cannot authorize');
+  const reformattedArchiveReader=createDisposableOauthWitnessReader({
+    pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
+    readImmutableHeadReceipt:async scope=>Buffer.from(JSON.stringify(
+      JSON.parse((await newestImmutableReceipt(scope)).toString('utf8')),
+      null,2),'utf8')
+  });
+  await assert.rejects(reformattedArchiveReader.verify(identity(grant1,'1')),
+    e=>e?.code==='PG_OAUTH_HIGHWATER_INVALID',
+    'A byte-different receipt body cannot silently replace sealed bytes');
 
   assert.equal(await admitted(reader,grant1,1),true);
   const firstJwt=await issueToken(grant1,'1');

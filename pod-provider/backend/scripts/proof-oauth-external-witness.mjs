@@ -156,6 +156,8 @@ async function mainTest(){
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'));
+  await root.query(await sql('../sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'));
+
   assert.equal((await root.query(
     "SELECT to_regprocedure('paper_oauth_restore_witness.reserve_signed_write(text,text,bytea,bigint,uuid,text)') AS old"
   )).rows[0].old,null,'Legacy unbound writer function must no longer exist');
@@ -236,6 +238,31 @@ async function mainTest(){
   )).rows[0].rev);
   const genesisCid='bafyre'+'a'.repeat(53);
   const signedCid='bafyre'+'b'.repeat(53);
+  const immutableSignedIntents=new Map();
+  const attestSignedIntent=async(operation,phase)=>{
+    const q=await attestor.query(
+      'SELECT paper_oauth_restore_witness.signed_intent_receipt('+
+      '$1::uuid,$2) AS bytes',[operation,phase]);
+    const bytes=q.rows[0]?.bytes;
+    if(!Buffer.isBuffer(bytes)||bytes.length>512)
+      throw Error('Disposable signed intent receipt unavailable');
+    const key='paper/oauth-witness/signed-intents/v1/'+operation+'/'+phase;
+    // Fixture-only assumed retention; real archive needs independently
+    // controlled Object Lock and separate uncached GET/retention readback.
+    if(immutableSignedIntents.has(key))
+      throw Error('Unexpected immutable signed intent overwrite');
+    immutableSignedIntents.set(key,Buffer.from(bytes));
+    const independentlyRead=immutableSignedIntents.get(key);
+    if(!independentlyRead.equals(bytes))
+      throw Error('Signed intent receipt readback mismatch');
+    const digest=hash(bytes);
+    const sealed=await attestor.query(
+      'SELECT paper_oauth_restore_witness.seal_signed_intent_receipt('+
+      '$1::uuid,$2,$3) AS ok',[operation,phase,digest]);
+    if(sealed.rows[0].ok!==true)
+      throw Error('Witness intent receipt SQL seal refused');
+    return true;
+  };
   const reserve=async(db,grant,revision,operation,
     expectedHead=genesisCid,proposedHead=signedCid)=>{
     const r=await db.query(
@@ -243,7 +270,10 @@ async function mainTest(){
       '$1,$2,$3,$4::bigint,$5::uuid,$6,$7) AS ok',
       [owner,clientId,hash(grant),revision,operation,
         expectedHead,proposedHead]);
-    return r.rows[0].ok===true;
+    if(r.rows[0].ok!==true)return false;
+    // Never report a successful reservation to the signed writer before
+    // the independent attestor has archived the exact PENDING receipt.
+    return attestSignedIntent(operation,'pending');
   };
   const resolve=async(operation,revision,state,head)=>{
     let result;
@@ -260,7 +290,10 @@ async function mainTest(){
         '$1::uuid,$2,$3,$4::bigint,$5,$6) AS ok',
         [operation,owner,clientId,revision,'aborted',null]);
     }else throw Error('Unsupported witness settlement state');
-    return result.rows[0].ok===true;
+    if(result.rows[0].ok!==true)return false;
+    // Settlement SQL alone MUST NOT permit a later revocation ACK. A
+    // distinct receipt attestor seals the immutable outcome first.
+    return attestSignedIntent(operation,'resolved');
   };
   const readIntent=async operation=>(await reconciler.query(
     'SELECT * FROM paper_oauth_restore_witness.read_signed_write($1::uuid)',
@@ -510,6 +543,16 @@ async function mainTest(){
       lockCanonicalConsent:async()=>true
     }),e=>e?.code==='REFERENCE_MST_EXTERNAL_WITNESS_NOT_RELEASED',
     'Witness-enabled signed writer cannot run without its reservation gate');
+    // A v5-enabled signed writer may not start its primary PG transaction
+    // with only a reserved SQL row; it requires independently sealed WORM
+    // proof through a *distinct* witness read-only verifier callback.
+    process.env.PAPER_OAUTH_WORM_INTENTS_DISPOSABLE='confirmed';
+    assert.throws(()=>createReferenceMstWriter({
+      pool:repoPool,reference,fixtureOnly:true,
+      authorize:async()=>true,lockCanonicalConsent:async()=>true,
+      reserveWitnessIntent:async()=>true
+    }),e=>e?.code==='REFERENCE_MST_WORM_INTENT_NOT_RELEASED',
+    'v5 must refuse signer creation without sealed receipt verifier');
     const witnessed=[];
     const repoWriter=createReferenceMstWriter({
       pool:repoPool,reference,fixtureOnly:true,
@@ -533,6 +576,14 @@ async function mainTest(){
           scope.expectedCommitCid,scope.proposedCommitCid);
         if(ok)witnessed.push(scope);
         return ok;
+      },
+      verifyWitnessIntentSealed:async(scope)=>{
+        const q=await writer.query(
+          'SELECT paper_oauth_restore_witness.verify_sealed_signed_intent('+
+          '$1::uuid,$2,$3,$4::bigint,$5,$6) AS ok',
+          [scope.operationId,owner,clientId,1,
+           scope.expectedCommitCid,scope.proposedCommitCid]);
+        return q.rows[0].ok===true;
       }
     });
     const mutation={

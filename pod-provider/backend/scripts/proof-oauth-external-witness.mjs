@@ -157,6 +157,8 @@ async function mainTest(){
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'));
+  await root.query(await sql('../sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql'));
+
 
   assert.equal((await root.query(
     "SELECT to_regprocedure('paper_oauth_restore_witness.reserve_signed_write(text,text,bytea,bigint,uuid,text)') AS old"
@@ -393,6 +395,50 @@ async function mainTest(){
   assert.equal(await seal(attestor,op1,1,hash('forged receipt')),false);
   assert.equal(await attest(1,op1),true);
   assert.equal(immutable.size,1);
+  // Explicit disposable v6 gate: no issuer/revoker/attestor credential is
+  // available to this restricted reader. Highest epoch bytes are retrieved
+  // from an immutable *test Map*, never from the restored PostgreSQL rows.
+  process.env.PAPER_OAUTH_WORM_HIGHWATER_DISPOSABLE='confirmed';
+  const witnessPool={async connect(){return {query:q=>reader.query(q),release(){}}}};
+  assert.throws(()=>createDisposableOauthWitnessReader({
+    pool:witnessPool,clientIds:[clientId],fixtureOnly:true
+  }),e=>e?.code==='PG_OAUTH_HIGHWATER_NOT_RELEASED',
+  'No immutable receipt resolver means no high-water admission');
+  const newestImmutableReceipt=async({owner:subject,clientId:audience,signal})=>{
+    assert.equal(subject,owner);assert.equal(audience,clientId);
+    assert.equal(signal.aborted,false);
+    const values=[...immutable.values()].map(bytes=>Buffer.from(bytes));
+    if(values.length===0)return null;
+    // Fixture-only enumeration, intentionally separate from witness PG.
+    values.sort((a,b)=>Number(JSON.parse(b.toString('utf8')).revision)-
+      Number(JSON.parse(a.toString('utf8')).revision));
+    return values[0];
+  };
+  const highWaterReader=createDisposableOauthWitnessReader({
+    pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
+    readImmutableHeadReceipt:newestImmutableReceipt
+  });
+  assert.equal(await highWaterReader.verify(identity(grant1,'1')),true,
+    'Current sealed grant must match latest independently retained receipt');
+  const noArchiveReader=createDisposableOauthWitnessReader({
+    pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
+    readImmutableHeadReceipt:async()=>null
+  });
+  await assert.rejects(noArchiveReader.verify(identity(grant1,'1')),
+    e=>e?.code==='PG_OAUTH_HIGHWATER_INVALID',
+    'A missing external archive cannot authorize');
+  const foreignArchiveReader=createDisposableOauthWitnessReader({
+    pool:witnessPool,clientIds:[clientId],fixtureOnly:true,
+    readImmutableHeadReceipt:async()=>Buffer.from(JSON.stringify({
+      ...JSON.parse((await newestImmutableReceipt({owner,clientId,
+        signal:new AbortController().signal})).toString('utf8')),
+      subject:'f'.repeat(64)
+    }))
+  });
+  await assert.rejects(foreignArchiveReader.verify(identity(grant1,'1')),
+    e=>e?.code==='PG_OAUTH_HIGHWATER_SCOPE_INVALID',
+    'An immutable receipt for another owner/client cannot authorize');
+
   assert.equal(await admitted(reader,grant1,1),true);
   const firstJwt=await issueToken(grant1,'1');
   assert.equal((await introspect(firstJwt)).active,true);
@@ -717,6 +763,37 @@ async function mainTest(){
     'Independently intact witness rejects both restored PG and Redis');
   assert.equal((await introspect(firstJwt)).active,false,
     'Restored PG and Redis cannot reactivate a real signed JWT');
+  // Simulate BOTH database failure domains rewound: this is a deliberate
+  // privileged logical-row model, NOT a physical WAL/PITR restore. The
+  // unmodified external archive still contains the newer blocked epoch.
+  const blocked=await root.query(
+    'SELECT event_sha256 FROM paper_oauth_restore_witness.events '+
+    'WHERE owner_webid=$1 AND client_id=$2 AND revision=2',
+    [owner,clientId]);
+  assert.equal(blocked.rowCount,1);
+  await root.query(
+    'UPDATE paper_oauth_restore_witness.current_epochs SET '+
+    "revision=1,state='active',grant_sha256=$3,operation_id=$4::uuid,"+
+    'event_sha256=$5,sealed=true WHERE owner_webid=$1 AND client_id=$2',
+    [owner,clientId,hash(grant1),op1,digest1]);
+  assert.equal(await wverify(reader,grant1,1),true,
+    'Rewound witness would mistake a revoked old grant for active');
+  assert.equal((await introspect(firstJwt)).active,true,
+    'Legacy dual-rewound SQL-only admission exposes the rollback threat');
+  assert.equal(await highWaterReader.verify(identity(grant1,'1')),false,
+    'High-water from immutable archive rejects an old witness revision');
+  const highWaterCtx={call:async(name,p)=>
+    name==='oauth-witness-epoch.verify'
+      ?highWaterReader.verify(p):pgCall(name,p)};
+  assert.equal((await introspect(firstJwt,highWaterCtx)).active,false,
+    'Real JWT introspection must reject dual PG/Redis rollback');
+  await root.query(
+    'UPDATE paper_oauth_restore_witness.current_epochs SET '+
+    "revision=2,state='blocked',grant_sha256=$3,operation_id=$4::uuid,"+
+    'event_sha256=$5,sealed=true WHERE owner_webid=$1 AND client_id=$2',
+    [owner,clientId,hash(grant1),revokeOp,blocked.rows[0].event_sha256]);
+  assert.equal(await wverify(reader,grant1,1),false);
+  assert.equal(await highWaterReader.verify(identity(grant1,'1')),false);
   assert.equal(await transition(issuer,'active',grant2,1,crypto.randomUUID()),'0');
   assert.equal(await transition(revoker,'blocked',grant1,1,crypto.randomUUID()),'0');
   const op3=crypto.randomUUID();

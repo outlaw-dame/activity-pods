@@ -14,6 +14,8 @@ if (process.env.NODE_ENV !== 'test' ||
 }
 const webId = 'https://paper.example.org/users/session-owner';
 const alien = 'https://paper.example.org/users/attacker';
+const passwordHash = '$2b$10$'+'a'.repeat(53);
+const replacementHash = '$2b$10$'+'b'.repeat(53);
 const prefix = 'oauth:browser-session:proof:' + crypto.randomBytes(16).toString('hex') + ':';
 const reg = () => ({
   settings: {...registrySchema.settings,
@@ -45,8 +47,8 @@ function context(instance, cookie, options={}) {
     calls,
     async call(name, p){
       calls.push(name);
-      if(name==='auth.account.verify')return {webId};
-      if(name==='auth.account.findByWebId')return {webId};
+      if(name==='auth.account.verify')return {webId,hashedPassword:options.passwordHash||passwordHash};
+      if(name==='auth.account.findByWebId')return {webId,hashedPassword:options.passwordHash||passwordHash};
       if(name.startsWith('oauth-session-registry.')) {
         if(options.outage)throw Error('Redis registry unavailable');
         return action(instance,name.split('.')[1],p);
@@ -87,6 +89,13 @@ async function main(){
     assert.ok(ttl>0 && ttl<=3600);
     assert.equal(await service.requireUserWebId(context(b,raw)),webId,
       'Second independent provider replica must admit live session');
+    // A password change invalidates copied cookies without waiting for
+    // Redis TTL, even while the Redis session key is still present.
+    await rejected(()=>service.requireUserWebId(
+      context(b,raw,{passwordHash:replacementHash})),401);
+    assert.equal(await service.isCurrentBrowserSessionAccount(
+      context(b,raw,{passwordHash:replacementHash}),signed),false);
+    assert.equal(await service.isCurrentBrowserSessionAccount(context(b,raw),signed),true);
     assert.equal(await action(b,'verify',{sessionId:signed.sessionId,webId:alien}),false);
     const ownerAttack=await action(b,'revoke',{sessionId:signed.sessionId,webId:alien});
     assert.equal(ownerAttack.revoked,false);

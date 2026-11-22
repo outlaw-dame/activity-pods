@@ -215,8 +215,13 @@ module.exports = {
         throw new MoleculerError('CSRF cookie is required', 403, 'LOGIN_REQUIRED');
       }
 
-      const canonicalAccountId = await this.requireUserWebId(ctx);
-      const result = await this.authorizeDecision(ctx, body, csrfToken, canonicalAccountId);
+      // OAuth consent is a fresh owner action. SemApps RS256 user tokens
+      // carry no credential epoch, so a token minted before a password
+      // change could otherwise approve a new grant for up to one hour.
+      // Only the live, credential-verifier-bound browser session may
+      // approve. The grant writer still checks that session atomically.
+      const ownerSession = await this.requireBrowserOwnerSession(ctx);
+      const result = await this.authorizeDecision(ctx, body, csrfToken, ownerSession.webId);
       ctx.meta.$statusCode = 302;
       ctx.meta.$location = result.redirect_uri;
       return { redirect: result.redirect_uri };

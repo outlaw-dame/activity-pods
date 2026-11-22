@@ -923,3 +923,45 @@ candidate remains strictly `NODE_ENV=test` and nonactivated.
 Any real Paper permission-management UI must distinguish application
 OAuth/ATProto consent from independently delegated Solid storage grants
 until cross-store release criteria are met. Keep `release=CLOSED`.
+
+## Public OAuth Authorization Interface rejects old SemApps bearer owner credentials
+
+The current upstream SemApps `auth.jwt.generateServerSignedToken` path
+issues RS256 user bearer JWTs that carry an `iat` timestamp but **no
+password-verifier version or canonical account revocation epoch**. The
+former Paper public `POST /oauth/authorize` path accepted a valid
+server-signed token issued within the past hour as proof of owner
+consent, even if its owner had changed their password after issuance.
+Checking the current account's WebID and deleted tombstone did not
+close this password-change replay.
+
+Paper's public OAuth consent approval now calls
+`requireBrowserOwnerSession` rather than the broader
+`requireUserWebId`. It requires the current HMAC-signed,
+Redis-registered, password-verifier-bound browser cookie, plus a fresh
+live account lookup. Any `Authorization` header (including a
+correctly verified old RS256 bearer) is **rejected** even if the
+request also includes a valid cookie; it never falls back to the
+cookie. The existing same-Redis Lua grant-upsert guard still checks
+the exact live browser session atomically against logout. The
+existing one-use PAR challenge and CSRF checks are unchanged.
+
+This follows the AT Protocol OAuth Authorization Interface's required
+user-facing authentication and grant approval model; old API bearer
+credentials are not a substitute for a current user authorization
+session. See https://atproto.com/specs/oauth .
+
+The internal `POST /api/internal/oauth/authorize` remains a separate
+admin-authenticated, **production-disabled** compatibility fallback.
+This change does not claim to revoke SemApps-issued bearer tokens from
+other SemApps/Solid endpoints; those need a canonical owner credential
+epoch and issuer/validator integration. Nor does it replace external
+WORM/WAL/PITR or signed PDS/SAI cross-store consent transactions.
+The release fuse stays `CLOSED` until hosted positive end-to-end
+acceptance and independent security review.
+
+Tests create real RS256 signatures to distinguish correct but stale
+bearer from forged/unsigned bearer; assert denial of public consent
+even with a valid old token and HMAC cookie, changed-password cookie
+denial, and success of a valid browser owner approval carrying its
+exact Redis session ID to the consent grant authorization action.

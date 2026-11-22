@@ -123,6 +123,51 @@ async function main(){
  await rejected(context(undefined,cookie,{account:{webId}}));
  assert.deepEqual(cookieOnly.calls,['oauth-session-registry.verify',
   'auth.account.findByWebId']);
+
+ // Historic, valid SemApps RS256 tokens have no credential version; an
+ // already issued token must never approve a fresh post-password-change
+ // OAuth consent. The Authorization Interface requires a live owner cookie.
+ const withCsrf=(header,accountCookie,options={})=>{
+  const ctx=context(header,accountCookie,options);
+  ctx.meta.$headers.cookie=(ctx.meta.$headers.cookie ?
+   ctx.meta.$headers.cookie+'; ' : '')+'oauth_csrf=one-use-proof';
+  ctx.params={request_uri:'urn:ietf:params:oauth:request_uri:proof',
+   decision:'approve',consent_challenge:'proof'};
+  return ctx;
+ };
+ for(const header of ['Bearer '+good,'Bearer '+forged,
+   'Bearer '+token({webId,iat:now-3599})]){
+  const bearerApproval=withCsrf(header,cookie);
+  await assert.rejects(
+   schema.actions.postAuthorizeUser.call(service,bearerApproval),
+   e=>e?.code===401&&e?.type==='LOGIN_REQUIRED');
+  assert.ok(!bearerApproval.calls.includes('oauth-authorization.authorize'),
+   'Even a cryptographically verified old bearer must not create consent');
+ }
+ const changedApproval=withCsrf(undefined,cookie,
+  {account:{webId,hashedPassword:replacementHash}});
+ await assert.rejects(
+  schema.actions.postAuthorizeUser.call(service,changedApproval),
+  e=>e?.code===401&&e?.type==='LOGIN_REQUIRED');
+ const validApproval=withCsrf(undefined,cookie);
+ const originalCall=validApproval.call.bind(validApproval);
+ validApproval.call=async(action,p)=>{
+  if(action==='oauth-authorization.authorize'){
+   assert.equal(p.canonicalAccountId,webId);
+   assert.equal(p.ownerSessionId,sessionId,
+    'Public approval must carry the live browser id into Redis grant CAS');
+   assert.equal(p.csrfToken,'one-use-proof');
+   assert.equal(p.request_uri,validApproval.params.request_uri);
+   assert.equal(p.decision,'approve');
+   return {redirect_uri:'https://client.example.org/callback?code=proof'};
+  }
+  return originalCall(action,p);
+ };
+ const accepted=await schema.actions.postAuthorizeUser.call(service,validApproval);
+ assert.equal(accepted.redirect,'https://client.example.org/callback?code=proof');
+ assert.equal(validApproval.meta.$statusCode,302);
+ assert.equal(validApproval.meta.$location,accepted.redirect);
+
  await rejected(context('Bearer invalid',cookie));
 
  // A correctly signed bearer or HMAC cookie is NOT proof of an active
@@ -178,6 +223,6 @@ async function main(){
    'Refused/tombstoned account must never receive a session cookie');
  }
 
- console.log('PASS: OAuth verified bearer and registered HMAC session require current non-tombstoned owner; signed JWT forged, stale, unsigned and malformed denied; verified email login resolves the authenticated account only');
+ console.log('PASS: verified bearer signature isolation, cookie password-version and owner tombstone, browser-only public grant approvals, no stale RS256 consent replay, verified email login');
 }
 main().catch(e=>{console.error(e?.stack||e);process.exitCode=1});

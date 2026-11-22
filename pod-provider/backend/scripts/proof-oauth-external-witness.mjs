@@ -12,6 +12,8 @@ import pg from 'pg';
 import Redis from 'ioredis';
 import {generateKeyPair,exportJWK} from 'jose';
 import {createRequire} from 'node:module';
+import {createDisposableWormEpochAttestor} from
+ '../candidates/oauth-worm-epoch-attestor.mjs';
 const require=createRequire(import.meta.url);
 const oauthToken=require('../services/oauth/oauth-token.service.js');
 const {createDisposableOauthWitnessReader}=require('../candidates/oauth-external-witness-reader.js');
@@ -308,18 +310,32 @@ async function mainTest(){
     'An unsealed witness must block real signed JWT issuance');
   const digest1=await receipt(attestor,op1,1);
   assert.ok(Buffer.isBuffer(digest1)&&digest1.length===32);
-  // WORM readback is test-double logic: immutable and append-only in-process,
-  // not a real R2/MinIO bucket. Production must use externally locked receipt.
+  // DISPOSABLE storage substitute: only this test owns the in-memory map.
+  // The actual candidate enforces independent lock verification, create-only
+  // writes, uncached exact readback and a separate witness SQL attestor role.
+  // This does NOT imply an R2/MinIO bucket or a deployed lock exists.
   const immutable=new Map();
-  const objectKey=(rev)=>hash(owner+'\0'+clientId).toString('hex')+'/'+rev;
-  const putOnce=(key,value)=>{
-    if(immutable.has(key))throw Error('Simulated immutable receipt overwrite');
-    immutable.set(key,Buffer.from(value));
-  };
-  putOnce(objectKey(1),digest1);
-  assert.ok(immutable.get(objectKey(1)).equals(digest1));
+  const wormAttestor=createDisposableWormEpochAttestor({
+    fixtureOnly:true,
+    readUnsealed:async p=>{
+      assert.equal(p.owner,owner);assert.equal(p.clientId,clientId);
+      return receipt(attestor,p.operationId,p.revision);
+    },
+    putIfAbsent:async(key,bytes,condition)=>{
+      assert.equal(condition.ifNoneMatch,'*');
+      if(immutable.has(key))throw Error('Simulated immutable receipt overwrite');
+      immutable.set(key,Buffer.from(bytes));
+    },
+    getIndependent:async key=>immutable.get(key)??null,
+    verifyRetention:async()=>true, // disposable-only assumed lock predicate
+    seal:async p=>seal(attestor,p.operationId,p.revision,p.eventHash)
+  });
+  const attest=async(revision,operationId)=>wormAttestor.attestEpoch({
+    owner,clientId,revision:String(revision),operationId
+  });
   assert.equal(await seal(attestor,op1,1,hash('forged receipt')),false);
-  assert.equal(await seal(attestor,op1,1,digest1),true);
+  assert.equal(await attest(1,op1),true);
+  assert.equal(immutable.size,1);
   assert.equal(await admitted(reader,grant1,1),true);
   const firstJwt=await issueToken(grant1,'1');
   assert.equal((await introspect(firstJwt)).active,true);
@@ -609,9 +625,8 @@ async function mainTest(){
   assert.equal(await revokePg(grant1,1),'2');
   await redis.set(consentKey,JSON.stringify({owner,clientId,grantId:grant1,revoked:true}),'EX',180);
   const digest2=await receipt(attestor,revokeOp,2);
-  putOnce(objectKey(2),digest2);
-  assert.ok(immutable.get(objectKey(2)).equals(digest2));
-  assert.equal(await seal(attestor,revokeOp,2,digest2),true);
+  assert.equal(await attest(2,revokeOp),true);
+  assert.equal(immutable.size,2);
 
   // Model a logically restored pre-revocation PostgreSQL row. This is
   // NOT physical PITR: genuine restore, WAL/failover, and WORM readback
@@ -650,8 +665,8 @@ async function mainTest(){
     e=>e?.type==='INVALID_GRANT',
     'A real JWT signer must reject an unsealed new epoch');
   const digest3=await receipt(attestor,op3,3);
-  putOnce(objectKey(3),digest3);
-  assert.equal(await seal(attestor,op3,3,digest3),true);
+  assert.equal(await attest(3,op3),true);
+  assert.equal(immutable.size,3);
   assert.equal(await admitted(reader,grant2,3),true);
   const freshWrite=crypto.randomUUID();
   assert.equal(await reserve(writer,grant2,3,freshWrite),true);

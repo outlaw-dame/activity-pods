@@ -738,3 +738,41 @@ is **not** a failover/PITR activation barrier: a newly promoted but rewound
 primary can return true and still must be fenced by independently immutable
 high-water receipts and verified WAL recovery. No production activation;
 `release=CLOSED`.
+
+
+## Owner account liveness at OAuth authorization — runtime hardening
+
+The existing OAuth `/oauth/authorize` handler authenticates an
+HTTP bearer or signed browser cookie before issuing an authorization
+code. A cryptographically valid credential alone does not establish
+that the associated account has not subsequently been deleted.
+
+The SemApps upstream `auth.account.findByWebId` action queries the
+account record directly; unlike the generic `auth.account.find`
+action, it does **not** filter `deletedAt` tombstones. Paper therefore
+must query the authoritative account service on **every OAuth
+approval attempt** and compare the exact canonical HTTPS WebID,
+rejecting a missing, unavailable, mismatched or tombstoned account.
+A signed bearer or browser cookie cannot bypass this check. A failure
+to look up the account is **deny**, not permission to proceed with a
+cached owner identity.
+
+`/oauth/session/login` now uses the exact account returned by the
+upstream password verification action, rather than making a separate
+`findByUsername` query afterward. This removes a second lookup
+race, also preserving SemApps' documented ability to verify usernames
+or email addresses. A tombstoned or malformed verified account is
+refused before a session cookie is issued. The existing
+`proof-oauth-owner-bearer-signature.cjs` tests signed RSA and HMAC
+cookies, deleted/mismatched/absent account records, credential
+verification outages, email logins and invalid owner identities.
+
+**Still required for production:** live authoritative account
+suspension/disable policy and atomic ownership/consent proof, strong
+browser session invalidation on logout/password change, externally
+retained non-rewindable independent witness, real post-enrollment
+owner grant/revoke, hosted positive cross-protocol signup and
+independent security review. The browser session remains stateless
+HMAC with finite TTL; this patch does not claim server-side cookie
+revocation or fully released OAuth grant authority. Staging signup
+must stay CLOSED.

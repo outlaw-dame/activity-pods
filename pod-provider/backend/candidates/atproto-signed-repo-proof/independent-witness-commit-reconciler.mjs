@@ -230,7 +230,10 @@ export function createIndependentWitnessCommitReconciler({
     owner,clientId:witness.client_id,
     operationId,revision:String(witness.revision),
     did:row.did,commitCid:proposed,rev:row.rev,
-    rootCid:root,commitBytes:Buffer.from(commitBytes)
+    rootCid:root,commitBytes:Buffer.from(commitBytes),
+    previousHeadCid:expected,previousRootCid:row.previous_root_cid,
+    previousRev:row.previous_rev,
+    previousCommitBytes:Buffer.from(previousBytes)
    });
    await client.query('COMMIT');open=false;
   }catch(e){
@@ -238,20 +241,30 @@ export function createIndependentWitnessCommitReconciler({
    if(e?.code?.startsWith('WITNESS_RECONCILER_'))throw e;
    fail('WITNESS_RECONCILER_PRIMARY_UNAVAILABLE');
   }finally{if(client)client.release(discard)}
-  let pem,key;
   try{
-   pem=await resolveSigningKey(Object.freeze({
-    owner:proof.owner,did:proof.did,commitCid:proof.commitCid,
-    rev:proof.rev
-   }));
-   key=crypto.createPublicKey(pem);
-   if(key.asymmetricKeyType!=='ec'||
-      key.asymmetricKeyDetails?.namedCurve!=='secp256k1')
-    fail('WITNESS_RECONCILER_SIGNER_INVALID');
-   checkedCommit(proof.commitBytes,{
-    did:proof.did,headCid:proof.commitCid,rev:proof.rev,
-    rootCid:proof.rootCid,publicKey:key
-   });
+   // The signed ATProto v3 commit normally has prev:null. Verify BOTH
+   // witness-bound historical heads; a content hash alone does not prove
+   // the previous root was signed by the DID's then-authorized key.
+   // Resolve each revision separately so signing-key rotation is safe.
+   for(const head of [
+    {commitCid:proof.previousHeadCid,rootCid:proof.previousRootCid,
+     rev:proof.previousRev,bytes:proof.previousCommitBytes},
+    {commitCid:proof.commitCid,rootCid:proof.rootCid,
+     rev:proof.rev,bytes:proof.commitBytes}
+   ]){
+    const pem=await resolveSigningKey(Object.freeze({
+     owner:proof.owner,did:proof.did,
+     commitCid:head.commitCid,rev:head.rev
+    }));
+    const key=crypto.createPublicKey(pem);
+    if(key.asymmetricKeyType!=='ec'||
+       key.asymmetricKeyDetails?.namedCurve!=='secp256k1')
+     fail('WITNESS_RECONCILER_SIGNER_INVALID');
+    checkedCommit(head.bytes,{
+     did:proof.did,headCid:head.commitCid,rev:head.rev,
+     rootCid:head.rootCid,publicKey:key
+    });
+   }
   }catch{fail('WITNESS_RECONCILER_SIGNATURE_INVALID')}
   // Only the reconciler owns this callback/SQL LOGIN. Crucially the
   // signing worker may NEVER call it to guess its own COMMIT outcome.

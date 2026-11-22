@@ -267,3 +267,31 @@ real hosted OAuth gateway or a deployed PDS. Real WORM receipts for
 each witness epoch AND pending-intent mutation, independent witness
 PITR/failover reconciliation, operational abort proof and remote
 federation acceptance remain required for production.
+
+## v3 immutable proposed signed-head binding (NONACTIVATED)
+
+The v2 witness intent captured the expected **prior** signed head, but not
+the immutable **proposed** commit CID. That made a settlement claim for an
+unrelated signed commit too easy to confuse with the pending operation.
+The additive v3 migration `paper-oauth-external-restore-witness-v3-bound-commit-intents.sql`
+requires BOTH distinct, canonical CIDv1 DAG-CBOR commit CIDs in the
+separately maintained witness record. It fails closed when any existing
+intent would require an unsafe guess/backfill, removes the unsafe
+six-parameter writer reservation entry point, and replaces it with an
+exact seven-parameter reservation. The dedicated writer cannot supply
+an unchanged proposed head or bypass the sealed grant epoch. A separate
+reconciler can settle `committed` only for that recorded proposed CID;
+it cannot substitute a different, otherwise correctly formatted CID.
+Both expected/proposed CIDs and the hashed grant become readable only
+through the restricted intent read function for independent proof.
+
+The real reference-MST writer already calculates its prospective
+signature/CID *before* reserving the external witness intent. The v3
+disposable proof now stores that precise CID in the witness and confirms
+that primary-PG signed-mutation UUID, signed head and native outbox all
+match; replay, stale grants, unsealed writes, changed-head and foreign
+CID settlement reject. **Important:** Matching CIDs is necessary but
+not sufficient to prove a commit occurred; the independent
+signing-key/CAR/outbox reconciler, actual physical recovery barrier and
+external WORM receipts are still required. Only candidate migrations
+are supplied, not a production witness or a safe release.

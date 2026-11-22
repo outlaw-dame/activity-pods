@@ -152,6 +152,10 @@ async function mainTest(){
   await main.query(await sql('../sql/paper-atproto-canonical-authority-v5-oauth-current.sql'));
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v1.sql'));madeWitness=true;
   await root.query(await sql('../sql/paper-oauth-external-restore-witness-v2-writer-intents.sql'));
+  await root.query(await sql('../sql/paper-oauth-external-restore-witness-v3-bound-commit-intents.sql'));
+  assert.equal((await root.query(
+    "SELECT to_regprocedure('paper_oauth_restore_witness.reserve_signed_write(text,text,bytea,bigint,uuid,text)') AS old"
+  )).rows[0].old,null,'Legacy unbound writer function must no longer exist');
   // pg@9 no longer guarantees queued concurrent query() calls on one
   // connection; create each independently authenticated role serially.
   const issuer=await actor('issuer');
@@ -208,11 +212,13 @@ async function mainTest(){
   )).rows[0].rev);
   const genesisCid='bafyre'+'a'.repeat(53);
   const signedCid='bafyre'+'b'.repeat(53);
-  const reserve=async(db,grant,revision,operation,expectedHead=genesisCid)=>{
+  const reserve=async(db,grant,revision,operation,
+    expectedHead=genesisCid,proposedHead=signedCid)=>{
     const r=await db.query(
       'SELECT paper_oauth_restore_witness.reserve_signed_write('+
-      '$1,$2,$3,$4::bigint,$5::uuid,$6) AS ok',
-      [owner,clientId,hash(grant),revision,operation,expectedHead]);
+      '$1,$2,$3,$4::bigint,$5::uuid,$6,$7) AS ok',
+      [owner,clientId,hash(grant),revision,operation,
+        expectedHead,proposedHead]);
     return r.rows[0].ok===true;
   };
   const resolve=async(operation,revision,state,head)=>{
@@ -328,7 +334,14 @@ async function mainTest(){
   // still materialize a signed repo mutation after that ACK.
   const writeOp=crypto.randomUUID();
   assert.equal(await reserve(writer,grant1,1,writeOp),true);
-  assert.equal((await readIntent(writeOp)).state,'pending');
+  const initialIntent=await readIntent(writeOp);
+  assert.equal(initialIntent.state,'pending');
+  assert.equal(initialIntent.expected_head_cid,genesisCid);
+  assert.equal(initialIntent.proposed_head_cid,signedCid);
+  assert.ok(Buffer.from(initialIntent.grant_sha256).equals(hash(grant1)));
+  assert.equal(await reserve(writer,grant1,1,crypto.randomUUID(),
+      genesisCid,genesisCid),false,
+    'A signer cannot reserve an unchanged signed head');
   assert.equal(await reserve(writer,grant1,1,writeOp),false,
     'A replay must not allocate a second signing operation');
   assert.equal(await reserve(writer,grant2,1,crypto.randomUUID()),false,
@@ -343,6 +356,9 @@ async function mainTest(){
     'Failed revocation leaves previous witness generation unchanged');
   assert.equal(await resolve(writeOp,1,'committed',genesisCid),false,
     'Reconciler cannot attest a write without a changed signed head');
+  assert.equal(await resolve(writeOp,1,'committed','bafyre'+'c'.repeat(53)),false,
+    'An unrelated valid-looking CID cannot settle another signed operation');
+  assert.equal((await readIntent(writeOp)).state,'pending');
   assert.equal(await resolve(writeOp,1,'committed',signedCid),true);
   assert.equal((await readIntent(writeOp)).state,'committed');
   assert.equal(await resolve(writeOp,1,'aborted',null),false,
@@ -420,7 +436,7 @@ async function mainTest(){
         assert.equal(scope.expectedCommitCid,genesis.commitCid);
         assert.match(scope.proposedCommitCid,/^bafyre[a-z2-7]{53}$/u);
         const ok=await reserve(writer,grant1,1,scope.operationId,
-          scope.expectedCommitCid);
+          scope.expectedCommitCid,scope.proposedCommitCid);
         if(ok)witnessed.push(scope);
         return ok;
       }
@@ -458,7 +474,10 @@ async function mainTest(){
     assert.notEqual(signed.commitCid,genesis.commitCid);
     assert.equal(witnessed.length,2);
     const op=witnessed[1].operationId;
-    assert.equal((await readIntent(op)).state,'pending');
+    const actualIntent=await readIntent(op);
+    assert.equal(actualIntent.state,'pending');
+    assert.equal(actualIntent.expected_head_cid,genesis.commitCid);
+    assert.equal(actualIntent.proposed_head_cid,signed.commitCid);
     const audit=await repoPool.query(
       'SELECT witness_operation_id::text AS op FROM '+
       'paper_atproto_repo_proof.record_mutations '+
@@ -482,6 +501,9 @@ async function mainTest(){
       'UPDATE paper_atproto_repo_proof.record_mutations '+
       'SET witness_operation_id=NULL WHERE did=$1 AND commit_cid=$2',
       [did,signed.commitCid]),e=>e?.code==='P0001');
+    assert.equal(await resolve(op,1,'committed',genesis.commitCid),false);
+    assert.equal(await resolve(op,1,'committed',signedCid),false,
+      'Reference-MST operation cannot be settled using a foreign signed CID');
     assert.equal(await resolve(op,1,'committed',signed.commitCid),true);
     assert.equal((await readIntent(op)).state,'committed');
     console.log('PASS: real signed reference MST, atomic canonical PG witness UUID/outbox and independent PG18 revoke barrier until verified signed head settlement');

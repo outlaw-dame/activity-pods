@@ -34,6 +34,10 @@ async function main(){
      env.PAPER_WORM_PROVIDER_PROFILE===env.PAPER_WORM_READER_PROFILE||
      !/^[a-z0-9-]{2,25}$/u.test(env.PAPER_WORM_REGION)||
      env.AWS_ENDPOINT_URL||env.AWS_ENDPOINT_URL_S3||
+     env.AWS_ENDPOINT_URL_STS||env.AWS_CA_BUNDLE||
+     env.NODE_EXTRA_CA_CERTS||env.NODE_TLS_REJECT_UNAUTHORIZED==='0'||
+     env.PAPER_WORM_REGION.startsWith('cn-')||
+     env.PAPER_WORM_REGION.startsWith('us-gov-')||
      env.PAPER_WORM_ENDPOINT||env.NODE_ENV==='test')
     invalid();
 
@@ -61,17 +65,22 @@ async function main(){
   const readerCredentials=providers.fromIni({
     profile:env.PAPER_WORM_READER_PROFILE
   });
+  // Explicit AWS commercial regional TLS endpoints. The SDK can otherwise
+  // honor environment/profile endpoint overrides and make a fake AWS service
+  // look like an independent custody attestation. No custom CA or endpoint.
+  const regionalSts='https://sts.'+env.PAPER_WORM_REGION+'.amazonaws.com';
+  const regionalS3='https://s3.'+env.PAPER_WORM_REGION+'.amazonaws.com';
   const writerSts=new sts.STSClient({
-    region:env.PAPER_WORM_REGION,credentials:providerCredentials,
-    maxAttempts:1
+    region:env.PAPER_WORM_REGION,endpoint:regionalSts,
+    credentials:providerCredentials,maxAttempts:1
   });
   const readerSts=new sts.STSClient({
-    region:env.PAPER_WORM_REGION,credentials:readerCredentials,
-    maxAttempts:1
+    region:env.PAPER_WORM_REGION,endpoint:regionalSts,
+    credentials:readerCredentials,maxAttempts:1
   });
   const readerS3=new s3.S3Client({
-    region:env.PAPER_WORM_REGION,credentials:readerCredentials,
-    maxAttempts:1,forcePathStyle:false
+    region:env.PAPER_WORM_REGION,endpoint:regionalS3,
+    credentials:readerCredentials,maxAttempts:1,forcePathStyle:false
   });
   const commands={...s3,...sts};
   try {

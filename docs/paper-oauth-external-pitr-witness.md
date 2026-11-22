@@ -334,3 +334,64 @@ strict runtime wiring/credential separation. The canonical primary
 DB can itself be rewound; positive historical verification must be
 backed by independently immutable high-water evidence before
 production release.
+
+
+## Immutable epoch receipt readback attestor — NONACTIVATED transport candidate
+
+The additive `pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs`
+proves an **exact-byte write-once/readback/seal order**, without creating a
+second identity authority or adding a production service. The restricted
+witness attestor first calls `get_unsealed_receipt` for the exact
+(owner WebID, client ID, revision, random operation UUID). It never accepts
+the proposed event SHA-256 from an HTTP client. The receipt body is bounded,
+deterministic and contains only a version, SHA-256 subject pseudonym,
+revision, operation UUID and witness event digest. Neither the owner WebID
+nor OAuth client ID is written into the object key or body.
+
+The private, explicitly `fixtureOnly` adapter must:
+1. Prove the immutable-retention policy covers the **exact object key**
+   using an independent policy reader before PUT. Ordinary object existence,
+   S3 ETags and a PUT success response are not retention proof.
+2. Attempt a create-only PUT with `If-None-Match: *`; a lost ACK is
+   ambiguous and **not** evidence of absence. The storage writer may not
+   mutate/delete old receipts or change retention rules.
+3. Perform a separate, uncached, independently authenticated GET and
+   constant-time compare the entire receipt body. A failed PUT is
+   acceptable *only* when that GET independently proves the exact
+   pre-existing immutable receipt. Missing, corrupt and inaccessible
+   readback rejects without sealing.
+4. Recheck lock coverage immediately before calling the **distinct**
+   restricted witness `seal` SQL function. Failure, missing permissions,
+   policy downgrade, stale/current-event mismatch or unavailable storage
+   leave the epoch unsealed. There is no permissive fallback or
+   post-failure optimistic retry.
+
+Cloudflare R2 documents atomic `If-None-Match: *` on PutObject:
+https://developers.cloudflare.com/r2/api/s3/conditional-operations/
+and prefix/bucket retention locks:
+https://developers.cloudflare.com/r2/buckets/bucket-locks/
+Unlike self-enforcing S3 Object Lock compliance mode, R2 bucket-lock
+rules **can be removed by a sufficiently privileged lock administrator**.
+Therefore the lock-configuration principal must be independently
+administered and unavailable to the provider, S3 writer, OAuth issuer,
+reconciler, attestor, witness DB operator and database backup operator.
+Independent policy readback cannot compensate for a shared
+administrator who can subsequently remove the lock.
+
+The two-PG18+Redis8.2 witness fixture now calls this actual attestor
+candidate before its SQL `seal` transitions. The companion standard
+Node test verifies absent/corrupt/partitioned independent readback,
+failed policy checks before and after PUT, overwritten-object rejection,
+lost PUT acknowledgement, malformed identities and denied SQL seals.
+**Both exercises use an in-memory write-once map and a disposable
+assumed-retention callback**, never a live locked R2/S3 resource.
+Production wiring remains deliberately impossible unless the gate is
+redesigned and independently security-reviewed.
+
+**Unresolved P0:** external bucket creation and independently verified
+IAM/lock configuration, physical **primary plus witness** PostgreSQL PITR
+and WAL restore barriers, cross-object recovery high-water enumeration
+and verified event/intent chain replay, immutable receipt coverage for
+pending/resolved signed-write intents, hosted owner consent and full
+cross-protocol positive account signup. The module does not and cannot
+authorize `release=OPEN`.

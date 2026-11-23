@@ -27,7 +27,8 @@ const commands=Object.fromEntries(types.map(n=>[n,class {
 }]));
 const endpointFor={
  'backblaze-b2':'https://s3.us-west-004.backblazeb2.com/',
- 'storj':'https://gateway.storjshare.io/'
+ 'storj':'https://gateway.storjshare.io/',
+ 'custom-s3':'https://objects.vendor-domain.com/'
 };
 const base=()=>({
   version:{Status:'Enabled'},
@@ -58,7 +59,10 @@ function createMock(provider,mutate=()=>{}){
     return dict[cmd.kind];
   }};
   return {
-    opts:{provider,endpoint:endpointFor[provider],reader,commands,
+    opts:{provider,endpoint:endpointFor[provider],
+      ...(provider==='custom-s3'?
+        {approvedEndpoint:endpointFor[provider]}:{}),
+      reader,commands,
       bucket:'custody-proof-bucket',sample,clock:()=>now},
     calls
   };
@@ -89,6 +93,54 @@ test('B2 and Storj demand explicit versioned COMPLIANCE proof and never authoriz
     assert.equal(cfg.receiptVerified,false);
     assert.equal(cfg.releaseAccepted,false);
   }
+});
+test('any independently pinned S3 origin can be READ-ONLY qualified by capabilities',async()=>{
+  const {opts,calls}=createMock('custom-s3');
+  const proof=await inspectPortableS3ObjectLock(opts);
+  assert.equal(proof.provider,'custom-s3');
+  assert.equal(proof.configurationObserved,true);
+  assert.equal(proof.receiptVerified,true);
+  assert.equal(proof.releaseAccepted,false);
+  assert.equal(proof.operatorIndependenceVerified,false);
+  assert.equal(proof.conditionalCreateOnlyVerified,false);
+  assert.equal(proof.latestHeadVerified,false);
+  assert.ok(calls.every(x=>x.args.Bucket==='custody-proof-bucket'));
+  assert.deepEqual(validatePortableS3Endpoint('custom-s3',
+    endpointFor['custom-s3'],endpointFor['custom-s3']),
+    {provider:'custom-s3',endpoint:endpointFor['custom-s3']});
+  for(const candidate of [
+    undefined,null,'https://other.vendor-domain.com/',
+    'http://objects.vendor-domain.com/'
+  ]){
+    await refuses(()=>inspectPortableS3ObjectLock({
+      ...opts,approvedEndpoint:candidate
+    }),'PORTABLE_WORM_ENDPOINT_NOT_PINNED');
+  }
+  for(const candidate of [
+    'https://127.0.0.1/','https://[::1]/',
+    'https://s3.local/','https://vault.internal/',
+    'https://metadata.google.internal/',
+    'https://test.invalid/','https://storage.example/',
+    'https://user:pass@objects.vendor-domain.com/',
+    'http://objects.vendor-domain.com/',
+    'https://objects.vendor-domain.com:443/',
+    'https://objects.vendor-domain.com/bucket',
+    'https://objects.vendor-domain.com/?token=secret',
+    'https://objects.vendor-domain.com.evil.test/'
+  ]){
+    await refuses(()=>inspectPortableS3ObjectLock({
+      ...opts,endpoint:candidate,approvedEndpoint:candidate
+    }),'PORTABLE_WORM_ENDPOINT_UNSAFE');
+  }
+  await refuses(()=>inspectPortableS3ObjectLock(createMock('custom-s3',
+    v=>{v.config.ObjectLockConfiguration.Rule.DefaultRetention.Mode='GOVERNANCE';}).opts),
+    'PORTABLE_WORM_BUCKET_NOT_COMPLIANT');
+  await refuses(()=>inspectPortableS3ObjectLock(createMock('custom-s3',
+    v=>{v.version.Status='Suspended';}).opts),
+    'PORTABLE_WORM_BUCKET_NOT_COMPLIANT');
+  await refuses(()=>inspectPortableS3ObjectLock(createMock('custom-s3',
+    v=>{v.history.DeleteMarkers=[{Key:key,VersionId:'deleted'}];}).opts),
+    'PORTABLE_WORM_VERSION_HISTORY_UNSAFE');
 });
 test('Filebase and arbitrary endpoints are NEVER accepted for WORM',async()=>{
   const {opts}=createMock('storj');

@@ -90,7 +90,7 @@ function createDisposableCredentialHeadHttpsTransport({
         const request=https.request({
           protocol:'https:',hostname:u.hostname,port:u.port||443,
           path:ENDPOINT_PATH,method:'POST',rejectUnauthorized:true,
-          signal:challenge.signal,
+          agent:false,signal:challenge.signal,
           headers:{
             'Content-Type':'application/json',
             'Accept':'application/json',

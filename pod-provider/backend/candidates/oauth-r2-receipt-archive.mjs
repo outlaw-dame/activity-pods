@@ -111,6 +111,51 @@ export function createR2ReceiptArchive({
   return Object.freeze({key,sha256:sha(actual),
    independentlyImmutable:false,releaseAccepted:false});
  }
+ async function readCertifiedLatestEpoch({owner,clientId,authority}={}){
+  // No externally trusted *latest* proof => NO authorization. The
+  // caller cannot pass a certificate directly: authority must acquire
+  // it from a separately operated source using a pinned signer.
+  if(typeof authority?.readVerified!=='function'||
+     typeof owner!=='string'||typeof clientId!=='string')
+   deny('R2_CERT_AUTHORITY_REQUIRED');
+  // Do not weaken the identity parser to a mere https:// string prefix.
+  const valid=(value)=>{
+   if(value.length<8||value.length>2048)return false;
+   try{
+    const u=new URL(value);
+    return u.protocol==='https:'&&!!u.hostname&&!u.username&&
+     !u.password&&!u.search&&!u.hash&&u.href===value;
+   }catch{return false}
+  };
+  if(!valid(owner)||!valid(clientId))deny('R2_HIGHWATER_SCOPE_INVALID');
+  const subject=sha(Buffer.from('paper:witness:subject:v1\\0'+owner+'\\0'+clientId));
+  const first=await authority.readVerified(Object.freeze({owner,clientId}));
+  if(first?.subject!==subject||
+     typeof first.revision!=='string'||
+     !/^[1-9][0-9]{0,18}$/u.test(first.revision)||
+     BigInt(first.revision)>9223372036854775807n||
+     !/^[a-f0-9]{64}$/u.test(first.sha256||''))
+   deny('R2_CERT_SCOPE_INVALID');
+  const key=PREFIX+'epochs/v1/'+subject+'/'+first.revision.padStart(19,'0');
+  await locked();
+  const bytes=await readExact(key);
+  const data=JSON.parse(bytes.toString('utf8'));
+  if(data.subject!==subject||data.revision!==first.revision||
+     sha(bytes)!==first.sha256)
+   deny('R2_CERT_RECEIPT_MISMATCH');
+  await locked();
+  // A revocation that advances while R2 is read must never authorize
+  // the previous generation. Compare exact signed authority heads.
+  const second=await authority.readVerified(Object.freeze({owner,clientId}));
+  if(second?.subject!==first.subject||
+     second.revision!==first.revision||
+     second.sha256!==first.sha256||
+     second.authority!==first.authority)
+   deny('R2_CERT_CONCURRENT_ADVANCE');
+  // O(1) exact-key R2 reads, vs O(all epochs) fixture enumeration.
+  // Historical continuity belongs to a separate offline proof/audit.
+  return Buffer.from(bytes);
+ }
  async function readLatestEpoch({owner,clientId,checkpoint}={}){
   // This is an externally supplied checkpoint REQUIREMENT, not proof
   // of the checkpoint's provenance. Callers must independently certify it.
@@ -169,6 +214,6 @@ export function createR2ReceiptArchive({
   }
   deny('R2_HIGHWATER_GAP_OR_CAPACITY');
  }
- return Object.freeze({putAndVerify:write,readLatestEpoch,
+ return Object.freeze({putAndVerify:write,readLatestEpoch,readCertifiedLatestEpoch,
   independentlyImmutable:false,releaseAccepted:false});
 }

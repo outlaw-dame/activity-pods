@@ -16,6 +16,9 @@ on:
       - 'pod-provider/backend/candidates/oauth-portable-s3-custody-readonly.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs'
+      - 'pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs'
+      - 'pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs'
       - 'docs/paper-s3-archive-provider-qualification.md'
   workflow_dispatch:
 
@@ -60,8 +63,12 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-portable-s3-custody-readonly.mjs
           node --check pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
           node --check pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs
+          node --check pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs
+          node --check pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs
+          node pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
-          if grep -R -nE 'oauth-portable-s3-custody-readonly|probe-oauth-portable-s3-custody' pod-provider/backend/services; then
+          if grep -R -nE 'oauth-portable-s3-(custody-readonly|writeonce-probe)|probe-oauth-portable-s3-(custody|writeonce)' pod-provider/backend/services; then
             echo '::error::Do not wire unapproved portable S3 evidence into production'
             exit 1
           fi
@@ -148,3 +155,17 @@ jobs:
           fi
           grep -qx 'REFUSED: PORTABLE_WORM_ENDPOINT_NOT_PINNED' /tmp/portable-worm-unpinned.log
           rm -f /tmp/portable-worm-unpinned.log
+          if env PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=disposable-write-approved \
+            PAPER_PORTABLE_WORM_WRITE_DISPOSABLE=confirmed \
+            PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
+            PAPER_PORTABLE_WORM_PROVIDER=storj \
+            PAPER_PORTABLE_WORM_ENDPOINT=https://gateway.storjshare.io/ \
+            PAPER_PORTABLE_WORM_READER_PROFILE=not-real-read \
+            PAPER_PORTABLE_WORM_WRITER_PROFILE=not-real-write \
+            PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable-qafixture \
+            node pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs > /tmp/portable-worm-write-unsafe.log 2>&1; then
+            echo '::error::Missing irreversible-bucket acknowledgement admitted'
+            exit 1
+          fi
+          grep -qx 'REFUSED: PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE' /tmp/portable-worm-write-unsafe.log
+          rm -f /tmp/portable-worm-write-unsafe.log

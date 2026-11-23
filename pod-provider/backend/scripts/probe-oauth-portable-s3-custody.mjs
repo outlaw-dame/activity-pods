@@ -28,8 +28,14 @@ async function main(){
      env.AWS_CA_BUNDLE||env.NODE_EXTRA_CA_CERTS||
      env.NODE_TLS_REJECT_UNAUTHORIZED==='0')
     refuse();
+  const custom=env.PAPER_PORTABLE_WORM_PROVIDER==='custom-s3';
+  const approvedEndpoint=custom?env.PAPER_PORTABLE_WORM_APPROVED_ENDPOINT:null;
   validatePortableS3Endpoint(env.PAPER_PORTABLE_WORM_PROVIDER,
-    env.PAPER_PORTABLE_WORM_ENDPOINT);
+    env.PAPER_PORTABLE_WORM_ENDPOINT,approvedEndpoint);
+  const addressing=env.PAPER_PORTABLE_WORM_URL_STYLE||'path';
+  if(!['path','virtual-host'].includes(addressing))refuse();
+  if(custom&&!/^[a-z0-9-]{2,32}$/u.test(env.PAPER_PORTABLE_WORM_REGION||''))
+    refuse();
   const phase=env.PAPER_PORTABLE_WORM_PHASE;
   if(phase!=='preflight'&&phase!=='receipt')refuse();
   const fields=['PAPER_PORTABLE_WORM_RECEIPT_KEY',
@@ -49,19 +55,21 @@ async function main(){
     providers=require(dependencies[1]);
   }catch{refuse()}
   const host=new URL(env.PAPER_PORTABLE_WORM_ENDPOINT).hostname;
-  const region=env.PAPER_PORTABLE_WORM_PROVIDER==='storj'?
-    'us-east-1':host.split('.')[1];
+  const region=custom?env.PAPER_PORTABLE_WORM_REGION:
+    env.PAPER_PORTABLE_WORM_PROVIDER==='storj'?
+      'us-east-1':host.split('.')[1];
   // Explicit HTTPS origin, no implicit endpoint discovery and no SDK retry
   // on ambiguous provider errors.
   const client=new s3.S3Client({
     endpoint:env.PAPER_PORTABLE_WORM_ENDPOINT,
-    region,forcePathStyle:true,maxAttempts:1,
+    region,forcePathStyle:addressing==='path',maxAttempts:1,
     credentials:providers.fromIni({profile:env.PAPER_PORTABLE_WORM_READER_PROFILE})
   });
   try{
     const result=await inspectPortableS3ObjectLock({
       provider:env.PAPER_PORTABLE_WORM_PROVIDER,
       endpoint:env.PAPER_PORTABLE_WORM_ENDPOINT,
+      approvedEndpoint,
       reader:client,commands:s3,
       bucket:env.PAPER_PORTABLE_WORM_BUCKET,
       sample:phase==='receipt'?{

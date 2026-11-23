@@ -350,8 +350,13 @@ The v3 candidate is now hardened as follows:
 - For any tracked unified account, the record primary-key UUID,
   username, WebID, and signup reservation marker are immutable,
   alongside previously protected recovery email, reset token,
-  password hash, and tombstone. The trigger now observes all UPDATE
-  operations, including updates to columns other than JSONB data.
+  password hash, and tombstone. **The only WebID exception** is the
+  initial SemApps `attachWebId` from a claimed account with no previous
+  WebID and no canonical row, to the exact already-reserved
+  username-derived HTTPS identity; any forgery or subsequent change
+  is denied. The real SemApps integration test caught this necessary
+  signup transition before merge. The trigger observes all UPDATE
+  operations, including columns other than JSONB data.
 - Untracked legacy accounts retain previous password, email,
   reset-token, preference and deletion behavior.
 - A real PostgreSQL18 regression *deliberately simulates* an inconsistent

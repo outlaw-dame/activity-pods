@@ -161,3 +161,38 @@ It does **not** perform a positive owner-approved password reset,
 simulate approval by an external independently operated credential
 head, activate the SQL in a live service, or open new signup.
 `release=CLOSED`.
+
+## Close generic account write and direct creation bypasses in production
+
+The pinned SemApps auth.account service inherits insert, update and
+remove Moleculer DB actions with generic id/data arguments. The
+upstream account schema also exposes create and attachWebId as
+independently callable broker actions. These are NOT the authenticated
+Paper enrollment-completion route. A caller reaching these entrypoints
+could sidestep the production auth.signup fuse, mutate account records
+or bypass the six explicit password/reset/tombstone holding fences.
+
+In production, the always-registered AccountEnrollmentMiddleware
+refuses all five unscoped action names before the underlying handler.
+Production mode is captured when the middleware is constructed.
+Changing process environment afterward or spoofing broker metadata,
+an admin flag, a WebID or a reservation marker cannot re-enable them.
+Future positive signup must use a reviewed canonical coordinator,
+not simply remove this check or flip a deployment flag.
+
+Existing legacy owner operations with their own service logic,
+including updateAccountSettings and setPassword, remain callable
+for unmarked accounts. The explicit six upstream mutation routes
+continue performing fresh enrollment checks for tracked accounts.
+
+The production-mode regression uses an isolated real Moleculer broker
+with no live accounts or credentials and proves all five generic/direct
+actions never run despite forged privileged metadata. It additionally
+checks runtime environment mutation cannot reopen the closed actions,
+while approved legacy settings/password actions still work.
+
+Scope: this guard controls public broker action entrypoints, NOT
+internal service _update operations or raw adapters. Durable PG v3
+native credential SQL, nonrewindable independent checkpoint custody,
+real owner-authorized reset and hosted cross-protocol positive signup
+are still required. Production signup and release remain CLOSED.

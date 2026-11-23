@@ -6,6 +6,15 @@ const { Errors: { MoleculerError } } = require('moleculer');
 // plaintext password/reset/tombstone actions. These mutate the underlying
 // account outside Paper's independently attested pending-epoch coordinator.
 // Existing legacy accounts are unaffected by this holding fence.
+// Inherited moleculer-db insert/update/remove are unscoped. Direct
+// SemApps create/attachWebId also bypass the production signup fuse if
+// invoked outside auth.signup. Until the authenticated PostgreSQL owner
+// coordinator is activated, none is a valid production write surface.
+const UNSCOPED_IDENTITY_WRITES = new Set([
+  'auth.account.insert', 'auth.account.update', 'auth.account.remove',
+  'auth.account.create', 'auth.account.attachWebId'
+]);
+
 const ENROLLED_MUTATIONS = new Set([
   'auth.account.setPassword',
   'auth.account.setNewPassword',
@@ -58,9 +67,20 @@ async function assertOwnerAccess(broker, account) {
 }
 
 module.exports = function AccountEnrollmentMiddleware() {
+  // Capture the production boundary once at construction. Never let
+  // runtime environment mutation, broker-call metadata or action params
+  // reopen an inherited generic database write route.
+  const closedUnscopedIdentityWrites = process.env.NODE_ENV === 'production';
   return {
     name: 'AccountEnrollment',
     localAction(next, action) {
+      if (closedUnscopedIdentityWrites && UNSCOPED_IDENTITY_WRITES.has(action.name)) {
+        return async function denyUnscopedIdentityWrite() {
+          throw new MoleculerError('Unscoped account identity mutation is unavailable',
+            403, 'ACCOUNT_UNSCOPED_IDENTITY_WRITE_DENIED',
+            { retryable: false });
+        };
+      }
       if (ENROLLED_MUTATIONS.has(action.name)) {
         return async function fencedMutation(ctx) {
           await assertNoEnrolledMutation(ctx, action.name);

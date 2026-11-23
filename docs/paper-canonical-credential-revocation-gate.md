@@ -147,3 +147,40 @@ schema writes, function privilege separation, pending/failure refusal,
 replay/re-enrollment denial, and terminal disabled state. It MUST stay
 nonactivated until the full owner-verified credential mutation service,
 distributed read path, independent live custody and recovery tests exist.
+
+## Challenge-bound independent latest credential head (NONACTIVATED)
+
+The v2 candidate strengthens the previous PG18 restricted role proof without
+claiming to close the production custody or native-authorization release gate.
+
+- `candidates/credential-signed-latest-head.js` generates 256-bit random
+  per-read nonces and requires an Ed25519-signed, domain-separated canonical
+  `paper.credential.head.v1` response containing the exact owner hash,
+  owner epoch, active/pending/disabled state, mutation receipt digest, nonce,
+  trusted authority identifier, and bounded issue time. The pinned public key
+  and trusted authority are constructor-only, not HTTP request parameters.
+  A previously valid signed response cannot satisfy a new random challenge.
+- `sql/paper-credential-epoch-authority-v2-certified-head.sql` grants the
+  narrowly privileged reader a function returning the credential state and
+  committed mutation digest. General application SQL cannot read or change
+  the protected table through this function.
+- `candidates/credential-pg-certified-reader.js` verifies a physically
+  restricted PostgreSQL18 LOGIN on every call, obtains a fresh independently
+  signed head before **and after** its current PG state read, rejects
+  mismatches, missing owners, pending/disabled reuse, forged signatures,
+  stale replayed responses, and rollback. No positive cache or Redis fallback.
+- `scripts/proof-paper-credential-certified-pg18.cjs` and the dedicated
+  PostgreSQL18 CI workflow cover these invariants against a *real* restricted
+  PG login, signed challenge issuer simulation, concurrent advances, and a
+  deliberately rewound owner row.
+
+**Critical security limit:** A nonce proves freshness of the *signature
+response*, not the freshness of the signer's own database. The signer must
+run outside the Paper deployment/account/control plane, maintain a
+nonrewindable latest-head register, and refuse any rollback or signing of an
+old epoch. The private Ed25519 signing key must remain solely with its
+independent custodian. This disposable proof does not administer the signer,
+create independently immutable archive storage, execute physical multi-store
+PITR, cover real owner-authenticated SemApps mutation pathways, or give
+production admission. No production middleware import or service activation
+is permitted. The source-controlled signup fuse remains CLOSED.

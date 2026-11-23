@@ -36,7 +36,8 @@ async function main(){
       '11111111-1111-4111-8111-111111111111',JSON.stringify({
         username:'claimtest-12345678',webId:owner,
         signupReservationId:'22222222-2222-4222-8222-222222222222',
-        hashedPassword:old,preferredLocale:'en'
+        hashedPassword:old,preferredLocale:'en',
+        email:'tracked@example.test',resetPasswordToken:'prior-reset-capability'
       })
     ]);
     assert.equal((await q(admin,"SELECT paper_credential_epoch.enroll_owner($1) AS ok",[owner])).rows[0].ok,true);
@@ -52,10 +53,31 @@ async function main(){
       await q(admin,"GRANT "+member+" TO "+role+" WITH INHERIT TRUE, SET FALSE, ADMIN FALSE");
     }
     const [runtime,writer,attestor,sealer,coord]=identities.map(x=>login(...x));
+    // Legacy users lack an irreversible unified-owner classification.
+    // The new native trigger must not break their existing account flows.
+    const legacy='https://paper.example.org/legacy-owner';
+    await q(admin,"INSERT INTO paper_private_auth.accounts(id,data) VALUES($1,$2::jsonb)",[
+      '33333333-3333-4333-8333-333333333333',
+      JSON.stringify({username:'legacy-owner',webId:legacy,
+        hashedPassword:old,email:'legacy@example.test'})
+    ]);
+    await q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(jsonb_set(jsonb_set(data,'{hashedPassword}',to_jsonb($2::text)),'{resetPasswordToken}',to_jsonb($3::text)),'{email}',to_jsonb($4::text)) WHERE data->>'webId'=$1",
+      [legacy,next,'legacy-reset','legacy-updated@example.test']);
+    const legacyRow=(await q(admin,"SELECT data FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[legacy])).rows[0]?.data;
+    assert.equal(legacyRow.hashedPassword,next);
+    assert.equal(legacyRow.resetPasswordToken,'legacy-reset');
+    assert.equal(legacyRow.email,'legacy-updated@example.test');
+    await q(runtime,"DELETE FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[legacy]);
+
     await q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{preferredLocale}',to_jsonb($2::text)) WHERE data->>'webId'=$1",[owner,'fr']);
     assert.equal((await q(admin,"SELECT data->>'preferredLocale' AS locale FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[owner])).rows[0].locale,'fr');
     await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{hashedPassword}',to_jsonb($2::text)) WHERE data->>'webId'=$1",[owner,next]),'direct bcrypt update');
     await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=data-'hashedPassword' WHERE data->>'webId'=$1",[owner]),'bcrypt removal');
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{resetPasswordToken}',to_jsonb($2::text)) WHERE data->>'webId'=$1",[owner,'attacker-token']),'reset-token issuance');
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=data-'resetPasswordToken' WHERE data->>'webId'=$1",[owner]),'uncoordinated token revocation');
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{email}',to_jsonb($2::text)) WHERE data->>'webId'=$1",[owner,'attacker@example.test']),'recovery-email substitution');
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{deletedAt}',to_jsonb($2::text)) WHERE data->>'webId'=$1",[owner,'2026-11-23T00:00:00Z']),'unapproved tombstone');
+
     await denied(()=>q(runtime,"DELETE FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[owner]),'unified owner delete');
     await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=data-'signupReservationId' WHERE data->>'webId'=$1",[owner]),'enrollment removal');
     await denied(()=>q(runtime,"SELECT paper_credential_epoch.begin_change($1,$2,1)",[owner,op]),'coordinator from account role');
@@ -90,6 +112,9 @@ async function main(){
     assert.equal(Buffer.isBuffer(receipt),true);
     assert.equal(receipt.length,32);
     assert.equal((await q(admin,"SELECT data->>'hashedPassword' AS hash FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[owner])).rows[0].hash,next);
+    assert.equal((await q(admin,"SELECT data ? 'resetPasswordToken' AS token FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[owner])).rows[0].token,false,
+      'committed native password change must revoke old reset tokens');
+
     assert.equal((await state()).state,'pending');
     const confirm=async(p,d)=>(await q(attestor,"SELECT paper_credential_epoch.confirm_native_write($1,$2,2,$3::bytea) AS ok",[owner,p,d])).rows[0].ok;
     assert.equal(await confirm(op,receipt),true);

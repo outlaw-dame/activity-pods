@@ -6,6 +6,13 @@ const { Errors: { MoleculerError } } = require('moleculer');
 // plaintext password/reset/tombstone actions. These mutate the underlying
 // account outside Paper's independently attested pending-epoch coordinator.
 // Existing legacy accounts are unaffected by this holding fence.
+// These are inherited from moleculer-db. They are *not* the reviewed
+// SemApps create/change/settings/delete actions: arbitrary generic inserts
+// and updates have no owner-scoped credential/consent authorization.
+const RAW_DB_WRITES = new Set([
+  'auth.account.insert', 'auth.account.update', 'auth.account.remove'
+]);
+
 const ENROLLED_MUTATIONS = new Set([
   'auth.account.setPassword',
   'auth.account.setNewPassword',
@@ -58,9 +65,20 @@ async function assertOwnerAccess(broker, account) {
 }
 
 module.exports = function AccountEnrollmentMiddleware() {
+  // Capture the production boundary once at construction. Never let
+  // runtime environment mutation, broker-call metadata or action params
+  // reopen an inherited generic database write route.
+  const closedRawAccountWrites = process.env.NODE_ENV === 'production';
   return {
     name: 'AccountEnrollment',
     localAction(next, action) {
+      if (closedRawAccountWrites && RAW_DB_WRITES.has(action.name)) {
+        return async function denyGenericAccountWrite() {
+          throw new MoleculerError('Unscoped raw account mutation is unavailable',
+            403, 'ACCOUNT_RAW_DATABASE_MUTATION_DENIED',
+            { retryable: false });
+        };
+      }
       if (ENROLLED_MUTATIONS.has(action.name)) {
         return async function fencedMutation(ctx) {
           await assertNoEnrolledMutation(ctx, action.name);

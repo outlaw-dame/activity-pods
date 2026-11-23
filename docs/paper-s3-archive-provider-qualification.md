@@ -1,6 +1,13 @@
-# Paper S3 archive qualification: Backblaze B2, Storj and Filebase
+# ActivityPods / federation-sidecar S3 archive capability qualification
 
-**2026-11-23 — NONACTIVATED. Production signup and staging release CLOSED.**
+**2026-11-23 — NONACTIVATED. Unified-account signup and staging release CLOSED.**
+
+Paper and Memory are application branding options. This is a canonical
+ActivityPods identity/authorization and sidecar integration gate; the
+storage contract must never depend on either product name or an AWS
+account ID. `paper/*` paths and prefixes below are existing source
+identifiers for fixtures and migration compatibility, not a mandate
+that the final application be named Paper.
 
 ## Protocol and custody comparison
 
@@ -11,6 +18,7 @@
 | Storj | Yes | Yes | Yes | Candidate; needs live create-only, access-grant and independent-head qualification |
 | Filebase | Yes (subset) | No equivalent documented | ListObjectVersions and PutBucketVersioning unsupported | Not suitable for immutable OAuth/credential latest-head authority; still suitable for ordinary media/IPFS |
 | Cloudflare R2 | Yes (subset) | Removable bucket locks, not AWS COMPLIANCE | Different model | Disposable integration fixture, not independent nonrewindable authority |
+| Other S3-compatible provider | Depends on verified implementation | Must actually enforce COMPLIANCE or a proven equivalent | Must verify immutable exact versions and history | Operator-pinned custom S3 endpoint may be inspected, but no acceptance without independently observed capabilities |
 
 Primary source documentation:
 - https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-s3-compatible-api
@@ -65,9 +73,21 @@ Source: pod-provider/backend/candidates/oauth-portable-s3-custody-readonly.mjs
 Test: pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
 Operator: pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs
 
-Only official HTTPS origins are allowed:
+Known providers use fixed official HTTPS origins:
 - Backblaze B2: https://s3.<region>.backblazeb2.com/
 - Storj: https://gateway.storjshare.io/
+
+**Any other S3-compatible implementation** may use the additional
+read-only `custom-s3` mode when an independent operator explicitly pins
+its **exact canonical HTTPS origin**. IP literals, local/internal/special
+test DNS suffixes, credentials, query parameters, paths, unexpected
+ports and mismatched operator pins are refused. The operator must still
+perform independent DNS/TLS, role, retention, write-once and recovery
+assessment; the pin alone is not a signed security approval.
+Generic S3 mode accepts a reviewed region and path/virtual-host
+addressing preference. Vendor-specific identity checks belong in a
+separate provider capability module rather than faking AWS STS
+and `ExpectedBucketOwner` on non-AWS services.
 
 The qualifier uses six real S3 command types: GetBucketVersioning,
 GetObjectLockConfiguration, ListObjectVersions, HeadObject,
@@ -84,7 +104,7 @@ operatorIndependenceVerified=false, latestHeadVerified=false and
 conditionalCreateOnlyVerified=false. Even a correct retained
 historical receipt cannot authorize a newly signed login or signup.
 
-## Connecting B2 or Storj to the deployed Paper backend
+## Connecting a qualifying S3 provider to the ActivityPods backend
 
 1. An independent operator provisions a private Object Lock bucket,
    turns on COMPLIANCE default retention, and creates an explicitly
@@ -98,9 +118,14 @@ historical receipt cannot authorize a newly signed login or signup.
    with restrictive OS permissions.
 3. Set PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=read-only-verified,
    PAPER_WORM_SDK_ROOT, PAPER_PORTABLE_WORM_READER_PROFILE,
-   PAPER_PORTABLE_WORM_PROVIDER (backblaze-b2 or storj),
+   PAPER_PORTABLE_WORM_PROVIDER (`backblaze-b2`, `storj` or `custom-s3`),
    PAPER_PORTABLE_WORM_ENDPOINT, PAPER_PORTABLE_WORM_BUCKET and
-   PAPER_PORTABLE_WORM_PHASE=preflight. Run the operator script
+   PAPER_PORTABLE_WORM_PHASE=preflight. For `custom-s3`, the operator
+   **must also set** PAPER_PORTABLE_WORM_APPROVED_ENDPOINT equal to
+   the canonical independently reviewed origin, and explicitly set
+   PAPER_PORTABLE_WORM_REGION. The optional
+   PAPER_PORTABLE_WORM_URL_STYLE is `path` (default) or
+   `virtual-host`. Run the operator script
    with Node 22+. It performs only configuration reads.
 4. To read an independently recorded historical receipt set
    PAPER_PORTABLE_WORM_PHASE=receipt together with
@@ -126,3 +151,28 @@ coordination, full PG/Jena/Redis/PDS recovery, hosted positive
 unified signup and independent human review.
 
 Do not enable production signup based on this read-only qualification.
+
+## Open-source and self-hosted S3 considerations (current sources)
+
+Avoid equating a project's S3 logo or API list with reliable WORM
+behavior. Open-source Garage does not yet support Object Lock or object
+versioning (https://github.com/deuxfleurs-org/garage/blob/main-v2/doc/book/reference-manual/s3-compatibility.md).
+SeaweedFS documents Object Lock and conditional PutObject, **but**
+upstream issues have reported COMPLIANCE-retention DELETE enforcement
+defects (https://github.com/seaweedfs/seaweedfs/issues/8350 and
+https://github.com/seaweedfs/seaweedfs/issues/11333). It is NOT
+qualified for this high-trust archive until the installed exact
+version passes independent hostile DELETE/retention tests.
+MinIO AIStor documents COMPLIANCE and conditional PutObject
+(https://docs.min.io/aistor/developers/s3-api-compatibility/ and
+https://docs.min.io/aistor/administration/object-locking-and-immutability/),
+but the original AGPL MinIO community edition is no longer maintained;
+the supported AIStor offering is commercial
+(https://www.min.io/pricing). This should be accounted for when
+weighing open-source maintenance and operating cost.
+
+The `custom-s3` mode is intentionally a **read-only capability probe**
+rather than a product certification. Real negative immutability and
+conditional-write races remain mandatory for *every* actual provider,
+and production keys/last-signed-head custody must be external to
+ActivityPods and the federation sidecar.

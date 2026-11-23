@@ -176,3 +176,60 @@ rather than a product certification. Real negative immutability and
 conditional-write races remain mandatory for *every* actual provider,
 and production keys/last-signed-head custody must be external to
 ActivityPods and the federation sidecar.
+
+## Provider-neutral create-only WORM receipt transport (NONACTIVATED)
+
+The identity authority and federation sidecar must not require an
+AWS-specific numeric account ID or AWS STS protocol for S3 *data*
+operations. The new candidate in
+`pod-provider/backend/candidates/oauth-portable-s3-receipt-writer.mjs`
+provides an S3-only conditional write with provider-neutral verified
+readback, using the same operator-pinned HTTPS origins and canonical
+receipt validator as the read-only qualifier.
+
+The transport has three deliberately separated guarantees:
+
+1. It requires distinct writer/reader SDK clients, **both with SDK
+   `maxAttempts=1`**, and observed bucket versioning plus default
+   COMPLIANCE retention before even attempting a PUT. No response,
+   credential or origin can override this gate. The caller supplies
+   only one exact canonical receipt key and bytes; the transport sets
+   `IfNoneMatch:'*'`, with no public ACL, TTL shortcut, or provider-
+   specific IAM parameters.
+2. After a PUT (including a timeout, HTTP 412 or lost acknowledgment),
+   it **never retries the mutation**. It asks the separate read
+   transport for all versions at that exact key, requiring exactly
+   one latest version and zero delete markers. It rejects extra
+   versions (a provider that ignored the precondition), changed
+   version IDs, conflicting bytes, unexpected object lengths or an
+   overwritten current object.
+3. It uses the already-existing provider-neutral six-command S3
+   verifier to recheck bucket COMPLIANCE, object-version retention,
+   the exact receipt bytes and SHA-256, and the current version after
+   readback. Returned evidence is permanently labelled
+   `conditionalCreateOnlyVerified:false`,
+   `operatorIndependenceVerified:false`,
+   `latestHeadVerified:false`,
+   `releaseAccepted:false`.
+
+The disposable regression covers first PUT, same-key exact retry
+reconciliation, conflicting old bytes, lost ACK before/after durable
+commit, ignored `IfNoneMatch` creating extra versions, unsafe bucket
+GOVERNANCE/disabled versioning, delete markers, corrupted bytes,
+stale PUT acknowledgment version, automatic SDK retry counts, missing
+operator endpoint pin and attempted production activation.
+
+**This is not a live vendor certification.** The regression uses a
+synthetic, version-aware S3 protocol fixture; real Backblaze, Storj,
+Ceph, MinIO AIStor or any other operator-pinned gateway MUST undergo
+a separate authorized disposable-bucket conditional-create race and
+WORM retention test. The transport is not imported by the live
+ActivityPods account or federation services. A separate protected
+signer must still establish monotonic latest authorization state, and
+a separately administered WORM account must preserve proof after
+PostgreSQL, Redis, Jena and PDS restore.
+
+Do not confuse a passing `PutObject` readback with proving the
+provider would reject an attempted overwritten object. That
+requires the explicit negative live race test and IAM/retention
+independence evidence. Remain `release=CLOSED`.

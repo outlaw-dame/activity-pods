@@ -16,6 +16,8 @@ on:
       - 'pod-provider/backend/candidates/oauth-portable-s3-custody-readonly.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs'
+      - 'pod-provider/backend/candidates/oauth-portable-s3-receipt-writer.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-portable-s3-receipt-writer.mjs'
       - 'docs/paper-s3-archive-provider-qualification.md'
   workflow_dispatch:
 
@@ -60,8 +62,11 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-portable-s3-custody-readonly.mjs
           node --check pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
           node --check pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs
+          node --check pod-provider/backend/candidates/oauth-portable-s3-receipt-writer.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-portable-s3-receipt-writer.mjs
+          PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-portable-s3-receipt-writer.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
-          if grep -R -nE 'oauth-portable-s3-custody-readonly|probe-oauth-portable-s3-custody' pod-provider/backend/services; then
+          if grep -R -nE 'oauth-portable-s3-custody-readonly|probe-oauth-portable-s3-custody|oauth-portable-s3-receipt-writer' pod-provider/backend/services; then
             echo '::error::Do not wire unapproved portable S3 evidence into production'
             exit 1
           fi

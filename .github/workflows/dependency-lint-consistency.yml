@@ -37,6 +37,15 @@ jobs:
         run: npm run lint -- --quiet
       - name: Test PLC submission readback and local directory consistency
         run: node --test pod-provider/backend/tests/atproto-plc-submission-node.test.cjs
+      - name: Prove canonical new-account credential epoch and RS256 revocation candidate
+        env:
+          NODE_ENV: test
+          PAPER_CREDENTIAL_EPOCH_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node --check pod-provider/backend/middlewares/credential-epoch.js
+          node --check pod-provider/backend/scripts/proof-paper-credential-epoch.cjs
+          node --test pod-provider/backend/scripts/proof-paper-credential-epoch.cjs
       - name: Test enrollment authentication boundary
         run: node --test pod-provider/backend/tests/account-enrollment-node.test.cjs
       - name: Test repaired runtime paths and owner authorization

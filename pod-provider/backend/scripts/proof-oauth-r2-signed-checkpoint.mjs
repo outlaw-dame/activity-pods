@@ -107,7 +107,7 @@ test('missing/forged/malformed certificate and wrong authority deny',async()=>{
   [{...signed(e),body:Buffer.concat([signed(e).body,Buffer.from(' ')])},
    'R2_CERT_SCOPE_INVALID'],
   [signed({...e,bytes:Buffer.from(e.bytes.toString().replace(subject,'f'.repeat(64))) }),
-   'R2_CERT_SIGNATURE_INVALID']
+   'R2_CERT_RECEIPT_MISMATCH']
  ]){
   const f=fixture();await f.archive.putAndVerify(e);f.setHead(response);
   await denied(()=>f.archive.readCertifiedLatestEpoch(params(f)),code);

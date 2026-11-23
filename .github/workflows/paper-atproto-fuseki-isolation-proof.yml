@@ -9,6 +9,10 @@ on:
       - 'pod-provider/backend/candidates/local-native-account-store.js'
       - 'pod-provider/backend/sql/paper-local-native-auth.sql'
       - 'pod-provider/backend/tests/local-native-auth-node.test.cjs'
+      - 'pod-provider/backend/middlewares/account-enrollment.js'
+      - 'pod-provider/backend/sql/paper-credential-epoch-authority-v1.sql'
+      - 'pod-provider/backend/sql/paper-credential-epoch-authority-v2-certified-head.sql'
+      - 'pod-provider/backend/sql/paper-credential-epoch-authority-v3-native-bcrypt.sql'
       - 'pod-provider/backend/moleculer.config.js'
       - 'pod-provider/backend/candidates/local-pod-data.js'
       - 'pod-provider/backend/candidates/local-binding-index.js'
@@ -178,11 +182,17 @@ jobs:
           APODS_ACCOUNT_COORDINATOR_DISPOSABLE: confirmed
           APODS_ATPROTO_DATASET_ADMIN_DELEGATION_DISPOSABLE: confirmed
           PAPER_LOCAL_NATIVE_AUTH: confirmed
+          PAPER_CREDENTIAL_NATIVE_DISPOSABLE: confirmed
+          PAPER_CREDENTIAL_PG_DISPOSABLE: confirmed
+          PAPER_NATIVE_CREDENTIAL_TEST_DSN: postgres://paper_probe:probe_local_only@127.0.0.1:5548/atproto_signed_repo_proof_test
           SEMAPPS_SPARQL_ENDPOINT: http://127.0.0.1:3041
         run: |
           set -euo pipefail
           npm rebuild --prefix backend bcrypt --build-from-source
           psql "$ATPROTO_REPO_PROOF_DSN" -X -v ON_ERROR_STOP=1 -f backend/sql/paper-local-native-auth.sql
+          for migration in paper-credential-epoch-authority-v1.sql paper-credential-epoch-authority-v2-certified-head.sql paper-credential-epoch-authority-v3-native-bcrypt.sql; do
+            psql "$ATPROTO_REPO_PROOF_DSN" -X -v ON_ERROR_STOP=1 -f "backend/sql/$migration"
+          done
           psql "$ATPROTO_REPO_PROOF_DSN" -X -v ON_ERROR_STOP=1 -c "CREATE ROLE paper_native_account_login LOGIN PASSWORD 'disposable_private_auth'; GRANT paper_private_auth_runtime TO paper_native_account_login WITH INHERIT TRUE, SET FALSE, ADMIN FALSE"
           unset ATPROTO_REPO_PROOF_DSN
           node --test backend/tests/local-native-auth-node.test.cjs

@@ -134,3 +134,30 @@ verifies zero mutation-side effects for valid/malformed enrollment markers,
 strict lookup isolation/fail-close and no retries, and verifies that
 unmarked legacy operations remain callable. It runs as part of the
 existing dependency/lint acceptance.
+
+## Real SemApps service + PostgreSQL18 defense-in-depth proof
+
+A dedicated ATProto/Fuseki isolated credential workflow now loads
+`paper-local-native-auth.sql` and credential authority **v1, v2, v3**
+into the same real PostgreSQL18 instance before creating the actual
+`@semapps/auth` 1.1.4 `auth.account` service with the restricted
+native database adapter.
+
+The test persists a real bcrypt password, attaches the coordinator's
+reserved WebID and enrolls that existing account at canonical credential
+epoch 1. It then calls the **real upstream SemApps handlers** for
+`setPassword`, `setNewPassword`, `generateResetPasswordToken`,
+`updateAccountSettings`, `deleteByWebId`, and `setTombstone`
+and requires every one to fail with the unreleased enrollment mutation
+code. It additionally calls the adapter *directly* to try a bcrypt
+change and account deletion; PostgreSQL v3 must reject both. The same
+bcrypt hash, signup reservation and epoch 1 must survive without
+any native receipt being recorded. The preexisting login-fence test
+also checks the account persists across broker restart and that
+password comparison still uses real bcrypt.
+
+This is an isolated production-configuration **negative acceptance**.
+It does **not** perform a positive owner-approved password reset,
+simulate approval by an external independently operated credential
+head, activate the SQL in a live service, or open new signup.
+`release=CLOSED`.

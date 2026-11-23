@@ -16,7 +16,14 @@ import {inspectPortableS3ObjectLock} from './oauth-portable-s3-custody-readonly.
 
 const MAX_READ=1024;
 const HEX=/^[0-9a-f]{64}$/u;
-const VERSION=/^[^\s]{1,512}$/u;
+const VERSION=/^.{1,512}$/u;
+function validVersion(value){
+  return typeof value==='string'&&VERSION.test(value)&&
+    !Array.from(value).some(ch=>{
+      const code=ch.codePointAt(0);
+      return code<=32||code===127;
+    });
+}
 const ALL=[
   'PutObjectCommand','ListObjectVersionsCommand',
   'GetBucketVersioningCommand','GetObjectLockConfigurationCommand',
@@ -78,8 +85,7 @@ export function createPortableS3ReceiptWriter({
        (response.DeleteMarkers??[]).length!==0||
        response.Versions[0]?.Key!==key||
        response.Versions[0]?.IsLatest!==true||
-       typeof response.Versions[0]?.VersionId!=='string'||
-       !VERSION.test(response.Versions[0].VersionId)||
+       !validVersion(response.Versions[0]?.VersionId)||
        response.Versions[0].VersionId==='null'||
        !Number.isSafeInteger(response.Versions[0]?.Size)||
        response.Versions[0].Size<32||

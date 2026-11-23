@@ -7,6 +7,10 @@
 import crypto from 'node:crypto';
 import {Buffer} from 'node:buffer';
 
+const CERTIFIED=new WeakSet();
+export const isDisposableVerifiedCheckpointAuthority=value=>
+ value!==null&&typeof value==='object'&&CERTIFIED.has(value);
+
 const HEX=/^[a-f0-9]{64}$/u;
 const REV=/^[1-9][0-9]{0,18}$/u;
 const MAX=9223372036854775807n;
@@ -99,7 +103,9 @@ export function createDisposableR2CheckpointAuthority({
    sha256:value.sha256,authority:value.authority
   });
  }
- return Object.freeze({readVerified,releaseAccepted:false});
+ const instance=Object.freeze({readVerified,releaseAccepted:false});
+ CERTIFIED.add(instance);
+ return instance;
 }
 
 /** Test/offline attestor helper. Private signing key must never be

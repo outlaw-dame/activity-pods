@@ -214,3 +214,57 @@ The named restore test is
 It does not exercise a physically restored Jena/Redis/PDS, an actual
 independent signing/immutability service, or a hosted cross-protocol
 owner-approved signup. The production release gate remains CLOSED.
+
+## Native SemApps PostgreSQL credential mutation enforcement (v3, NONACTIVATED)
+
+The existing \`paper_private_auth.accounts\` table stores the SemApps
+\`hashedPassword\` inside its \`data\` JSONB column. Its runtime SQL role
+previously had unrestricted \`UPDATE(data)\` and \`DELETE\`. If promoted
+unchanged, an attacker with that restricted account writer (or a buggy
+account action) could change a unified owner's password *without*
+advancing the independent revocation epoch, or remove and recreate a
+claimed account. This is a **production-critical bypass**.
+
+\`pod-provider/backend/sql/paper-credential-epoch-authority-v3-native-bcrypt.sql\`
+adds narrowly scoped, test-only database enforcement:
+
+1. A SECURITY DEFINER trigger refuses **every direct bcrypt change or
+   removal**, unless a matching operation-specific receipt was inserted
+   in the *same PostgreSQL transaction*, matches the new hash, and
+   corresponds to the exact owner in durable \`pending\` state. It also
+   refuses ordinary deletion of a claimed unified account or insertion
+   over an already registered credential owner. Ordinary preferences
+   updates remain allowed.
+2. A separate \`paper_credential_native_writer\` has EXECUTE on
+   \`write_native_bcrypt\` only. The function locks the owner epoch and
+   native account, requires an exact pending UUID and next revision,
+   accepts only encoded bcrypt with work factor 10–14 (the pinned SemApps implementation uses 10; values outside the range are rejected to prevent excessive login work), and atomically writes
+   the native bcrypt and SHA-256 receipt to an append-only operation
+   table. A lost ACK is reconciled using the operation UUID; it is
+   **not automatically retried or rolled back**.
+3. A distinct \`paper_credential_native_attestor\` can only call the
+   positive readback predicate for the persisted operation and cannot
+   enumerate native account hashes, profile data or receipt rows.
+4. The general-purpose digest-only \`seal_change\` EXECUTE is REVOKED
+   from the coordinator. A separate \`paper_credential_native_sealer\`
+   can seal only the exact previously committed native bcrypt receipt.
+   After sealing, the independent latest-head read must still match
+   before any token is admitted. This local receipt does **not**
+   authenticate an owner or constitute independent archival custody.
+5. The real PostgreSQL18 CI test uses separate restricted LOGINs,
+   denies direct credential edits/owner deletion, tests transactional
+   rollback before ACK, wrong operation/epoch/hash, forged seal,
+   replay, append-only audit, positive receipt correlation and
+   terminal disabled-owner refusal.
+
+**Important:** the v3 SQL is deliberately *not auto-migrated* and the
+native writer is not yet wired to the authenticated SemApps password
+change/reset handlers. Before production, those handlers must establish
+real owner authentication and authorization and atomically reserve a
+credential operation; the independently operated latest-head signer
+and immutable receipt custodian must attest pending and sealed epochs,
+with bounded failure/rollback recovery. Deletion still requires a
+separately approved tombstone/erasure policy. Production signup
+remains CLOSED. Synthetic bcrypt-shaped strings in the SQL proof are
+not a test of bcrypt password hashing: the existing native SemApps
+account tests separately cover hashing/comparison.

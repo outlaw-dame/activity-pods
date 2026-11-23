@@ -181,10 +181,16 @@ test('unsafe SDK retries and unapproved endpoints are rejected without a PUT',as
   assert.equal(h.controls.putCount,0);
   await denied(()=>h.create().putAndVerify({key,bytes:Buffer.from('untrusted')}),
     'PORTABLE_RECEIPT_FORMAT_INVALID');
+  // Constructor refusal is synchronous; a transport constructed while
+  // the disposable flag was present must ALSO refuse at invocation time
+  // if the process later becomes production.
+  const alreadyConstructed=h.create();
   const prev=process.env.NODE_ENV;
   process.env.NODE_ENV='production';
   try{
-    await denied(()=>h.create().putAndVerify({key,bytes}),
+    assert.throws(()=>h.create(),
+      e=>e?.code==='PORTABLE_RECEIPT_NOT_RELEASED');
+    await denied(()=>alreadyConstructed.putAndVerify({key,bytes}),
       'PORTABLE_RECEIPT_NOT_RELEASED');
   }finally{process.env.NODE_ENV=prev;}
   assert.equal(h.controls.putCount,0);

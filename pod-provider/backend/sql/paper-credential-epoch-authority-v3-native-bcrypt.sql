@@ -74,13 +74,31 @@ BEGIN
       -- immutable, including the row UUID. Otherwise a direct JSONB update
       -- can move a canonical WebID to a different, unguarded identity.
       IF NEW.id IS DISTINCT FROM OLD.id
-        OR NEW.data->'webId' IS DISTINCT FROM OLD.data->'webId'
         OR NEW.data->'username' IS DISTINCT FROM OLD.data->'username'
         OR NEW.data->'signupReservationId' IS DISTINCT FROM
            OLD.data->'signupReservationId'
       THEN
         RAISE EXCEPTION 'Unified account canonical identity is immutable'
           USING ERRCODE='42501';
+      END IF;
+      IF NEW.data->'webId' IS DISTINCT FROM OLD.data->'webId' THEN
+        -- SemApps legitimately binds the reserved WebID exactly ONCE
+        -- after native account creation and BEFORE canonical enrollment.
+        -- Its path is pinned by the already-immutable username. Never
+        -- allow reassignment, removal, a second attach, or claimed-owner
+        -- rebinding. This also agrees with guard_identity on the table.
+        IF OLD.data ? 'webId'
+          OR NOT (OLD.data ? 'signupReservationId')
+          OR NEW.data->>'webId' IS DISTINCT FROM
+             'https://paper.example.org/' || (OLD.data->>'username')
+          OR EXISTS (
+            SELECT 1 FROM paper_credential_epoch.owners e
+            WHERE e.webid=NEW.data->>'webId'
+          )
+        THEN
+          RAISE EXCEPTION 'Unified account WebID binding is immutable'
+            USING ERRCODE='42501';
+        END IF;
       END IF;
       -- These fields control recovery identity and terminal account state.
       -- They cannot be mutated by the general-purpose JSONB account role.

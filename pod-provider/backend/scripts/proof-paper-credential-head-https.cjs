@@ -75,6 +75,17 @@ const server=https.createServer({key:privateTls,cert:trustedCa},(req,res)=>{
       res.writeHead(200,{'Content-Type':'application/json'});
       res.end('not JSON');return;
     }
+    if(mode==='trickle'){
+      res.writeHead(200,{'Content-Type':'application/json'});
+      let ticks=0;
+      const interval=setInterval(()=>{
+        if(res.destroyed){clearInterval(interval);return;}
+        if(++ticks>25){clearInterval(interval);res.end();return;}
+        res.write(' ');
+      },40);
+      res.once('close',()=>clearInterval(interval));
+      return;
+    }
     if(mode==='slow'){
       setTimeout(()=>{
         if(res.destroyed)return;
@@ -130,6 +141,8 @@ async function run(){
     await denies(()=>reader.readFresh(webId),'CREDENTIAL_HEAD_UNAVAILABLE');
     mode='slow';
     await denies(()=>reader.readFresh(webId),'CREDENTIAL_HEAD_UNAVAILABLE');
+    mode='trickle';
+    await denies(()=>reader.readFresh(webId),'CREDENTIAL_HEAD_UNAVAILABLE');
     const aborted=new AbortController();aborted.abort();
     await denies(()=>transport.readHead({
       kind:'paper.credential.challenge.v1',subject:'a'.repeat(64),
@@ -148,6 +161,17 @@ async function run(){
       createDisposableCredentialHeadHttpsTransport({
         endpoint,fixtureOnly:true,testCaPem:privateTls.toString('utf8')
       })),'CREDENTIAL_TRANSPORT_CA_INVALID');
+    const tlsEnv=process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED='0';
+    try{
+      await denies(()=>Promise.resolve().then(()=>
+        createDisposableCredentialHeadHttpsTransport({
+          endpoint,fixtureOnly:true,testCaPem:trustedCa
+        })),'CREDENTIAL_TRANSPORT_CONFIG_INVALID');
+    }finally{
+      if(tlsEnv===undefined)delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED=tlsEnv;
+    }
     assert.equal(transport.releaseAccepted,false);
     assert.ok(calls>=14);
     console.log('PASS: real TLS signed nonce head, replay/forgery/redirect/oversize/timeout/CA refusal and bounded challenge; NONACTIVATED');

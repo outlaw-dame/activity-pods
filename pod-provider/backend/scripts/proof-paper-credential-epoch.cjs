@@ -145,6 +145,29 @@ test('credential change begins independent pending fence before password write',
   assert.equal(await f.check(old), false);
   assert.equal((await f.check(await f.issue())).paper_credential_epoch, '2');
 });
+test('missing or negative downstream ACK must not seal a credential epoch', async () => {
+  for (const outcome of [undefined, null, false, { changed: false }, { ok: true }]) {
+    const f = stateful();
+    const old = await f.issue();
+    let commitCalled = false;
+    const originalCommit = f.authority.commitChange;
+    f.authority.commitChange = async params => {
+      commitCalled = true;
+      return originalCommit(params);
+    };
+    await denies(() => runDisposableCredentialChange({
+      authority: f.authority, webId, operationId: opId, fixtureOnly: true,
+      apply: async () => {
+        f.accounts.get(webId).hashedPassword = 'possibly-updated';
+        return outcome;
+      }
+    }), 'CREDENTIAL_EPOCH_MUTATION_UNCERTAIN');
+    assert.equal(commitCalled, false);
+    assert.equal(f.epochs.get(webId).state, 'pending');
+    assert.equal(await f.check(old), false);
+    await denies(() => f.issue(), 'CREDENTIAL_EPOCH_UNAVAILABLE');
+  }
+});
 test('ambiguous password update leaves pending fence denying old bearer', async () => {
   const f = stateful(); const token = await f.issue();
   await denies(() => runDisposableCredentialChange({
@@ -175,7 +198,10 @@ test('simultaneous signing and rotation cannot return stale bearer', async () =>
   assert.ok(signed);
   await runDisposableCredentialChange({
     authority: f.authority, webId, operationId: opId, fixtureOnly: true,
-    apply: async () => { f.accounts.get(webId).hashedPassword = 'new'; }
+    apply: async () => {
+      f.accounts.get(webId).hashedPassword = 'new';
+      return { changed: true };
+    }
   });
   releaseSign();
   await denies(() => task, 'CREDENTIAL_EPOCH_CHANGED');

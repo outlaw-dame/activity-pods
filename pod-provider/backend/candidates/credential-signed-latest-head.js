@@ -53,6 +53,16 @@ function createDisposableCredentialHeadAuthority({
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 5000 ||
       !Number.isSafeInteger(maxSkewSeconds) || maxSkewSeconds < 1 ||
       maxSkewSeconds > 60) deny('CREDENTIAL_HEAD_CONFIGURATION_INVALID');
+  // Do not turn accidentally provisioned private-key PEM into a trusted
+  // public key: createPublicKey(privatePem) would silently derive its public
+  // half, masking a catastrophic custody boundary breach.
+  if (typeof trustedPublicKey === 'string') {
+    if (Buffer.byteLength(trustedPublicKey) > 512 ||
+        !/^-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PUBLIC KEY-----\r?\n?$/u.test(trustedPublicKey))
+      deny('CREDENTIAL_HEAD_KEY_INVALID');
+  } else if (!(trustedPublicKey instanceof crypto.KeyObject)) {
+    deny('CREDENTIAL_HEAD_KEY_INVALID');
+  }
   let key;
   try {
     key = trustedPublicKey instanceof crypto.KeyObject ?

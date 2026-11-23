@@ -52,6 +52,19 @@ const mkAuthority = readHead => createDisposableCredentialHeadAuthority({
   fixtureOnly: true, now: () => clock
 });
 const good = mkAuthority(async challenge => sign(challenge));
+// Requiring a public-only SPKI PEM prevents inadvertently mounting the
+// independent signing private key in an application verifier container.
+const pemPublic = publicKey.export({type:'spki',format:'pem'});
+const pemPrivate = privateKey.export({type:'pkcs8',format:'pem'});
+assert.throws(() => createDisposableCredentialHeadAuthority({
+  readHead:async c => sign(c),trustedPublicKey:pemPrivate,
+  authority:authorityId,fixtureOnly:true,now:()=>clock
+}), e => e?.code === 'CREDENTIAL_HEAD_KEY_INVALID');
+const publicPemAuthority = createDisposableCredentialHeadAuthority({
+  readHead:async c => sign(c),trustedPublicKey:pemPublic,
+  authority:authorityId,fixtureOnly:true,now:()=>clock
+});
+
 const reader = () => createDisposableCertifiedCredentialReader({
   pool: readerPool, headAuthority: good, fixtureOnly: true
 });
@@ -78,6 +91,7 @@ async function main() {
     assert.equal((await as(
       'SELECT paper_credential_epoch.enroll_owner($1::text) AS ok',[owner]))[0].ok,true);
 
+    assert.equal((await publicPemAuthority.readFresh(owner)).epoch,'1');
     const first = await reader().readOwnerState(owner);
     assert.deepEqual(first,{webId:owner,mode:'unified',epoch:'1',state:'active'});
     // Compose the actual Paper RS256 admission middleware with the real

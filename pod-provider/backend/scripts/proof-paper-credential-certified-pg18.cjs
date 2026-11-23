@@ -150,7 +150,6 @@ async function main() {
     await rejected(() => racedReader.readOwnerState(owner),'CREDENTIAL_PG_ROLLBACK_OR_RACE');
     const unavailable = mkAuthority(async () => { throw Error('remote failure'); });
     await rejected(() => unavailable.readFresh(owner),'CREDENTIAL_HEAD_UNAVAILABLE');
-    const stalled = mkAuthority(() => new Promise(() => {}));
     // Override the default network timeout only through a new verified constructor.
     const timed = createDisposableCredentialHeadAuthority({
       readHead: () => new Promise(() => {}), trustedPublicKey:publicKey,

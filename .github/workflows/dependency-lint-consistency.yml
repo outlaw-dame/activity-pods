@@ -48,6 +48,11 @@ jobs:
           node --test pod-provider/backend/scripts/proof-paper-credential-epoch.cjs
       - name: Test enrollment authentication boundary
         run: node --test pod-provider/backend/tests/account-enrollment-node.test.cjs
+      - name: Refuse inherited production account DB and closed-signup identity writes
+        env:
+          NODE_ENV: production
+          CI: 'true'
+        run: node --test pod-provider/backend/tests/account-production-raw-write-node.test.cjs
       - name: Test repaired runtime paths and owner authorization
         run: >-
           tests/node_modules/.bin/jest --runInBand --silent --testEnvironment=node

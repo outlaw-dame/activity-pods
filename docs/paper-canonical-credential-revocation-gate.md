@@ -193,3 +193,24 @@ rewind, and after terminal disable, while a freshly signed new-generation
 JWT is accepted only when all authorities agree. The SemApps broker lookup
 is still a local fixture; this is not a deployed authenticated password
 reset/rotation route or hosted Solid-OIDC/SAI/PDS acceptance.
+
+## Real credential-state physical PostgreSQL recovery acceptance (NONACTIVATED)
+
+The existing two-database physical PostgreSQL18/WAL/PITR proof now loads
+the **actual** restricted credential epoch v1 and certified reader v2
+SQL into two separate disposable PostgreSQL clusters before the backup.
+Each cluster creates a unified owner at epoch 1, takes a full physical
+`pg_basebackup` with a verifiable backup manifest, then terminally
+disables that owner at epoch 2. Independently archived WAL restores
+each cluster at named points on both sides of disablement. The test
+asserts `unified:active:1` on each pre-disable physical restore and
+`unified:disabled:2` after, and confirms the two independent cluster
+system identifiers. A pre-disable snapshot cannot meet an **externally
+expected** epoch 2; the expected external head is an explicit
+assumption, not a real live independent custodian in this test.
+
+The named restore test is
+`pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh`.
+It does not exercise a physically restored Jena/Redis/PDS, an actual
+independent signing/immutability service, or a hosted cross-protocol
+owner-approved signup. The production release gate remains CLOSED.

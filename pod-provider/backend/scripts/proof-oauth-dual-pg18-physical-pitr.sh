@@ -62,6 +62,19 @@ assert_epoch() {
     return 1
   fi
 }
+# Check actual Paper credential authority tables, not merely the separate
+# generic epoch fixture. Old physically restored rows MUST remain denied
+# against an independently held latest credential head (not in this test).
+credential_webid='https://paper.example.org/users/physical'
+assert_credential() {
+  local name="$1" expected_epoch="$2" expected_state="$3" actual
+  actual="$(sql "$name" -Atqc \
+    "SELECT mode||':'||state||':'||epoch FROM paper_credential_epoch.read_certified('$credential_webid');")"
+  if [[ "$actual" != "unified:${expected_state}:${expected_epoch}" ]]; then
+    echo "Unexpected physically restored credential state: $name ($actual)" >&2
+    return 1
+  fi
+}
 start_source() {
   local role="$1"
   local name="paper-pitr-${suffix}-${role}"
@@ -88,6 +101,18 @@ start_source() {
   sql "$name" -c \
     "INSERT INTO paper_pitr_probe VALUES('paper',1,'active');"
   assert_epoch "$name" 1 active
+  # Install the exact function-restricted credential schema only in the
+  # unique isolated physical PG18 source (never the live provider).
+  local schema
+  for schema in paper-credential-epoch-authority-v1.sql \
+                paper-credential-epoch-authority-v2-certified-head.sql; do
+    test -s "pod-provider/backend/sql/$schema"
+    docker cp "pod-provider/backend/sql/$schema" "$name:/tmp/$schema"
+    sql "$name" -q -f "/tmp/$schema" >/dev/null
+  done
+  [[ "$(sql "$name" -Atqc \
+    "SELECT paper_credential_epoch.enroll_owner('$credential_webid');")" == t ]] || return 1
+  assert_credential "$name" 1 active
   # A real streamed physical base backup + manifest, not pg_dump.
   docker exec -u postgres "$name" pg_basebackup -U postgres \
     -D /backup/base -Fp -X stream --checkpoint=fast
@@ -103,6 +128,10 @@ start_source() {
   sql "$name" -c \
     "UPDATE paper_pitr_probe SET epoch=2,state='blocked' WHERE id='paper';"
   assert_epoch "$name" 2 blocked
+  # The real credential state transition is a monotonic terminal disable.
+  [[ "$(sql "$name" -Atqc \
+    "SELECT paper_credential_epoch.disable_owner('$credential_webid');")" == t ]] || return 1
+  assert_credential "$name" 2 disabled
   last_segment="$(sql "$name" -Atqc \
     "SELECT pg_walfile_name(pg_create_restore_point('paper_after_revoke'));")"
   sql "$name" -Atqc 'SELECT pg_switch_wal();' >/dev/null
@@ -147,8 +176,10 @@ EOF
   }
   if [[ "$point" == before ]]; then
     assert_epoch "$name" 1 active
+    assert_credential "$name" 1 active
   else
     assert_epoch "$name" 2 blocked
+    assert_credential "$name" 2 disabled
   fi
   local original="paper-pitr-${suffix}-${role}" original_id restored_id
   original_id="$(sql "$original" -Atqc \
@@ -185,5 +216,11 @@ for role in primary witness; do
   actual="$(sql "paper-pitr-${suffix}-${role}-before" -Atqc \
    "SELECT epoch::text FROM paper_pitr_probe WHERE id='paper';")"
   [[ "$actual" != 2 ]] || exit 1
+  credential_epoch="$(sql "paper-pitr-${suffix}-${role}-before" -Atqc \
+    "SELECT epoch FROM paper_credential_epoch.read_certified('$credential_webid');")"
+  [[ "$credential_epoch" == 1 ]] || {
+    echo 'Expected stale physically restored credential generation' >&2
+    exit 1
+  }
 done
-echo 'PASS: two independent PG18 physical pg_basebackup/pg_verifybackup, archived-WAL PITR to named before/after revoke points, old dual restore distinguished from external high-water; external WORM and hosted OAuth remain P0, release CLOSED'
+echo 'PASS: two independent real PG18 physical backups, archived-WAL named-point PITR, credential v1+v2 pre/post-disable states and old-generation denial comparison; nonactivated, external fresh signer and cross-store Jena/Redis/PDS remain P0'

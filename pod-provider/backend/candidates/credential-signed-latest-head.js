@@ -13,8 +13,8 @@ const HEX = /^[a-f0-9]{64}$/u;
 const NONCE = /^[A-Za-z0-9_-]{43}$/u;
 const AUTHORITY = /^[a-z0-9._:-]{3,128}$/u;
 const MAX_EPOCH = 9223372036854775807n;
-const DOMAIN = Buffer.from('paper:credential:attest:v1\\0');
-const SUBJECT_DOMAIN = 'paper:credential:owner:v1\\0';
+const DOMAIN = Buffer.from('paper:credential:attest:v1\0');
+const SUBJECT_DOMAIN = 'paper:credential:owner:v1\0';
 const FIELDS = 'authority,digest,epoch,issuedAt,kind,nonce,state,subject';
 
 function deny(code) {

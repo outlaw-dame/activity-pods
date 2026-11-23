@@ -70,6 +70,28 @@ async function main(){
     assert.equal(legacyRow.email,'legacy-updated@example.test');
     await q(runtime,"DELETE FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[legacy]);
 
+    // First WebID attachment is necessary for genuine SemApps signup:
+    // native account exists before its WebID and canonical owner row.
+    // The strict gate must allow precisely the reserved username path.
+    const attachName='claimtest-attach1234';
+    const attachId='77777777-7777-4777-8777-777777777777';
+    const attachWebId='https://paper.example.org/'+attachName;
+    await q(admin,'INSERT INTO paper_private_auth.accounts(id,data) VALUES($1,$2::jsonb)',[
+      attachId,JSON.stringify({username:attachName,
+        signupReservationId:'88888888-8888-4888-8888-888888888888',
+        hashedPassword:old})
+    ]);
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{webId}',to_jsonb($2::text)) WHERE id=$1",
+      [attachId,'https://attacker.example.org/claimed']),'forged first WebID');
+    await q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{webId}',to_jsonb($2::text)) WHERE id=$1",
+      [attachId,attachWebId]);
+    assert.equal((await q(admin,"SELECT data->>'webId' AS webid FROM paper_private_auth.accounts WHERE id=$1",[attachId])).rows[0].webid,attachWebId);
+    assert.equal((await q(admin,"SELECT paper_credential_epoch.enroll_owner($1) AS accepted",[attachWebId])).rows[0].accepted,true);
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{webId}',to_jsonb($2::text)) WHERE id=$1",
+      [attachId,'https://paper.example.org/claimtest-other123']),'reassigned enrolled WebID');
+    await denied(()=>q(runtime,"UPDATE paper_private_auth.accounts SET data=data-'webId' WHERE id=$1",[attachId]),
+      'removed enrolled WebID');
+
     // Simulate a physical restore with an outdated/missing local marker
     // while the canonical PG owner ledger still retains the unified owner.
     // This intentionally bypasses triggers ONLY as the disposable CI

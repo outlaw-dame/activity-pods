@@ -55,8 +55,11 @@ export function createDisposableR2CheckpointAuthority({
     process.env.PAPER_OAUTH_R2_DISPOSABLE!=='confirmed')
   deny('R2_CERT_NOT_RELEASED');
  let key;
- try{key=crypto.createPublicKey(trustedPublicKey)}
- catch{deny('R2_CERT_KEY_INVALID')}
+ try{
+  key=trustedPublicKey instanceof crypto.KeyObject?
+   trustedPublicKey:crypto.createPublicKey(trustedPublicKey);
+ }catch{deny('R2_CERT_KEY_INVALID')}
+ if(key.type!=='public')deny('R2_CERT_KEY_INVALID');
  if(key.asymmetricKeyType!=='ed25519'||typeof readHead!=='function'||
     !AUTH.test(authority||''))
   deny('R2_CERT_CONFIG_INVALID');
@@ -116,8 +119,11 @@ export function encodeSignedEpochCheckpoint({authority,subject,revision,sha256,
   authority,subject,revision,sha256};
  const message=canonical(value);
  let key;
- try{key=crypto.createPrivateKey(privateKey)}
- catch{deny('R2_CERT_KEY_INVALID')}
+ try{
+  key=privateKey instanceof crypto.KeyObject?
+   privateKey:crypto.createPrivateKey(privateKey);
+ }catch{deny('R2_CERT_KEY_INVALID')}
+ if(key.type!=='private')deny('R2_CERT_KEY_INVALID');
  if(key.asymmetricKeyType!=='ed25519')deny('R2_CERT_KEY_INVALID');
  return Object.freeze({
   body:Buffer.from(message.subarray(

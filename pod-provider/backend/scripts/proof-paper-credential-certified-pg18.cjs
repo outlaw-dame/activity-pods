@@ -10,6 +10,8 @@ const { createDisposableCredentialHeadAuthority, subjectHash } =
   require('../candidates/credential-signed-latest-head');
 const { createDisposableCertifiedCredentialReader } =
   require('../candidates/credential-pg-certified-reader');
+const { createDisposableCredentialEpochMiddleware } =
+  require('../middlewares/credential-epoch');
 
 if (process.env.CI !== 'true' || process.env.NODE_ENV !== 'test' ||
     process.env.PAPER_CREDENTIAL_HEAD_DISPOSABLE !== 'confirmed' ||
@@ -78,6 +80,42 @@ async function main() {
 
     const first = await reader().readOwnerState(owner);
     assert.deepEqual(first,{webId:owner,mode:'unified',epoch:'1',state:'active'});
+    // Compose the actual Paper RS256 admission middleware with the real
+    // restricted PG18 reader. SemApps service routing is still a fixture.
+    const rsa = crypto.generateKeyPairSync('rsa',{modulusLength:2048});
+    const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const jwtSign = payload => {
+      const input = b64({alg:'RS256',typ:'JWT'})+'.'+b64(payload);
+      return input+'.'+crypto.sign('sha256',Buffer.from(input),
+        rsa.privateKey).toString('base64url');
+    };
+    const jwtVerify = token => {
+      const bits = typeof token === 'string' ? token.split('.') : [];
+      if (bits.length !== 3 ||
+          !crypto.verify('sha256',Buffer.from(bits[0]+'.'+bits[1]),
+            rsa.publicKey,Buffer.from(bits[2]||'','base64url')))
+        return false;
+      try { return JSON.parse(Buffer.from(bits[1],'base64url').toString('utf8')); }
+      catch { return false; }
+    };
+    const broker = { async call(name,params,options) {
+      assert.equal(name,'auth.account.findByWebId');
+      assert.equal(params.webId,owner);
+      assert.deepEqual(options.meta,{});
+      return {webId:owner,signupReservationId:'real-pg-reservation-0001'};
+    }};
+    const guard = createDisposableCredentialEpochMiddleware({
+      fixtureOnly:true,authority:reader(),now:()=>clock
+    });
+    const mint = guard.localAction(ctx => jwtSign(ctx.params.payload),
+      {name:'auth.jwt.generateServerSignedToken'});
+    const inspect = guard.localAction(ctx => jwtVerify(ctx.params.token),
+      {name:'auth.jwt.verifyServerSignedToken'});
+    const issue = () => mint({broker,params:{payload:{webId:owner}}});
+    const check = token => inspect({broker,params:{token}});
+    const bearerEpoch1 = await issue();
+    assert.equal((await check(bearerEpoch1)).paper_credential_epoch,'1');
+
 
     await assert.rejects(() => readerPool.query(
       'SELECT * FROM paper_credential_epoch.owners'));
@@ -97,9 +135,11 @@ async function main() {
     assert.equal(started[0].following_epoch,'2');
     // Pending fence committed in PG while older external head still exists.
     await rejected(() => reader().readOwnerState(owner),'CREDENTIAL_PG_ROLLBACK_OR_RACE');
+    assert.equal(await check(bearerEpoch1),false);
     external.state='pending';
     const pending = await reader().readOwnerState(owner);
     assert.equal(pending.state,'pending');
+    assert.equal(await check(bearerEpoch1),false);
     // These data are NEVER an authorization for a bearer.
     assert.notEqual(pending.state,'active');
 
@@ -111,15 +151,20 @@ async function main() {
     // Database commit without independent latest-head ACK must deny.
     await rejected(() => reader().readOwnerState(owner),'CREDENTIAL_PG_ROLLBACK_OR_RACE');
     external.epoch='2'; external.state='active'; external.digest=receipt;
+    assert.equal(await check(bearerEpoch1),false);
+    const bearerEpoch2 = await issue();
+    assert.equal((await check(bearerEpoch2)).paper_credential_epoch,'2');
     assert.equal((await reader().readOwnerState(owner)).epoch,'2');
 
     // A primary PostgreSQL rewind cannot resurrect an old JWT generation.
     await as(`UPDATE paper_credential_epoch.owners SET epoch=1,state='active',
       operation_id=NULL,next_epoch=NULL,mutation_digest=NULL WHERE webid=$1`,[owner]);
     await rejected(() => reader().readOwnerState(owner),'CREDENTIAL_PG_ROLLBACK_OR_RACE');
+    assert.equal(await check(bearerEpoch2),false);
     await as(`UPDATE paper_credential_epoch.owners SET epoch=2,state='active',
       operation_id=NULL,next_epoch=NULL,mutation_digest=$2 WHERE webid=$1`,
       [owner,Buffer.from(receipt,'hex')]);
+    assert.equal((await check(bearerEpoch2)).paper_credential_epoch,'2');
 
     // Former signed head cannot be replayed: a second request has a fresh
     // independently unpredictable nonce (not an HTTP caller-provided nonce).
@@ -161,6 +206,7 @@ async function main() {
       'SELECT paper_credential_epoch.disable_owner($1::text) AS ok',[owner]))[0].ok,true);
     external.epoch='3'; external.state='disabled'; external.digest='0'.repeat(64);
     assert.equal((await reader().readOwnerState(owner)).state,'disabled');
+    assert.equal(await check(bearerEpoch2),false);
     assert.equal((await as(
       'SELECT paper_credential_epoch.enroll_owner($1::text) AS ok',[owner]))[0].ok,false);
 

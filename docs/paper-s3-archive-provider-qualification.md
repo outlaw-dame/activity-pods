@@ -176,3 +176,96 @@ rather than a product certification. Real negative immutability and
 conditional-write races remain mandatory for *every* actual provider,
 and production keys/last-signed-head custody must be external to
 ActivityPods and the federation sidecar.
+
+## Disposable S3 conditional-create acceptance (two actual concurrent writes)
+
+A *read-only* COMPLIANCE/versioning checklist cannot prove the critical
+`If-None-Match: *` create-only behavior used by the ActivityPods
+authorization receipt archive. A separate strictly operator-invoked
+acceptance tool now lives at:
+
+- `pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs`
+- `pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs`
+- `pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs`
+
+**This is an irreversible-storage test**: ONE synthetic object version
+may be retained under COMPLIANCE for at least 400 days. Use a new,
+empty, individually approved bucket named
+`paper-worm-disposable-<random-suffix>`. Its object key is derived
+from a cryptographically random subject and uses the existing
+`paper/oauth-witness/epochs/v1/<hash>/<revision>` test namespace.
+It contains **no real WebID, credentials, signing keys, consent or user
+data**. The tool intentionally provides no cleanup/delete operation.
+Factor the tiny but nonzero lock/storage cost and the bucket's
+retention policy into operator approval.
+
+Required environment, IN ADDITION TO the read-only probe SDK/endpoint
+settings, with a separately provisioned **disposable writer** profile:
+
+- `PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=disposable-write-approved`
+- `PAPER_PORTABLE_WORM_WRITE_DISPOSABLE=confirmed`
+- `PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable-<random-suffix>`
+- `PAPER_PORTABLE_WORM_WRITE_ACK=permanently-retain:<exact-bucket-name>`
+- `PAPER_PORTABLE_WORM_WRITER_PROFILE=<disposable-writer-profile>`
+- `PAPER_PORTABLE_WORM_READER_PROFILE=<distinct-read-only-profile>`
+- `PAPER_PORTABLE_WORM_PROVIDER=backblaze-b2|storj|custom-s3`
+- `PAPER_PORTABLE_WORM_ENDPOINT=<exact-vetted-HTTPS-origin>`
+- `PAPER_WORM_SDK_ROOT=<absolute-path-to-pinned-SDK-install>`
+
+For `custom-s3`, also pin the *same exact* origin with
+`PAPER_PORTABLE_WORM_APPROVED_ENDPOINT` and provide
+`PAPER_PORTABLE_WORM_REGION`. Optional
+`PAPER_PORTABLE_WORM_URL_STYLE=path|virtual-host`.
+
+Run only on the independent operator's trusted host, with protected
+local S3 profiles and the pinned SDK versions documented above:
+
+```sh
+node pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs
+```
+
+The probe first verifies versioning and COMPLIANCE default retention
+through a **separate reader client**. It then sends exactly two
+competing `PutObject` requests with **different canonical synthetic
+receipt bodies** to the same new key, with `IfNoneMatch: '*'`,
+content MD5 and SHA-256. Neither PUT is retried, even after lost ACK
+or an ambiguous error. Acceptance requires *exactly one* successful
+HTTP 200/201 ACK with a nonempty version ID and *exactly one* recognized
+HTTP 412 PreconditionFailed or 409 ConditionalRequestConflict. Both
+succeed, both conflict, or uncertain/timeout outcomes all fail. This
+proves a real single-winner conditional-create observation only; the
+provider can still have other concurrency defects outside this run.
+
+After the race, the reader independently verifies that the exact
+version is current, the version listing has no competing versions or
+delete markers, the retained bytes match the winning SHA-256, the
+object has COMPLIANCE retention with >=30 days remaining, and bucket
+policy still has >=400 days configured. Failure is **not** automatically
+retried. The synthetic key, version and digest may be kept for
+an independent auditor to perform separate hostile DELETE, retention
+shortening, delete-marker/overwrite and account-closure tests.
+
+Outputs explicitly distinguish:
+- `observedConditionalConflict: true` and
+  `confirmedObjectRetention: true` for the **specific disposable
+  sample only**;
+- `independentlyAdministered: false`,
+  `hostileDeleteRetentionVerified: false`,
+  `monotonicLatestHeadVerified: false` and
+  `releaseAccepted: false`.
+
+A standard COMPLIANCE lock can prevent deleting/shortening an
+**existing object version** without preventing a new version or
+delete marker from being created. The real independent attestor must
+therefore audit complete version history and maintain an externally
+verified nonrewindable latest-head. Distinct writer/reader profile
+names do NOT establish distinct human administration.
+
+This code is **not loaded by the production Moleculer runtime**.
+CI proves denial, SDK command contracts and no ambiguous write retry
+only with disposable deterministic mocks; **CI does not claim a real
+Backblaze/Storj/custom S3 provider passed the live write probe**.
+The external signer, complete Redis/Jena/PDS restore, authenticated
+owner account lifecycle, positive hosted signup and independent
+human security review are still required. Production signup and
+release remain CLOSED.

@@ -38,6 +38,7 @@ function validEpoch(value) {
 }
 function validRecord(record, webId) {
   return record && record.webId === webId &&
+    record.mode === 'unified' &&
     validEpoch(record.epoch) && record.state === 'active';
 }
 function enabled(options) {
@@ -45,11 +46,9 @@ function enabled(options) {
     process.env.NODE_ENV === 'test' &&
     process.env.PAPER_CREDENTIAL_EPOCH_DISPOSABLE === 'confirmed';
 }
-function scopedAccount(account, webId) {
-  if (!account || account.webId !== webId) return false;
-  // This change deliberately does not invalidate older, pre-unification
-  // SemApps users. Migration/consent to that migration is a separate gate.
-  return typeof account.signupReservationId === 'string' &&
+function hasEnrollmentMarker(account, webId) {
+  return account && account.webId === webId &&
+    typeof account.signupReservationId === 'string' &&
     account.signupReservationId.length >= 16;
 }
 function equalEpoch(first, second) {
@@ -65,7 +64,7 @@ function createDisposableCredentialEpochMiddleware({
   // A production broker must never register a test reader or accidentally
   // accept a fallback status from a stale cache.
   if (!enabled({ fixtureOnly })) refuse('CREDENTIAL_EPOCH_NOT_RELEASED');
-  if (typeof authority?.readCurrent !== 'function' ||
+  if (typeof authority?.readOwnerState !== 'function' ||
       typeof now !== 'function' ||
       !Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 ||
       ttlSeconds > 3600) refuse('CREDENTIAL_EPOCH_CONFIGURATION_INVALID');
@@ -81,12 +80,21 @@ function createDisposableCredentialEpochMiddleware({
       refuse('CREDENTIAL_EPOCH_ACCOUNT_UNAVAILABLE');
     }
   };
-  const read = async webId => {
-    let state;
-    try { state = await authority.readCurrent(webId); }
+  const read = async (webId, account) => {
+    let record;
+    try { record = await authority.readOwnerState(webId); }
     catch { refuse(); }
-    if (!validRecord(state, webId)) refuse();
-    return state.epoch;
+    if (!record || record.webId !== webId) refuse();
+    // A restored/missing enrollment marker must NEVER downgrade an owner
+    // from unified to legacy. Classification must be independently durable,
+    // not inferred solely from a rewound account record.
+    if (record.mode === 'legacy') {
+      if (hasEnrollmentMarker(account, webId)) refuse('CREDENTIAL_EPOCH_DOWNGRADE_DENIED');
+      return null;
+    }
+    if (!hasEnrollmentMarker(account, webId) || !validRecord(record, webId))
+      refuse('CREDENTIAL_EPOCH_DOWNGRADE_DENIED');
+    return record.epoch;
   };
   const clock = () => {
     const value = now();
@@ -113,11 +121,11 @@ function createDisposableCredentialEpochMiddleware({
           const original = ctx.params?.payload;
           const webId = original?.webId;
           const account = await getAccount(ctx, webId);
-          if (!scopedAccount(account, webId)) return next(ctx);
+          const first = await read(webId, account);
+          if (first === null) return next(ctx);
           if (!original || Object.getPrototypeOf(original) !== Object.prototype ||
               TOKEN_KEYS.some(k => Object.prototype.hasOwnProperty.call(original, k)))
             refuse('CREDENTIAL_EPOCH_TOKEN_SHAPE_INVALID');
-          const first = await read(webId);
           const issuedAt = clock();
           // SemApps' upstream JWT signer accepts iat/exp JSON claims.
           // Never accept epoch/iat/exp from the HTTP client.
@@ -135,7 +143,8 @@ function createDisposableCredentialEpochMiddleware({
           }
           // A credential change racing signing means the resulting token
           // must not be given to the caller.
-          const second = await read(webId);
+          const afterAccount = await getAccount(ctx, webId);
+          const second = await read(webId, afterAccount);
           if (!equalEpoch(first, second)) refuse('CREDENTIAL_EPOCH_CHANGED');
           return result;
         };
@@ -150,11 +159,11 @@ function createDisposableCredentialEpochMiddleware({
           let account;
           try { account = await getAccount(ctx, webId); }
           catch { return false; }
-          if (!scopedAccount(account, webId)) return payload;
-          if (!safeToken(payload)) return false;
           try {
-            const current = await read(webId);
-            return equalEpoch(payload.paper_credential_epoch, current) ?
+            const current = await read(webId, account);
+            if (current === null) return payload;
+            return safeToken(payload) &&
+              equalEpoch(payload.paper_credential_epoch, current) ?
               payload : false;
           } catch { return false; }
         };

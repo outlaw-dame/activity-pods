@@ -6,11 +6,13 @@ const { Errors: { MoleculerError } } = require('moleculer');
 // plaintext password/reset/tombstone actions. These mutate the underlying
 // account outside Paper's independently attested pending-epoch coordinator.
 // Existing legacy accounts are unaffected by this holding fence.
-// These are inherited from moleculer-db. They are *not* the reviewed
-// SemApps create/change/settings/delete actions: arbitrary generic inserts
-// and updates have no owner-scoped credential/consent authorization.
-const RAW_DB_WRITES = new Set([
-  'auth.account.insert', 'auth.account.update', 'auth.account.remove'
+// Inherited moleculer-db insert/update/remove are unscoped. Direct
+// SemApps create/attachWebId also bypass the production signup fuse if
+// invoked outside auth.signup. Until the authenticated PostgreSQL owner
+// coordinator is activated, none is a valid production write surface.
+const UNSCOPED_IDENTITY_WRITES = new Set([
+  'auth.account.insert', 'auth.account.update', 'auth.account.remove',
+  'auth.account.create', 'auth.account.attachWebId'
 ]);
 
 const ENROLLED_MUTATIONS = new Set([
@@ -68,14 +70,14 @@ module.exports = function AccountEnrollmentMiddleware() {
   // Capture the production boundary once at construction. Never let
   // runtime environment mutation, broker-call metadata or action params
   // reopen an inherited generic database write route.
-  const closedRawAccountWrites = process.env.NODE_ENV === 'production';
+  const closedUnscopedIdentityWrites = process.env.NODE_ENV === 'production';
   return {
     name: 'AccountEnrollment',
     localAction(next, action) {
-      if (closedRawAccountWrites && RAW_DB_WRITES.has(action.name)) {
-        return async function denyGenericAccountWrite() {
-          throw new MoleculerError('Unscoped raw account mutation is unavailable',
-            403, 'ACCOUNT_RAW_DATABASE_MUTATION_DENIED',
+      if (closedUnscopedIdentityWrites && UNSCOPED_IDENTITY_WRITES.has(action.name)) {
+        return async function denyUnscopedIdentityWrite() {
+          throw new MoleculerError('Unscoped account identity mutation is unavailable',
+            403, 'ACCOUNT_UNSCOPED_IDENTITY_WRITE_DENIED',
             { retryable: false });
         };
       }

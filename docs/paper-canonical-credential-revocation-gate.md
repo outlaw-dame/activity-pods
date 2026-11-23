@@ -184,3 +184,12 @@ create independently immutable archive storage, execute physical multi-store
 PITR, cover real owner-authenticated SemApps mutation pathways, or give
 production admission. No production middleware import or service activation
 is permitted. The source-controlled signup fuse remains CLOSED.
+
+The same disposable PG18 proof now composes the existing RS256 credential
+middleware with the **actual separate-login PostgreSQL reader** and an
+Ed25519-signed nonce-bound head. It verifies old JWT denial while mutation
+is pending, after a new epoch is sealed, after a deliberate PostgreSQL row
+rewind, and after terminal disable, while a freshly signed new-generation
+JWT is accepted only when all authorities agree. The SemApps broker lookup
+is still a local fixture; this is not a deployed authenticated password
+reset/rotation route or hosted Solid-OIDC/SAI/PDS acceptance.

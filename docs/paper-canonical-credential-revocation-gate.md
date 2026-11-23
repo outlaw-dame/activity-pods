@@ -238,7 +238,7 @@ adds narrowly scoped, test-only database enforcement:
 2. A separate \`paper_credential_native_writer\` has EXECUTE on
    \`write_native_bcrypt\` only. The function locks the owner epoch and
    native account, requires an exact pending UUID and next revision,
-   accepts only encoded bcrypt with cost >=10, and atomically writes
+   accepts only encoded bcrypt with work factor 10–14 (the pinned SemApps implementation uses 10; values outside the range are rejected to prevent excessive login work), and atomically writes
    the native bcrypt and SHA-256 receipt to an append-only operation
    table. A lost ACK is reconciled using the operation UUID; it is
    **not automatically retried or rolled back**.

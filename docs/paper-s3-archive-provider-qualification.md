@@ -15,6 +15,9 @@
 Primary source documentation:
 - https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-s3-compatible-api
 - https://www.backblaze.com/docs/cloud-storage-s3-compatible-app-keys
+- https://www.backblaze.com/docs/cloud-storage-iam-sts-api
+- https://www.backblaze.com/apidocs/getcalleridentity-get
+- https://www.backblaze.com/docs/oidc-workload-identity-with-backblaze-iam
 - https://www.backblaze.com/apidocs/s3-put-object
 - https://storj.dev/dcs/buckets/object-lock
 - https://storj.dev/dcs/api/s3/credentials
@@ -37,10 +40,18 @@ race and retention test is required; no silent fallback or unsafe retry.
 different human-operated organization/project or account, with
 independent administration, credentials, recovery and controlled
 account deletion. Two S3Client objects or credentials within the same
-provider project do not establish independence. Backblaze app keys use
-B2 capabilities; Storj uses access grants/macaroons rather than AWS
-IAM and STS numeric account IDs. The AWS-only verification remains
-untouched and must not be weakened with fake STS results.
+provider project do not establish independence. Most Backblaze accounts use restricted B2 application keys.
+Backblaze also introduced AWS-compatible IAM/STS in 2026, including
+GetCallerIdentity, AssumeRole and OIDC workload identity; this is
+limited to eligible Enterprise Web Console customers and uses
+https://sts.backblazeb2.com (NOT AWS regional STS). A separately
+governed B2 account with confirmed enterprise IAM entitlement can
+undergo an additional Backblaze-specific STS identity audit.
+Never silently treat that as AWS STS, and never require it on a
+standard B2 app-key account that cannot use it. Storj uses access
+grants/macaroons rather than AWS IAM and STS numeric account IDs.
+The AWS-only verification remains untouched and must not be
+weakened with fake STS results.
 
 **Monotonic latest-head:** a protected *historical* receipt does not
 prove it is the latest credential epoch after a PostgreSQL rollback.

@@ -77,3 +77,74 @@ test('real broker and RS256 service fence incomplete accounts across password, t
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+
+test('upstream SemApps enrolled-owner password/reset/tombstone actions fail closed before mutation', async () => {
+  const webId = 'https://provider.example/users/unified';
+  const legacy = 'https://provider.example/users/legacy';
+  const mutations = [
+    'setPassword', 'setNewPassword', 'generateResetPasswordToken',
+    'updateAccountSettings', 'deleteByWebId', 'setTombstone'
+  ];
+  let account = {webId,username:'unified',signupReservationId:crypto.randomUUID()};
+  let failLookup = false;
+  const invoked = [];
+  const lookups = [];
+  const broker = new ServiceBroker({logger:false, cacher:false,
+    middlewares:[AccountEnrollment()]});
+  const actions = Object.fromEntries(mutations.map(name => [name,{
+    handler() {invoked.push(name); return { changed:true }; }
+  }]));
+  actions.findByWebId = {handler(ctx) {
+    lookups.push({params:{...ctx.params},meta:{...ctx.meta}});
+    assert.deepEqual(ctx.meta,{});
+    if (failLookup) throw Error('Sensitive storage error');
+    return ctx.params.webId === account?.webId ? account : null;
+  }};
+  broker.createService({name:'auth.account',actions});
+  try {
+    await broker.start();
+    for(const marker of [crypto.randomUUID(),'',null,false,[]]) {
+      account={webId,username:'unified',signupReservationId:marker};
+      for(const name of mutations){
+        const params={webId,password:'fake-should-not-run',
+          token:'untrusted',newPassword:'fake-should-not-run'};
+        const meta=name==='updateAccountSettings'?
+          {webId,dataset:'hostile-caller-dataset'} :
+          {webId:'https://attacker.invalid/other',dataset:'hostile'};
+        await assert.rejects(broker.call('auth.account.'+name,params,{meta}),
+          {type:'ACCOUNT_ENROLLMENT_MUTATION_NOT_RELEASED'});
+      }
+    }
+    assert.equal(invoked.length,0,'no enrolled action can execute a native mutation');
+    assert.equal(lookups.length,mutations.length*5);
+    account={webId,username:'unified'};
+    // When the owner has no enrollment marker, do not rewrite the legacy
+    // SemApps password/reset behavior (backward compatibility).
+    for(const name of mutations) {
+      const params={webId,password:'password',token:'token',newPassword:'next'};
+      const meta={webId};
+      assert.deepEqual(await broker.call('auth.account.'+name,params,{meta}),{changed:true});
+    }
+    assert.deepEqual(invoked,mutations);
+    // Neither caller-controlled routing metadata nor alternate account lookup
+    // errors can relax the fence. No retries on ambiguous storage failure.
+    account={webId,username:'unified',signupReservationId:crypto.randomUUID()};
+    const before=lookups.length;
+    failLookup=true;
+    await assert.rejects(broker.call('auth.account.setPassword',
+      {webId,password:'password'}),{type:'ACCOUNT_ENROLLMENT_MUTATION_NOT_RELEASED'});
+    assert.equal(lookups.length,before+1);
+    failLookup=false;
+    await assert.rejects(broker.call('auth.account.updateAccountSettings',
+      {newPassword:'password'},{meta:{webId:legacy}}),
+      {type:'ACCOUNT_ENROLLMENT_MUTATION_NOT_RELEASED'});
+    await assert.rejects(broker.call('auth.account.setNewPassword',
+      {webId:legacy,token:'not-valid',password:'password'}),
+      {type:'ACCOUNT_ENROLLMENT_MUTATION_NOT_RELEASED'});
+    await assert.rejects(broker.call('auth.account.updateAccountSettings',
+      {newPassword:'password'},{meta:{}}),
+      {type:'ACCOUNT_ENROLLMENT_MUTATION_NOT_RELEASED'});
+    assert.deepEqual(invoked,mutations);
+  }finally{await broker.stop();}
+});

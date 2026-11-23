@@ -2,6 +2,41 @@
 
 const { Errors: { MoleculerError } } = require('moleculer');
 
+// The enrolled-but-not-released owner cannot use the upstream SemApps
+// plaintext password/reset/tombstone actions. These mutate the underlying
+// account outside Paper's independently attested pending-epoch coordinator.
+// Existing legacy accounts are unaffected by this holding fence.
+const ENROLLED_MUTATIONS = new Set([
+  'auth.account.setPassword',
+  'auth.account.setNewPassword',
+  'auth.account.generateResetPasswordToken',
+  'auth.account.updateAccountSettings',
+  'auth.account.deleteByWebId',
+  'auth.account.setTombstone'
+]);
+
+function refuseMutation() {
+  throw new MoleculerError('Unified account credential mutation is not released',
+    503, 'ACCOUNT_ENROLLMENT_MUTATION_NOT_RELEASED', { retryable: false });
+}
+async function assertNoEnrolledMutation(ctx, actionName) {
+  // Upstream updateAccountSettings takes the WebID from ctx.meta, not
+  // ctx.params; other SemApps mutations consume ctx.params.webId.
+  const webId = actionName === 'auth.account.updateAccountSettings'
+    ? ctx.meta?.webId : ctx.params?.webId;
+  if (typeof webId !== 'string' || webId.length < 8 || webId.length > 2048)
+    refuseMutation();
+  let account;
+  try {
+    account = await ctx.broker.call('auth.account.findByWebId',
+      { webId }, { meta: {}, timeout: 3000, retries: 0 });
+  } catch { refuseMutation(); }
+  if (!account || account.webId !== webId) refuseMutation();
+  if (Object.prototype.hasOwnProperty.call(account, 'signupReservationId'))
+    refuseMutation();
+}
+
+
 function deny() {
   throw new MoleculerError('Account enrollment is incomplete',
     403, 'ACCOUNT_ENROLLMENT_INCOMPLETE', { retryable: false });
@@ -26,6 +61,12 @@ module.exports = function AccountEnrollmentMiddleware() {
   return {
     name: 'AccountEnrollment',
     localAction(next, action) {
+      if (ENROLLED_MUTATIONS.has(action.name)) {
+        return async function fencedMutation(ctx) {
+          await assertNoEnrolledMutation(ctx, action.name);
+          return next(ctx);
+        };
+      }
       if (action.name === 'auth.account.verify') {
         return async function verify(ctx) {
           const account = await next(ctx);

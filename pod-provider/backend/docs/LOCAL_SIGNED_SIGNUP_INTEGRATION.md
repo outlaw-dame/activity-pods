@@ -99,3 +99,38 @@ uses a real Moleculer broker and SemApps RS256 JWT service with ephemeral keys;
 account storage is a fixture. The signup regression suite verifies that delegated
 signup makes no JWT call and persists the fence before identity creation. Neither
 test substitutes for a successful real browser signup.
+
+## Upstream SemApps mutation holding fence (November 2026)
+
+The installed SemApps account service has multiple *independent* methods
+that change a password, reset token or stored native identity. The broker
+must not allow them to bypass a pending canonical credential epoch simply
+because signup is still CLOSED. The always-registered
+`account-enrollment` middleware now checks **six** native account
+actions before the upstream action handler executes:
+
+- `setPassword`, `setNewPassword`, `generateResetPasswordToken`,
+  `updateAccountSettings`, `deleteByWebId`, `setTombstone`.
+
+For `updateAccountSettings`, upstream SemApps reads the WebID from
+broker metadata, so the guard does too; the other five use their WebID
+parameter. Every guard performs a **fresh, uncached, bounded no-retry**
+private `auth.account.findByWebId` lookup with isolated broker metadata.
+If lookup fails, mismatches, is missing or finds an enrollment marker
+(including a malformed marker), the mutation fails **before** downstream
+storage is touched. A previously enrolled but still unreleased owner
+cannot use a reset/delete action to circumvent the native PostgreSQL v3
+password trigger or canonical credential pending state.
+
+Existing unmarked legacy account behavior remains unchanged; this is a
+holding fence, **not** a new authenticated password-change mechanism
+or proof of independent monotonic custody. A physically restored account
+that *loses* its marker requires the independent credential head and v3
+SQL enforcement; this broker guard **alone cannot prevent a stale
+restored account from downgrading** and is not a basis for release.
+
+The new real Moleculer broker regression calls all six action entrypoints,
+verifies zero mutation-side effects for valid/malformed enrollment markers,
+strict lookup isolation/fail-close and no retries, and verifies that
+unmarked legacy operations remain callable. It runs as part of the
+existing dependency/lint acceptance.

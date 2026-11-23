@@ -82,13 +82,17 @@ assert_credential() {
 # must be physically restored together; an old password and old active epoch
 # cannot be accepted against a newer independent high-water.
 assert_native() {
-  local name="$1" expected_writes="$2" expected_hash="$3" actual writes
+  local name="$1" expected_writes="$2" expected_hash="$3" expected_token="$4" actual writes token
   actual="$(sql "$name" -Atqc \
     "SELECT data->>'hashedPassword' FROM paper_private_auth.accounts
      WHERE data->>'webId'='$credential_webid';")"
   writes="$(sql "$name" -Atqc \
     "SELECT count(*)::text FROM paper_credential_epoch.native_writes;")"
-  if [[ "$actual" != "$expected_hash" || "$writes" != "$expected_writes" ]]; then
+  token="$(sql "$name" -Atqc \
+    "SELECT CASE WHEN data ? 'resetPasswordToken' THEN 'present' ELSE 'absent' END
+     FROM paper_private_auth.accounts WHERE data->>'webId'='$credential_webid';")"
+  if [[ "$actual" != "$expected_hash" || "$writes" != "$expected_writes" ||
+        "$token" != "$expected_token" ]]; then
     echo "Physically restored SemApps account/receipt does not match: $name" >&2
     return 1
   fi
@@ -135,11 +139,12 @@ start_source() {
      jsonb_build_object('username','claimtest-physical',
       'webId','$credential_webid',
       'signupReservationId','22222222-2222-4222-8222-222222222222',
-      'hashedPassword','$credential_old'));" >/dev/null
+      'hashedPassword','$credential_old',
+      'resetPasswordToken','prior-reset-before-revocation'));" >/dev/null
   [[ "$(sql "$name" -Atqc \
     "SELECT paper_credential_epoch.enroll_owner('$credential_webid');")" == t ]] || return 1
   assert_credential "$name" 1 active
-  assert_native "$name" 0 "$credential_old"
+  assert_native "$name" 0 "$credential_old" present
   # A real streamed physical base backup + manifest, not pg_dump.
   docker exec -u postgres "$name" pg_basebackup -U postgres \
     -D /backup/base -Fp -X stream --checkpoint=fast
@@ -168,7 +173,7 @@ start_source() {
     "SELECT paper_credential_epoch.seal_verified_native(
        '$credential_webid','$credential_op',2,decode('$receipt','hex'));")" == t ]] || return 1
   assert_credential "$name" 2 active
-  assert_native "$name" 1 "$credential_new"
+  assert_native "$name" 1 "$credential_new" absent
   [[ "$(sql "$name" -Atqc \
     "SELECT paper_credential_epoch.disable_owner('$credential_webid');")" == t ]] || return 1
   assert_credential "$name" 3 disabled
@@ -217,11 +222,11 @@ EOF
   if [[ "$point" == before ]]; then
     assert_epoch "$name" 1 active
     assert_credential "$name" 1 active
-    assert_native "$name" 0 "$credential_old"
+    assert_native "$name" 0 "$credential_old" present
   else
     assert_epoch "$name" 2 blocked
     assert_credential "$name" 3 disabled
-    assert_native "$name" 1 "$credential_new"
+    assert_native "$name" 1 "$credential_new" absent
   fi
   local original="paper-pitr-${suffix}-${role}" original_id restored_id
   original_id="$(sql "$original" -Atqc \

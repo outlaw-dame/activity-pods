@@ -120,6 +120,15 @@ test('different audience owner or client cannot reuse a signed checkpoint',async
   owner:'https://paper.example/users/mallory',clientId,authority:f.authority
  }),'R2_CERT_SCOPE_INVALID');
 });
+test('unbranded caller-supplied readVerified cannot spoof authority',async()=>{
+ const f=fixture(),e=buildEpoch(1);
+ await f.archive.putAndVerify(e);
+ await denied(()=>f.archive.readCertifiedLatestEpoch({owner,clientId,
+  authority:{readVerified:async()=>({
+   subject,revision:'1',sha256:'f'.repeat(64)
+  })}
+ }),'R2_CERT_AUTHORITY_REQUIRED');
+});
 test('explicit test gate refuses production signer/reader',()=>{
  const f=fixture();
  assert.equal(f.authority.releaseAccepted,false);

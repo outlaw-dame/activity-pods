@@ -329,3 +329,54 @@ still needs the **externally independent latest credential head** to
 be refused; these physical restore tests do not supply live custody.
 
 The v3 schema remains NONACTIVATED, with release and signup CLOSED.
+
+## Canonical owner identity survives a rewound enrollment marker
+
+A security review of v3 identified a narrower but important restoration
+gap: the native PostgreSQL account trigger classified rows using the
+local signup reservation marker OR a canonical owner lookup, but only
+enforced credential/recovery fields. If the same native account JSONB
+row lost its marker after a partial restore while the owner epoch table
+survived, generic profile/identity mutations could still run, moving
+the WebID or username to an unguarded legacy identity.
+
+The v3 candidate is now hardened as follows:
+
+- If the canonical PostgreSQL owners table contains the WebID but the
+  native SemApps account no longer has the enrollment marker, **all
+  native account UPDATE operations fail** with SQLSTATE 42501. No
+  automatic downgrade to legacy or guessed marker repair occurs.
+  Operator reconciliation requires an independently verified head.
+- For any tracked unified account, the record primary-key UUID,
+  username, WebID, and signup reservation marker are immutable,
+  alongside previously protected recovery email, reset token,
+  password hash, and tombstone. **The only WebID exception** is the
+  initial SemApps `attachWebId` from a claimed account with no previous
+  WebID and no canonical row, to the exact already-reserved
+  username-derived HTTPS identity; any forgery or subsequent change
+  is denied. The real SemApps integration test caught this necessary
+  signup transition before merge. The trigger observes all UPDATE
+  operations, including columns other than JSONB data.
+- Untracked legacy accounts retain previous password, email,
+  reset-token, preference and deletion behavior.
+- A real PostgreSQL18 regression *deliberately simulates* an inconsistent
+  physical restore by disabling triggers solely on the disposable
+  CI-admin connection while deleting the marker. It then proves a
+  separately restricted login is unable to update preferences,
+  change password, reassign WebID/username or delete that row. It
+  separately proves the SQL owner cannot change a tracked account UUID
+  through normal trigger execution. Finally it restores the fixture
+  marker only under the disposable test administrator and checks
+  ordinary noncredential profile updates work again.
+- The negative test now requires SQLSTATE **42501** for every
+  denied operation instead of accepting any unrelated SQL error as
+  success. This prevents malformed-query errors from masquerading
+  as authorization enforcement.
+
+This is a **database-local** recovery guard. It does not establish
+fresh remote high-water if both the account row and canonical
+PostgreSQL owner table are rolled back. A separately operated,
+nonrewindable, nonce-challenged external signer remains mandatory
+for owner issuance, session acceptance and cross-protocol recovery.
+
+The SQL is NONACTIVATED; production signup and release remain CLOSED.

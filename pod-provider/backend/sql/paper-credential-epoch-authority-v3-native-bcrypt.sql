@@ -52,6 +52,17 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path=pg_catalog AS $guard$
 BEGIN
   IF TG_OP='UPDATE' THEN
+    -- An enrolled owner remains enrolled even if a physically restored
+    -- SemApps JSONB record loses its marker. The independent PG owner table
+    -- is authoritative for the local classification, not caller-controlled
+    -- account JSON or an old database snapshot of that JSON.
+    IF NOT (OLD.data ? 'signupReservationId') AND EXISTS (
+      SELECT 1 FROM paper_credential_epoch.owners o
+      WHERE o.webid=OLD.data->>'webId'
+    ) THEN
+      RAISE EXCEPTION 'Unified account enrollment is missing; recovery required'
+        USING ERRCODE='42501';
+    END IF;
     -- Legacy SemApps accounts must retain their old password/reset/update
     -- behavior. The independent ledger classifies a tracked unified owner;
     -- never rely on a possibly rewound enrollment marker alone.
@@ -59,6 +70,36 @@ BEGIN
       SELECT 1 FROM paper_credential_epoch.owners e
       WHERE e.webid=OLD.data->>'webId'
     ) THEN
+      -- Credential-owner identity and its linkage to the native account are
+      -- immutable, including the row UUID. Otherwise a direct JSONB update
+      -- can move a canonical WebID to a different, unguarded identity.
+      IF NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.data->'username' IS DISTINCT FROM OLD.data->'username'
+        OR NEW.data->'signupReservationId' IS DISTINCT FROM
+           OLD.data->'signupReservationId'
+      THEN
+        RAISE EXCEPTION 'Unified account canonical identity is immutable'
+          USING ERRCODE='42501';
+      END IF;
+      IF NEW.data->'webId' IS DISTINCT FROM OLD.data->'webId' THEN
+        -- SemApps legitimately binds the reserved WebID exactly ONCE
+        -- after native account creation and BEFORE canonical enrollment.
+        -- Its path is pinned by the already-immutable username. Never
+        -- allow reassignment, removal, a second attach, or claimed-owner
+        -- rebinding. This also agrees with guard_identity on the table.
+        IF OLD.data ? 'webId'
+          OR NOT (OLD.data ? 'signupReservationId')
+          OR NEW.data->>'webId' IS DISTINCT FROM
+             'https://paper.example.org/' || (OLD.data->>'username')
+          OR EXISTS (
+            SELECT 1 FROM paper_credential_epoch.owners e
+            WHERE e.webid=NEW.data->>'webId'
+          )
+        THEN
+          RAISE EXCEPTION 'Unified account WebID binding is immutable'
+            USING ERRCODE='42501';
+        END IF;
+      END IF;
       -- These fields control recovery identity and terminal account state.
       -- They cannot be mutated by the general-purpose JSONB account role.
       -- A future owner-approved workflow must separately authorize them.
@@ -120,7 +161,7 @@ END
 $guard$;
 REVOKE ALL ON FUNCTION paper_credential_epoch.guard_native_account() FROM PUBLIC;
 CREATE TRIGGER paper_native_epoch_guard
-BEFORE INSERT OR UPDATE OF data OR DELETE ON paper_private_auth.accounts
+BEFORE INSERT OR UPDATE OR DELETE ON paper_private_auth.accounts
 FOR EACH ROW EXECUTE FUNCTION paper_credential_epoch.guard_native_account();
 
 -- Only this separate LOGIN/role may write a bcrypt credential. Upstream

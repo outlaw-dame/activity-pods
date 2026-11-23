@@ -92,8 +92,9 @@ function createDisposableCredentialEpochMiddleware({
       if (hasEnrollmentMarker(account, webId)) refuse('CREDENTIAL_EPOCH_DOWNGRADE_DENIED');
       return null;
     }
-    if (!hasEnrollmentMarker(account, webId) || !validRecord(record, webId))
+    if (!hasEnrollmentMarker(account, webId))
       refuse('CREDENTIAL_EPOCH_DOWNGRADE_DENIED');
+    if (!validRecord(record, webId)) refuse();
     return record.epoch;
   };
   const clock = () => {

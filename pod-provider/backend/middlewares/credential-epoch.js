@@ -54,8 +54,8 @@ function scopedAccount(account, webId) {
 }
 function equalEpoch(first, second) {
   return validEpoch(first) && validEpoch(second) &&
-    crypto.timingSafeEqual(Buffer.from(first), Buffer.from(second)) &&
-    first.length === second.length;
+    first.length === second.length &&
+    crypto.timingSafeEqual(Buffer.from(first), Buffer.from(second));
 }
 
 function createDisposableCredentialEpochMiddleware({

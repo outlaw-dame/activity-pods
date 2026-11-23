@@ -107,3 +107,43 @@ required.
 
 Never enable this middleware just by changing the test-only
 environment switches or clearing signup's production fuse.
+
+## PostgreSQL 18 restricted authority candidate (NONACTIVATED)
+
+The dedicated SQL candidate at
+`pod-provider/backend/sql/paper-credential-epoch-authority-v1.sql`
+is isolated from the SemApps/Redis/Jena service credentials. It defines
+three non-LOGIN roles (reader, enroller, coordinator) and grants **function
+execution only**, with no ordinary SELECT/UPDATE/CREATE privileges against
+the protected owner table. Function bodies are SECURITY DEFINER with a
+fixed pg_catalog search path. It has no background migration, endpoint,
+authorization cutover, or deployment configuration.
+
+- Enrollment is create-once and cannot turn a disabled owner into an
+  active one. Actual authorized signup/owner proof is a prerequisite and
+  is NOT implemented by the SQL function itself.
+- Credential mutation first transactionally enters `pending` with a
+  UUID and monotonically increasing proposed epoch. While pending,
+  every authorization reader must DENY. Wrong operation, old expected
+  revision, concurrent begin and duplicate seal fail rather than retry.
+- Sealing requires an operation-matched 32-byte downstream mutation
+  receipt digest. This enforces shape and identity, not authenticity:
+  the service must verify that the digest binds a **committed, authorized**
+  SemApps write before invoking seal. Unknown receipt or lost write
+  acknowledgement keeps the owner pending.
+- Terminal disable monotonically advances epoch and denies re-enrollment.
+  None of these operations can be allowed to silently skip the
+  independently held signed latest credential checkpoint.
+- **PostgreSQL physical backup alone is rewindable**; roles and SQL
+  transactions are not a replacement for externally controlled latest
+  epoch custody, before/after physical PITR, or the SemApps password
+  mutation API integration.
+
+CI: .github/workflows/paper-credential-pg18-authority.yml
+runs a pinned real PostgreSQL 18 database and
+`pod-provider/backend/scripts/proof-paper-credential-pg18.sh`
+with disposable guards. It checks unauthorized direct table reads/writes,
+schema writes, function privilege separation, pending/failure refusal,
+replay/re-enrollment denial, and terminal disabled state. It MUST stay
+nonactivated until the full owner-verified credential mutation service,
+distributed read path, independent live custody and recovery tests exist.

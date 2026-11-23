@@ -52,22 +52,46 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path=pg_catalog AS $guard$
 BEGIN
   IF TG_OP='UPDATE' THEN
-    IF NEW.data->>'hashedPassword' IS DISTINCT FROM
-       OLD.data->>'hashedPassword' THEN
-      IF NOT EXISTS (
-        SELECT 1 FROM paper_credential_epoch.native_writes w
-        JOIN paper_credential_epoch.owners e ON e.webid=w.webid
-        WHERE w.webid=OLD.data->>'webId'
-          AND OLD.data->>'webId'=NEW.data->>'webId'
-          AND w.writing_xid=pg_catalog.pg_current_xact_id()
-          AND w.new_hash_sha256=pg_catalog.sha256(
-            pg_catalog.convert_to(NEW.data->>'hashedPassword','UTF8'))
-          AND e.state='pending'
-          AND e.operation_id=w.operation_id
-          AND e.next_epoch=w.following_epoch
-      ) THEN
-        RAISE EXCEPTION 'Credential change requires a pending owner operation'
+    -- Legacy SemApps accounts must retain their old password/reset/update
+    -- behavior. The independent ledger classifies a tracked unified owner;
+    -- never rely on a possibly rewound enrollment marker alone.
+    IF OLD.data ? 'signupReservationId' OR EXISTS (
+      SELECT 1 FROM paper_credential_epoch.owners e
+      WHERE e.webid=OLD.data->>'webId'
+    ) THEN
+      -- These fields control recovery identity and terminal account state.
+      -- They cannot be mutated by the general-purpose JSONB account role.
+      -- A future owner-approved workflow must separately authorize them.
+      IF NEW.data->'email' IS DISTINCT FROM OLD.data->'email'
+        OR NEW.data->'deletedAt' IS DISTINCT FROM OLD.data->'deletedAt'
+      THEN
+        RAISE EXCEPTION 'Tracked owner recovery or tombstone change refused'
           USING ERRCODE='42501';
+      END IF;
+
+      -- A successful password rotation must also revoke any older reset
+      -- capability in the *same* PostgreSQL transaction. Setting a new
+      -- reset token is never a side effect of an approved password write.
+      IF NEW.data->>'hashedPassword' IS DISTINCT FROM
+           OLD.data->>'hashedPassword'
+        OR NEW.data->'resetPasswordToken' IS DISTINCT FROM
+           OLD.data->'resetPasswordToken'
+      THEN
+        IF NEW.data ? 'resetPasswordToken' OR NOT EXISTS (
+          SELECT 1 FROM paper_credential_epoch.native_writes w
+          JOIN paper_credential_epoch.owners e ON e.webid=w.webid
+          WHERE w.webid=OLD.data->>'webId'
+            AND OLD.data->>'webId'=NEW.data->>'webId'
+            AND w.writing_xid=pg_catalog.pg_current_xact_id()
+            AND w.new_hash_sha256=pg_catalog.sha256(
+              pg_catalog.convert_to(NEW.data->>'hashedPassword','UTF8'))
+            AND e.state='pending'
+            AND e.operation_id=w.operation_id
+            AND e.next_epoch=w.following_epoch
+        ) THEN
+          RAISE EXCEPTION 'Credential and reset changes require a pending operation'
+            USING ERRCODE='42501';
+        END IF;
       END IF;
     END IF;
     RETURN NEW;
@@ -144,7 +168,7 @@ BEGIN
     r,pg_catalog.pg_current_xact_id());
   UPDATE paper_private_auth.accounts a
     SET data=pg_catalog.jsonb_set(a.data,'{hashedPassword}',
-      pg_catalog.to_jsonb(p_bcrypt),true)
+      pg_catalog.to_jsonb(p_bcrypt),true) - 'resetPasswordToken'
     WHERE a.id=a_id;
   GET DIAGNOSTICS changed=ROW_COUNT;
   IF changed<>1 THEN
@@ -173,6 +197,7 @@ SET search_path=pg_catalog AS $confirm$
      AND w.new_hash_sha256=pg_catalog.sha256(
        pg_catalog.convert_to(a.data->>'hashedPassword','UTF8'))
      AND a.data ? 'signupReservationId'
+     AND NOT (a.data ? 'resetPasswordToken')
  );
 $confirm$;
 

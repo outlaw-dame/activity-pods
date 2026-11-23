@@ -106,7 +106,7 @@ async function main(){
     assert.equal((await q(admin,
       'SELECT paper_credential_epoch.enroll_owner($1) AS ok',
       [rewound])).rows[0].ok,true);
-    async function restoreMarker(removed) {
+    const restoreMarker = async (removed) => {
       const connection=await admin.connect();
       try {
         await connection.query('BEGIN');

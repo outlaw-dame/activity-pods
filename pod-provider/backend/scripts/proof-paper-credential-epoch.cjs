@@ -37,10 +37,13 @@ function stateful() {
       signupReservationId: 'reservation-00001', hashedPassword: 'old' }],
     [legacy, { webId: legacy, username: 'legacy-account', hashedPassword: 'legacy' }]
   ]);
-  const epochs = new Map([[webId, { webId, epoch: '1', state: 'active' }]]);
+  const epochs = new Map([
+    [webId, { webId, epoch: '1', state: 'active', mode: 'unified' }],
+    [legacy, { webId: legacy, mode: 'legacy' }]
+  ]);
   let readFailure = false;
   const authority = {
-    async readCurrent(id) {
+    async readOwnerState(id) {
       if (readFailure) throw Error('independent unavailable');
       return { ...epochs.get(id) };
     },
@@ -49,14 +52,14 @@ function stateful() {
       if (!old || old.state !== 'active') return { accepted: false };
       const nextEpoch = (BigInt(old.epoch) + 1n).toString();
       epochs.set(id, { webId: id, epoch: old.epoch,
-        state: 'pending', nextEpoch });
+        state: 'pending', mode: 'unified', nextEpoch });
       return { accepted: true, previousEpoch: old.epoch, nextEpoch };
     },
     async commitChange({ webId: id, nextEpoch }) {
       const current = epochs.get(id);
       if (current?.state !== 'pending' || current.nextEpoch !== nextEpoch)
         return { committed: false };
-      epochs.set(id, { webId: id, epoch: nextEpoch, state: 'active' });
+      epochs.set(id, { webId: id, epoch: nextEpoch, state: 'active', mode: 'unified' });
       return { committed: true, epoch: nextEpoch };
     }
   };
@@ -109,7 +112,7 @@ test('missing epoch claim, stale generation and old never-expiring tokens deny',
   assert.equal(await f.check(sign({ webId })), false);
   assert.equal(await f.check(sign({ webId,
     paper_credential_epoch: '1', iat: clock(), exp: clock() + 400 })), false);
-  f.epochs.set(webId, { webId, epoch: '2', state: 'active' });
+  f.epochs.set(webId, { webId, epoch: '2', state: 'active', mode: 'unified' });
   assert.equal(await f.check(token), false);
   assert.equal((await f.check(await f.issue())).paper_credential_epoch, '2');
 });
@@ -120,7 +123,7 @@ test('failed/blocked canonical epoch read fails closed without caching', async (
   await denies(() => f.issue(), 'CREDENTIAL_EPOCH_UNAVAILABLE');
   assert.equal(await f.check(token), false);
   f.setReadFailure(false);
-  f.epochs.set(webId, { webId, epoch: '1', state: 'pending' });
+  f.epochs.set(webId, { webId, epoch: '1', state: 'pending', mode: 'unified' });
   await denies(() => f.issue(), 'CREDENTIAL_EPOCH_UNAVAILABLE');
   assert.equal(await f.check(token), false);
 });
@@ -197,6 +200,26 @@ test('new-account expired/unknown-epoch tokens denied; legacy unaffected', async
   assert.equal(await f.check(sign({ webId, paper_credential_epoch: '999999',
     iat: clock(), exp: clock() + 900 })), false);
   assert.ok(await f.check(sign({ webId: legacy })));
+});
+test('rewound account marker cannot downgrade unified owner to legacy', async () => {
+  const f = stateful();
+  const token = await f.issue();
+  delete f.accounts.get(webId).signupReservationId;
+  assert.equal(await f.check(token), false);
+  await denies(() => f.issue(), 'CREDENTIAL_EPOCH_DOWNGRADE_DENIED');
+  // A restored authority that misclassifies a currently enrolled account
+  // is also a hard error when the marker still exists.
+  f.accounts.get(webId).signupReservationId = 'reservation-00001';
+  f.epochs.set(webId, { webId, mode: 'legacy' });
+  assert.equal(await f.check(token), false);
+  await denies(() => f.issue(), 'CREDENTIAL_EPOCH_DOWNGRADE_DENIED');
+});
+test('absent independent classification does not fall through to legacy', async () => {
+  const f = stateful();
+  const token = await f.issue();
+  f.epochs.delete(webId);
+  assert.equal(await f.check(token), false);
+  await denies(() => f.issue(), 'CREDENTIAL_EPOCH_UNAVAILABLE');
 });
 test('test-only guard cannot be activated from production environment', () => {
   const f = stateful();

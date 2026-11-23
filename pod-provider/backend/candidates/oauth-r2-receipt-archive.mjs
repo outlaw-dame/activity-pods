@@ -9,6 +9,7 @@
 import crypto from 'node:crypto';
 import {Buffer} from 'node:buffer';
 import {assertReceipt} from './oauth-s3-compliance-archive.mjs';
+import {isDisposableVerifiedCheckpointAuthority} from './oauth-r2-signed-checkpoint.mjs';
 
 const PREFIX='paper/oauth-witness/';
 const EPOCH=/^paper\/oauth-witness\/epochs\/v1\/([a-f0-9]{64})\/([0-9]{19})$/u;
@@ -115,7 +116,7 @@ export function createR2ReceiptArchive({
   // No externally trusted *latest* proof => NO authorization. The
   // caller cannot pass a certificate directly: authority must acquire
   // it from a separately operated source using a pinned signer.
-  if(typeof authority?.readVerified!=='function'||
+  if(!isDisposableVerifiedCheckpointAuthority(authority)||
      typeof owner!=='string'||typeof clientId!=='string')
    deny('R2_CERT_AUTHORITY_REQUIRED');
   // Do not weaken the identity parser to a mere https:// string prefix.

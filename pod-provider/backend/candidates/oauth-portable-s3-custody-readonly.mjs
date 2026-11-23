@@ -12,7 +12,15 @@ import {assertReceipt} from './oauth-s3-compliance-archive.mjs';
 
 const BUCKET=/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u;
 const HEX=/^[a-f0-9]{64}$/u;
-const VERSION=/^[^\x00-\x20\x7f]{1,512}$/u;
+const VERSION=/^.{1,512}$/u;
+// Avoid control characters without relying on a control-character regexp.
+function validVersion(value){
+  return typeof value==='string'&&VERSION.test(value)&&
+    !Array.from(value).some(ch=>{
+      const code=ch.codePointAt(0);
+      return code<=32||code===127;
+    });
+}
 const KEY=/^paper\/oauth-witness\/epochs\/v1\/[a-f0-9]{64}\/[0-9]{19}$/u;
 const DAY=86_400_000;
 const MAX_READ=1024;
@@ -132,7 +140,7 @@ export async function inspectPortableS3ObjectLock({
   });
   if(typeof sample!=='object'||Array.isArray(sample)||!sample||
      !KEY.test(sample.key||'')||!HEX.test(sample.sha256||'')||
-     !VERSION.test(sample.versionId||''))
+     !validVersion(sample.versionId))
     deny('PORTABLE_WORM_SAMPLE_INVALID');
   const history=await call('ListObjectVersionsCommand',{
     Prefix:sample.key,MaxKeys:10

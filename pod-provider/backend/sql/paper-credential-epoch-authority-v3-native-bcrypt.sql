@@ -115,8 +115,9 @@ DECLARE
   changed integer;
 BEGIN
   -- Bcrypt encoded hash only, NEVER an unhashed password or client JWT.
-  -- Minimum work factor 10. The actual hash is created by SemApps.
-  IF p_bcrypt !~ E'^\\$2[aby]\\$(1[0-9]|2[0-9]|3[01])\\$[./A-Za-z0-9]{53}$'
+  -- Restrict bcrypt cost to 10..14 (avoid login CPU denial of service).
+  -- The actual hash is created by SemApps, currently with work factor 10.
+  IF p_bcrypt !~ E'^\\$2[aby]\\$(10|11|12|13|14)\\$[./A-Za-z0-9]{53}$'
      OR pg_catalog.octet_length(p_bcrypt)<>60 THEN RETURN NULL; END IF;
   SELECT * INTO o FROM paper_credential_epoch.owners e
     WHERE e.webid=p_webid FOR UPDATE;

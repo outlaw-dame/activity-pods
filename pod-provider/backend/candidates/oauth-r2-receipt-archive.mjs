@@ -128,7 +128,7 @@ export function createR2ReceiptArchive({
    }catch{return false}
   };
   if(!valid(owner)||!valid(clientId))deny('R2_HIGHWATER_SCOPE_INVALID');
-  const subject=sha(Buffer.from('paper:witness:subject:v1\\0'+owner+'\\0'+clientId));
+  const subject=sha(Buffer.from('paper:witness:subject:v1\0'+owner+'\0'+clientId));
   const first=await authority.readVerified(Object.freeze({owner,clientId}));
   if(first?.subject!==subject||
      typeof first.revision!=='string'||

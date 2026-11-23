@@ -19,7 +19,8 @@ const old='$2b$12$'+'a'.repeat(53),next='$2b$12$'+'b'.repeat(53);
 const third='$2b$12$'+'c'.repeat(53);
 const q=(pool,text,values=[])=>pool.query(text,values);
 async function denied(run,label){
-  await assert.rejects(run,()=>true,'Unauthorized '+label);
+  await assert.rejects(run,e=>e?.code==='42501',
+    'Unauthorized operation must fail with PG insufficient-privilege: '+label);
 }
 function login(role,member,password){
   const pool=new Pool({...options,user:role,password});
@@ -68,6 +69,68 @@ async function main(){
     assert.equal(legacyRow.resetPasswordToken,'legacy-reset');
     assert.equal(legacyRow.email,'legacy-updated@example.test');
     await q(runtime,"DELETE FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[legacy]);
+
+    // Simulate a physical restore with an outdated/missing local marker
+    // while the canonical PG owner ledger still retains the unified owner.
+    // This intentionally bypasses triggers ONLY as the disposable CI
+    // superuser; the normal restricted role must never be able to do so.
+    const rewound='https://paper.example.org/claimtest-recovery12';
+    const reservation='44444444-4444-4444-8444-444444444444';
+    const accountId='55555555-5555-4555-8555-555555555555';
+    await q(admin,'INSERT INTO paper_private_auth.accounts(id,data) VALUES($1,$2::jsonb)',[
+      accountId,JSON.stringify({username:'claimtest-recovery12',webId:rewound,
+        signupReservationId:reservation,hashedPassword:old,preferredLocale:'en'})
+    ]);
+    assert.equal((await q(admin,
+      'SELECT paper_credential_epoch.enroll_owner($1) AS ok',
+      [rewound])).rows[0].ok,true);
+    async function restoreMarker(removed) {
+      const connection=await admin.connect();
+      try {
+        await connection.query('BEGIN');
+        await connection.query("SET LOCAL session_replication_role='replica'");
+        if(removed){
+          await connection.query(
+            "UPDATE paper_private_auth.accounts SET data=data-'signupReservationId' WHERE id=$1",
+            [accountId]);
+        }else{
+          await connection.query(
+            "UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{signupReservationId}',to_jsonb($2::text)) WHERE id=$1",
+            [accountId,reservation]);
+        }
+        await connection.query('COMMIT');
+      }catch(error){
+        await connection.query('ROLLBACK');
+        throw error;
+      }finally{connection.release();}
+    }
+    await restoreMarker(true);
+    assert.equal((await q(admin,"SELECT data ? 'signupReservationId' AS present FROM paper_private_auth.accounts WHERE id=$1",[accountId])).rows[0].present,false);
+    const candidateWrites=[
+      ['UPDATE paper_private_auth.accounts SET data=jsonb_set(data,\'{preferredLocale}\',to_jsonb($2::text)) WHERE id=$1',[accountId,'fr'],'profile mutation after marker rewind'],
+      ["UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{hashedPassword}',to_jsonb($2::text)) WHERE id=$1",[accountId,next],'password mutation after marker rewind'],
+      ["UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{webId}',to_jsonb($2::text)) WHERE id=$1",[accountId,legacy],'WebID identity reassignment after marker rewind'],
+      ["UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{username}',to_jsonb($2::text)) WHERE id=$1",[accountId,'legacy-owner'],'username identity reassignment after marker rewind']
+    ];
+    for(const [statement,parameters,label] of candidateWrites)
+      await denied(()=>q(runtime,statement,parameters),label);
+    await denied(()=>q(runtime,
+      'DELETE FROM paper_private_auth.accounts WHERE id=$1',[accountId]),
+      'canonical owner deletion after marker rewind');
+    // As an additional defense, even the SQL table owner must pass the
+    // BEFORE UPDATE trigger on the row ID; privileges cannot skip it.
+    await denied(()=>q(admin,
+      'UPDATE paper_private_auth.accounts SET id=$2 WHERE id=$1',
+      [accountId,'66666666-6666-4666-8666-666666666666']),
+      'tracked native account primary key replacement');
+    await restoreMarker(false);
+    await q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{preferredLocale}',to_jsonb($2::text)) WHERE id=$1",[accountId,'fr']);
+    assert.equal((await q(admin,
+      "SELECT data->>'preferredLocale' AS locale FROM paper_private_auth.accounts WHERE id=$1",
+      [accountId])).rows[0].locale,'fr');
+    assert.equal((await q(admin,
+      'SELECT mode,state,epoch FROM paper_credential_epoch.read_owner($1)',
+      [rewound])).rows[0].state,'active');
 
     await q(runtime,"UPDATE paper_private_auth.accounts SET data=jsonb_set(data,'{preferredLocale}',to_jsonb($2::text)) WHERE data->>'webId'=$1",[owner,'fr']);
     assert.equal((await q(admin,"SELECT data->>'preferredLocale' AS locale FROM paper_private_auth.accounts WHERE data->>'webId'=$1",[owner])).rows[0].locale,'fr');

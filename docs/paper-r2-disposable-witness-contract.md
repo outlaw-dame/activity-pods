@@ -109,3 +109,38 @@ proofs with audited cost and crash-recovery semantics.
    SemApps/SAI/ATProto paths.
 5. Keep federation staging `release=CLOSED` until full hosted positive
    new-account E2E and independent security review.
+
+## Signed latest checkpoint and bounded recovery fast path
+
+The follow-on NONACTIVATED `oauth-r2-signed-checkpoint.mjs` pins
+a trusted **Ed25519 public key** at construction (never supplied by an
+HTTP request), verifies canonical domain-separated, signed checkpoint
+bytes and the scope subject derived from exact owner/client URLs.
+The checkpoint authority itself must be **operated and persisted outside**
+the Paper provider's ordinary rollback and administrator domain.
+The private signing key must not be present in Paper's API containers,
+R2 clients, CI, or user browsers. Trust is tied to the independently
+configured latest-head **read** capability, not signatures alone.
+
+`readCertifiedLatestEpoch` in the R2 adapter accepts only a
+branded checkpoint-verifier object configured with the pinned
+public key. It fetches the separately sourced signed latest head,
+performs an O(1) exact-key R2 HeadObject/GetObject, validates canonical
+receipt bytes and digest, checks the lock rule before and after
+the read, and **re-reads the signed latest head** afterwards. If a
+revocation occurred during the read, the operation fails closed.
+The old bounded O(history) `readLatestEpoch` method remains as a
+disposable exhaustive forensic test, not an admission hot path.
+
+The deterministic Ed25519 tests simulate forged signatures, changed
+signers, caller-injected fake authority, wrong owner/client scope,
+same-key bytes mismatch, old R2 snapshot against a newer signed
+checkpoint, and concurrent revocation. They also assert that the
+fast path never issues ListObjectsV2.
+
+**Critical limitation:** Cryptographic signatures authenticate
+historical statements; they do not prove freshness if the entire
+independent endpoint replays a previously valid signed head.
+An operationally nonrewindable **latest-head** authority and
+separate historical-continuity audit are still required. Neither
+the verifier nor the R2 bucket has been promoted into production.

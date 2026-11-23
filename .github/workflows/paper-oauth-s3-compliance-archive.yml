@@ -8,6 +8,8 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs'
       - 'pod-provider/backend/candidates/oauth-r2-receipt-archive.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-r2-receipt-archive.mjs'
+      - 'pod-provider/backend/candidates/oauth-r2-signed-checkpoint.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-r2-signed-checkpoint.mjs'
       - 'pod-provider/backend/candidates/oauth-s3-independent-custody.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs'
@@ -45,6 +47,9 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-r2-receipt-archive.mjs
           node --check pod-provider/backend/scripts/proof-oauth-r2-receipt-archive.mjs
           node pod-provider/backend/scripts/proof-oauth-r2-receipt-archive.mjs
+          node --check pod-provider/backend/candidates/oauth-r2-signed-checkpoint.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-r2-signed-checkpoint.mjs
+          node pod-provider/backend/scripts/proof-oauth-r2-signed-checkpoint.mjs
           node --check pod-provider/backend/candidates/oauth-s3-independent-custody.mjs
           node --check pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
           node --check pod-provider/backend/scripts/probe-oauth-independent-s3-custody.mjs

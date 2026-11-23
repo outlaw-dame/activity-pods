@@ -45,6 +45,8 @@ function createDisposableCredentialHeadHttpsTransport({
   testCaPem=null
 }={}){
   if(!allowed(fixtureOnly))deny('CREDENTIAL_TRANSPORT_NOT_RELEASED');
+  if(process.env.NODE_TLS_REJECT_UNAUTHORIZED==='0')
+    deny('CREDENTIAL_TRANSPORT_CONFIG_INVALID');
   if(typeof endpoint!=='string'||endpoint.length<20||endpoint.length>512||
      !Number.isSafeInteger(timeoutMs)||timeoutMs<150||timeoutMs>3500)
     deny('CREDENTIAL_TRANSPORT_CONFIG_INVALID');
@@ -66,6 +68,8 @@ function createDisposableCredentialHeadHttpsTransport({
 
   async function readHead(challenge){
     if(!allowed(fixtureOnly))deny('CREDENTIAL_TRANSPORT_NOT_RELEASED');
+    if(process.env.NODE_TLS_REJECT_UNAUTHORIZED==='0')
+      deny('CREDENTIAL_TRANSPORT_CONFIG_INVALID');
     if(!challenge||challenge.kind!=='paper.credential.challenge.v1'||
        !HEX.test(challenge.subject||'')||!NONCE.test(challenge.nonce||'')||
        typeof challenge.signal?.aborted!=='boolean'||challenge.signal.aborted)
@@ -76,10 +80,11 @@ function createDisposableCredentialHeadHttpsTransport({
     let response;
     try{
       response=await new Promise((resolve,reject)=>{
-        let settled=false;
+        let settled=false,deadline;
         const done=(error,result)=>{
           if(settled)return;
           settled=true;
+          clearTimeout(deadline);
           if(error)reject(error);else resolve(result);
         };
         const request=https.request({
@@ -124,7 +129,10 @@ function createDisposableCredentialHeadHttpsTransport({
           res.on('end',()=>done(null,Buffer.concat(chunks,size)));
           res.on('aborted',()=>done(Error('Witness response interrupted')));
         });
-        request.setTimeout(timeoutMs,()=>request.destroy(Error('Witness deadline')));
+        // A socket idle timeout alone is insufficient: a malicious service
+        // could trickle bytes forever. Bound total end-to-end elapsed time.
+        deadline=setTimeout(()=>request.destroy(Error('Witness deadline')),timeoutMs);
+        request.setTimeout(timeoutMs,()=>request.destroy(Error('Witness socket stalled')));
         request.on('error',done);
         request.end(payload);
       });

@@ -25,8 +25,10 @@ not the WebID or account password. It enforces:
   into the **separate signature and latest-state verifier**, which checks
   authority identity, subject, epoch, nonce, Ed25519 signature, digest and
   strict issuance time. TLS alone never authorizes an owner.
-- Fail-closed timeout, abort and network errors. No automatic retry
-  across ambiguous checkpoint responses.
+- Fail-closed **total elapsed-time** and socket-idle deadlines, abort and
+  network errors. A malicious response that trickles bytes indefinitely cannot
+  prolong authorization. Explicitly refuse `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+  No automatic retry across ambiguous checkpoint responses.
 - An ephemeral self-signed localhost CA is injectable **only** for an
   explicitly disposable `127.0.0.1` proof, never for an arbitrary
   production DNS name. There is no insecure TLS switch.

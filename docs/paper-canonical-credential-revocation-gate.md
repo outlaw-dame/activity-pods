@@ -268,3 +268,27 @@ separately approved tombstone/erasure policy. Production signup
 remains CLOSED. Synthetic bcrypt-shaped strings in the SQL proof are
 not a test of bcrypt password hashing: the existing native SemApps
 account tests separately cover hashing/comparison.
+
+## Expanded physical PostgreSQL18 recovery: real native account + receipt
+
+The disposable two-cluster physical WAL/PITR rehearsal additionally installs
+`paper-local-native-auth.sql` and `paper-credential-epoch-authority-v3-native-bcrypt.sql`
+in **both** separately initialized PostgreSQL18 systems. Each source now
+contains the actual claimed native SemApps account JSONB with a synthetic
+bcrypt-shaped old password, and a restricted unified owner at epoch 1,
+before physical `pg_basebackup`.
+
+After the first named restore point, the test transactionally executes a
+pending operation at epoch 2, writes a new native bcrypt and operation
+receipt through the v3 function, seals that receipt, then terminally
+disables the account (epoch 3) before the second restore point. Real
+archived-WAL recovery of two different physical PGDATA clusters must
+recover the **original bcrypt + no receipt + active epoch 1** before, and
+**new bcrypt + one persisted receipt + disabled epoch 3** after.
+No ordinary app runtime update is used to bypass the credential guard.
+
+This is an actual physical PostgreSQL backup/recovery proof for the SQL
+state that the Paper candidate would use. It is **NOT** proof of live
+external independently immutable checkpoint freshness, native password
+owner authentication, signed PDS state, Redis, Jena, Solid/SAI, or a
+hosted positive signup. The production release remains CLOSED.

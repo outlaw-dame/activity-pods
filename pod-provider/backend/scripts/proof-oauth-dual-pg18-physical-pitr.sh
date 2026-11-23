@@ -65,13 +65,31 @@ assert_epoch() {
 # Check actual Paper credential authority tables, not merely the separate
 # generic epoch fixture. Old physically restored rows MUST remain denied
 # against an independently held latest credential head (not in this test).
-credential_webid='https://paper.example.org/users/physical'
+credential_webid='https://paper.example.org/claimtest-physical'
+credential_op='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+credential_old='$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+credential_new='$2b$12$bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 assert_credential() {
   local name="$1" expected_epoch="$2" expected_state="$3" actual
   actual="$(sql "$name" -Atqc \
     "SELECT mode||':'||state||':'||epoch FROM paper_credential_epoch.read_certified('$credential_webid');")"
   if [[ "$actual" != "unified:${expected_state}:${expected_epoch}" ]]; then
     echo "Unexpected physically restored credential state: $name ($actual)" >&2
+    return 1
+  fi
+}
+# Both the canonical credential epoch and the protected SemApps bcrypt row
+# must be physically restored together; an old password and old active epoch
+# cannot be accepted against a newer independent high-water.
+assert_native() {
+  local name="$1" expected_writes="$2" expected_hash="$3" actual writes
+  actual="$(sql "$name" -Atqc \
+    "SELECT data->>'hashedPassword' FROM paper_private_auth.accounts
+     WHERE data->>'webId'='$credential_webid';")"
+  writes="$(sql "$name" -Atqc \
+    "SELECT count(*)::text FROM paper_credential_epoch.native_writes;")"
+  if [[ "$actual" != "$expected_hash" || "$writes" != "$expected_writes" ]]; then
+    echo "Physically restored SemApps account/receipt does not match: $name" >&2
     return 1
   fi
 }
@@ -104,15 +122,24 @@ start_source() {
   # Install the exact function-restricted credential schema only in the
   # unique isolated physical PG18 source (never the live provider).
   local schema
-  for schema in paper-credential-epoch-authority-v1.sql \
-                paper-credential-epoch-authority-v2-certified-head.sql; do
+  for schema in paper-local-native-auth.sql \
+                paper-credential-epoch-authority-v1.sql \
+                paper-credential-epoch-authority-v2-certified-head.sql \
+                paper-credential-epoch-authority-v3-native-bcrypt.sql; do
     test -s "pod-provider/backend/sql/$schema"
     docker cp "pod-provider/backend/sql/$schema" "$name:/tmp/$schema"
     sql "$name" -q -f "/tmp/$schema" >/dev/null
   done
+  sql "$name" -c "INSERT INTO paper_private_auth.accounts(id,data)
+    VALUES('11111111-1111-4111-8111-111111111111',
+     jsonb_build_object('username','claimtest-physical',
+      'webId','$credential_webid',
+      'signupReservationId','22222222-2222-4222-8222-222222222222',
+      'hashedPassword','$credential_old'));" >/dev/null
   [[ "$(sql "$name" -Atqc \
     "SELECT paper_credential_epoch.enroll_owner('$credential_webid');")" == t ]] || return 1
   assert_credential "$name" 1 active
+  assert_native "$name" 0 "$credential_old"
   # A real streamed physical base backup + manifest, not pg_dump.
   docker exec -u postgres "$name" pg_basebackup -U postgres \
     -D /backup/base -Fp -X stream --checkpoint=fast
@@ -128,10 +155,23 @@ start_source() {
   sql "$name" -c \
     "UPDATE paper_pitr_probe SET epoch=2,state='blocked' WHERE id='paper';"
   assert_epoch "$name" 2 blocked
-  # The real credential state transition is a monotonic terminal disable.
+  # Exact operation-bound native bcrypt mutation and its ledger are
+  # committed before terminal disablement, with no direct JSONB bypass.
+  [[ "$(sql "$name" -Atqc \
+    "SELECT previous_epoch::text||':'||following_epoch::text
+     FROM paper_credential_epoch.begin_change('$credential_webid','$credential_op',1);")" == '1:2' ]] || return 1
+  receipt="$(sql "$name" -Atqc \
+    "SELECT encode(paper_credential_epoch.write_native_bcrypt(
+      '$credential_webid','$credential_op',2,'$credential_new'),'hex');")"
+  [[ "$receipt" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ "$(sql "$name" -Atqc \
+    "SELECT paper_credential_epoch.seal_verified_native(
+       '$credential_webid','$credential_op',2,decode('$receipt','hex'));")" == t ]] || return 1
+  assert_credential "$name" 2 active
+  assert_native "$name" 1 "$credential_new"
   [[ "$(sql "$name" -Atqc \
     "SELECT paper_credential_epoch.disable_owner('$credential_webid');")" == t ]] || return 1
-  assert_credential "$name" 2 disabled
+  assert_credential "$name" 3 disabled
   last_segment="$(sql "$name" -Atqc \
     "SELECT pg_walfile_name(pg_create_restore_point('paper_after_revoke'));")"
   sql "$name" -Atqc 'SELECT pg_switch_wal();' >/dev/null
@@ -177,9 +217,11 @@ EOF
   if [[ "$point" == before ]]; then
     assert_epoch "$name" 1 active
     assert_credential "$name" 1 active
+    assert_native "$name" 0 "$credential_old"
   else
     assert_epoch "$name" 2 blocked
-    assert_credential "$name" 2 disabled
+    assert_credential "$name" 3 disabled
+    assert_native "$name" 1 "$credential_new"
   fi
   local original="paper-pitr-${suffix}-${role}" original_id restored_id
   original_id="$(sql "$original" -Atqc \
@@ -223,4 +265,4 @@ for role in primary witness; do
     exit 1
   }
 done
-echo 'PASS: two independent real PG18 physical backups, archived-WAL named-point PITR, credential v1+v2 pre/post-disable states and old-generation denial comparison; nonactivated, external fresh signer and cross-store Jena/Redis/PDS remain P0'
+echo 'PASS: separate real PG18 physical backups and WAL PITR of credential v1/v2/v3, original/new native SemApps bcrypt rows and durable operation receipts, pre/post terminal disable; nonactivated, external custody + Redis/Jena/PDS remain P0'

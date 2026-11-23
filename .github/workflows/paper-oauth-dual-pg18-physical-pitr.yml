@@ -7,6 +7,8 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-dual-pg18-physical-pitr.sh'
       - 'pod-provider/backend/sql/paper-credential-epoch-authority-v1.sql'
       - 'pod-provider/backend/sql/paper-credential-epoch-authority-v2-certified-head.sql'
+      - 'pod-provider/backend/sql/paper-credential-epoch-authority-v3-native-bcrypt.sql'
+      - 'pod-provider/backend/sql/paper-local-native-auth.sql'
       - 'pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs'
       - 'pod-provider/backend/candidates/oauth-r2-receipt-archive.mjs'
       - 'pod-provider/backend/candidates/oauth-r2-signed-checkpoint.mjs'

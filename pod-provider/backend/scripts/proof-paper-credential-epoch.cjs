@@ -87,7 +87,7 @@ function stateful() {
     inspect, issue, check, setReadFailure: v => { readFailure = v; } };
 }
 async function denies(fn, code) {
-  await assert.rejects(fn, e => e?.code === code);
+  await assert.rejects(fn, e => e?.type === code);
 }
 test('new unified account JWT is RS256 signed with exp and generation', async () => {
   const f = stateful();
@@ -225,6 +225,6 @@ test('test-only guard cannot be activated from production environment', () => {
   const f = stateful();
   assert.throws(() => createDisposableCredentialEpochMiddleware({
     authority: f.authority, fixtureOnly: false
-  }), e => e?.code === 'CREDENTIAL_EPOCH_NOT_RELEASED');
+  }), e => e?.type === 'CREDENTIAL_EPOCH_NOT_RELEASED');
   assert.equal(f.guard.localAction(x => x, { name: 'unrelated.action' }) instanceof Function, true);
 });

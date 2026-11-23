@@ -292,3 +292,40 @@ state that the Paper candidate would use. It is **NOT** proof of live
 external independently immutable checkpoint freshness, native password
 owner authentication, signed PDS state, Redis, Jena, Solid/SAI, or a
 hosted positive signup. The production release remains CLOSED.
+
+## Reset-token, email and tombstone integrity; legacy-account compatibility
+
+The first PostgreSQL v3 account trigger was too broadly scoped: when
+activated it would have blocked direct password changes for **existing
+unmarked legacy SemApps accounts**, even though they are not
+enrolled in the new unified owner epoch. The corrected trigger restricts
+its credential-state enforcement to accounts that either retain a
+`signupReservationId` marker **or** still have a canonical
+`paper_credential_epoch.owners` row. The latter independent SQL owner
+lookup prevents an attacker from avoiding the guard merely by
+replacing/downgrading the marker in a partially restored database.
+Unmarked legacy users without a canonical credential row retain their
+existing account semantics until a separately reviewed migration.
+
+For tracked unified accounts, ordinary JSONB updates now also refuse
+direct changes to recovery email, `deletedAt` tombstone, and
+`resetPasswordToken`. A valid pending password operation must commit
+a newly hashed bcrypt credential and *remove the former reset token in
+the same PostgreSQL transaction*, with the same operation UUID and
+receipt digest. The separately privileged readback attestor refuses
+to approve a new active epoch while a stale reset token remains.
+No generic runtime update can create a new reset token without a
+separately reviewed owner-authenticated reset protocol.
+
+The isolated real-PG18 acceptance verifies legacy password/reset/
+email updates and deletion remain allowed; tracked-owner direct
+reset-token/email/tombstone changes fail; a pending native bcrypt
+write invalidates the prior token; forged/replayed writes and
+receipts remain blocked. The two-cluster real physical WAL/PITR proof
+also verifies that before the named recovery point the old reset
+token is **present**, while the later recovered native password and
+receipt have the reset token **absent**. A restored stale reset token
+still needs the **externally independent latest credential head** to
+be refused; these physical restore tests do not supply live custody.
+
+The v3 schema remains NONACTIVATED, with release and signup CLOSED.

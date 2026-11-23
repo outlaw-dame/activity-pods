@@ -134,3 +134,17 @@ jobs:
           fi
           grep -qx 'REFUSED: PORTABLE_WORM_PROVIDER_UNSUPPORTED' /tmp/portable-worm-unqualified.log
           rm -f /tmp/portable-worm-unqualified.log
+          if env PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=read-only-verified \
+            PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
+            PAPER_PORTABLE_WORM_PROVIDER=custom-s3 \
+            PAPER_PORTABLE_WORM_ENDPOINT=https://objects.vendor-domain.com/ \
+            PAPER_PORTABLE_WORM_REGION=us-east-1 \
+            PAPER_PORTABLE_WORM_READER_PROFILE=not-real \
+            PAPER_PORTABLE_WORM_BUCKET=not-real-test \
+            PAPER_PORTABLE_WORM_PHASE=preflight \
+            node pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs > /tmp/portable-worm-unpinned.log 2>&1; then
+            echo '::error::Unpinned generic S3 endpoint was accepted'
+            exit 1
+          fi
+          grep -qx 'REFUSED: PORTABLE_WORM_ENDPOINT_NOT_PINNED' /tmp/portable-worm-unpinned.log
+          rm -f /tmp/portable-worm-unpinned.log

@@ -58,7 +58,7 @@ function createDisposableCredentialHeadAuthority({
   // half, masking a catastrophic custody boundary breach.
   if (typeof trustedPublicKey === 'string') {
     if (Buffer.byteLength(trustedPublicKey) > 512 ||
-        !/^-----BEGIN PUBLIC KEY-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END PUBLIC KEY-----\\r?\\n?$/u.test(trustedPublicKey))
+        !/^-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PUBLIC KEY-----\r?\n?$/u.test(trustedPublicKey))
       deny('CREDENTIAL_HEAD_KEY_INVALID');
   } else if (!(trustedPublicKey instanceof crypto.KeyObject)) {
     deny('CREDENTIAL_HEAD_KEY_INVALID');

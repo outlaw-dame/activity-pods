@@ -8,6 +8,7 @@
  */
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {Buffer} from 'node:buffer';
+import {isIP} from 'node:net';
 import {assertReceipt} from './oauth-s3-compliance-archive.mjs';
 
 const BUCKET=/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u;
@@ -33,8 +34,11 @@ function deny(code){
   const e=new Error('External S3-compatible immutable custody not qualified');
   e.code=code;throw e;
 }
-function validateEndpoint(provider,endpoint){
-  if(provider!=='backblaze-b2'&&provider!=='storj')
+function validateEndpoint(provider,endpoint,approvedEndpoint=null){
+  // Known providers receive hard-pinned vendor origins. A *different*
+  // S3 implementation may be inspected only against an operator-pinned
+  // exact HTTPS origin and still NEVER counts as trusted release custody.
+  if(!['backblaze-b2','storj','custom-s3'].includes(provider))
     deny('PORTABLE_WORM_PROVIDER_UNSUPPORTED');
   if(typeof endpoint!=='string'||endpoint.length>256)
     deny('PORTABLE_WORM_ENDPOINT_UNSAFE');
@@ -46,8 +50,20 @@ function validateEndpoint(provider,endpoint){
   if(provider==='storj'){
     if(u.hostname!=='gateway.storjshare.io')
       deny('PORTABLE_WORM_ENDPOINT_UNSAFE');
-  }else if(!/^s3\.[a-z0-9]+(?:-[a-z0-9]+)*\.backblazeb2\.com$/u.test(u.hostname)){
-    deny('PORTABLE_WORM_ENDPOINT_UNSAFE');
+  }else if(provider==='backblaze-b2'){
+    if(!/^s3\.[a-z0-9]+(?:-[a-z0-9]+)*\.backblazeb2\.com$/u.test(u.hostname))
+      deny('PORTABLE_WORM_ENDPOINT_UNSAFE');
+  }else{
+    if(typeof approvedEndpoint!=='string'||approvedEndpoint!==endpoint)
+      deny('PORTABLE_WORM_ENDPOINT_NOT_PINNED');
+    // Restrict custom S3 endpoints to operator-reviewed public DNS names,
+    // not IP literals, local-only DNS suffixes, IDN edge cases or wildcards.
+    // The CLI is read-only. This is not a substitute for operator DNS/TLS
+    // review, a signed manifest, or an independent immutable signer.
+    if(isIP(u.hostname)!==0||
+       !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u.test(u.hostname)||
+       /\.(?:local|localhost|internal|invalid|test|example|onion)$/u.test(u.hostname))
+      deny('PORTABLE_WORM_ENDPOINT_UNSAFE');
   }
   return Object.freeze({provider,endpoint});
 }
@@ -88,8 +104,8 @@ async function readBytes(body){
   return Buffer.concat(parts,size);
 }
 /**
- * This intentionally supports ONLY Backblaze B2 and Storj, neither of
- * which provides the same caller identity / IAM model as AWS S3.
+ * Supports pinned Backblaze/Storj origins or an explicitly operator-pinned
+ * custom S3 HTTPS origin. None supplies universal AWS STS/IAM identity.
  * Checks bucket versioning, COMPLIANCE default retention and, if supplied,
  * a historical exact-version receipt against an operator-pinned SHA256.
  *
@@ -97,10 +113,10 @@ async function readBytes(body){
  * PutObject support, key-custody integrity, signed latest state or release.
  */
 export async function inspectPortableS3ObjectLock({
-  provider,endpoint,reader,commands,bucket,sample=null,
+  provider,endpoint,approvedEndpoint=null,reader,commands,bucket,sample=null,
   minRetentionDays=400,minRemainingDays=30,clock=()=>Date.now()
 }={}){
-  validateEndpoint(provider,endpoint);
+  validateEndpoint(provider,endpoint,approvedEndpoint);
   if(process.env.NODE_TLS_REJECT_UNAUTHORIZED==='0'||
      process.env.AWS_ENDPOINT_URL||process.env.AWS_ENDPOINT_URL_S3||
      process.env.AWS_CA_BUNDLE||process.env.NODE_EXTRA_CA_CERTS)

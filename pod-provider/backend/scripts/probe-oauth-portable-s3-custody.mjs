@@ -40,10 +40,13 @@ async function main(){
   let s3,providers;
   const require=createRequire(path.join(env.PAPER_WORM_SDK_ROOT,'package.json'));
   try{
-    for(const dep of ['@aws-sdk/client-s3','@aws-sdk/credential-providers'])
+    const dependencies=['@aws-sdk/client-s3','@aws-sdk/credential-providers'];
+    for(const dep of dependencies)
       if(require(dep+'/package.json').version!=='3.1174.0')refuse();
-    s3=require('@aws-sdk/client-s3');
-    providers=require('@aws-sdk/credential-providers');
+    // These SDKs are installed only in the isolated read-only operator's
+    // directory; do not force them into Paper's production dependency graph.
+    s3=require(dependencies[0]);
+    providers=require(dependencies[1]);
   }catch{refuse()}
   const host=new URL(env.PAPER_PORTABLE_WORM_ENDPOINT).hostname;
   const region=env.PAPER_PORTABLE_WORM_PROVIDER==='storj'?

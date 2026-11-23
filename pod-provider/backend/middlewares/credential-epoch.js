@@ -206,6 +206,11 @@ async function runDisposableCredentialChange({
   let changed;
   try { changed = await apply(); }
   catch { refuse('CREDENTIAL_EPOCH_MUTATION_UNCERTAIN'); }
+  // An absent/negative downstream ACK is NOT a confirmed password write.
+  // Keep the durable pending fence: never commit, retry, or compensate.
+  if (!changed || typeof changed !== 'object' || Array.isArray(changed) ||
+      changed.changed !== true)
+    refuse('CREDENTIAL_EPOCH_MUTATION_UNCERTAIN');
   let sealed;
   try {
     sealed = await authority.commitChange({

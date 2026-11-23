@@ -59,13 +59,25 @@ export function createDisposableR2CheckpointAuthority({
  async function readVerified({owner,clientId}={}){
   if(!validUrl(owner)||!validUrl(clientId))
    deny('R2_CERT_SCOPE_INVALID');
-  let response;
+  let response,timer,expired=false;
+  const controller=new AbortController();
   try{
    response=await Promise.race([
-    Promise.resolve().then(()=>readHead(Object.freeze({owner,clientId}))),
-    new Promise((_,reject)=>setTimeout(()=>reject(Error('timeout')),3000))
+    Promise.resolve().then(()=>readHead(Object.freeze({
+     owner,clientId,signal:controller.signal
+    }))).then(result=>{
+     if(expired)deny('R2_CERT_AUTHORITY_UNAVAILABLE');
+     return result;
+    }),
+    new Promise((_,reject)=>{
+     timer=setTimeout(()=>{expired=true;reject(Error('timeout'))},3000);
+    })
    ]);
   }catch{deny('R2_CERT_AUTHORITY_UNAVAILABLE')}
+  finally{
+   clearTimeout(timer);
+   controller.abort();
+  }
   // The transport returns canonical bytes and detached binary Ed25519
   // signature. No attacker-provided public keys, PEM or account credentials.
   if(!Buffer.isBuffer(response?.body)||response.body.length<100||

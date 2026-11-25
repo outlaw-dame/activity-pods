@@ -42,6 +42,26 @@ is a strictly **read-only**, test-gated S3-compatible inventory that:
    reports `operatorIndependenceVerified:false`,
    `monotonicLatestHeadVerified:false` and `releaseAccepted:false`.
 
+## Denial admission integration (nonactivated)
+
+The existing `oauth-independent-pre-deny-admission.mjs` now offers an
+explicit **optional test-only** `readPreDenyInventory` adapter. When its
+inventory flag is set, it must be a distinct restricted read callback
+and is checked **twice**: after the first independent witness read and
+again after the final signed-head and archive recheck. A retained
+pre-denial immediately refuses the otherwise apparently ACTIVE OAuth
+grant; a missing/invalid/unavailable inventory, mismatched scope or
+removed feature flag fails closed. Only a strictly shaped report with
+`absenceAuthorizes:false` may continue through the *other*
+independent canonical, witness, archive, signature and authentication
+checks. The response still has `releaseAccepted:false`.
+
+This path adds no positive token approval; the actual provider still
+does not import either candidate and the independent PostgreSQL
+PREPARE lock remains the authority for a denial not yet archived.
+Two reads do not eliminate the writer/denial race — only the actual
+independent reservation and monotonic signer protocol can do so.
+
 The test-only flag is `PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed`
 with `NODE_ENV=test` and `fixtureOnly:true`. There is no production
 service import, no token issue/revocation, no grant write, no unsigned

@@ -55,13 +55,13 @@ const controls={
 const head={epoch:'1',state:'active',digest:'0'.repeat(64)};
 const {publicKey,privateKey}=crypto.generateKeyPairSync('ed25519');
 const headAuthority=createDisposableCredentialHeadAuthority({
-  trustedPublicKey:publicKey,authority:'post-enrollment-independent.test',
+  trustedPublicKey:publicKey,authority:'post_enrollment_independent.test',
   fixtureOnly:true,now:()=>fixedNow,
   readHead:async challenge=>{
     if(!controls.head)throw Error('Independent signer offline');
     const body=Buffer.from(JSON.stringify({
       kind:'paper.credential.head.v1',
-      authority:'post-enrollment-independent.test',
+      authority:'post_enrollment_independent.test',
       subject:challenge.subject,
       epoch:head.epoch,state:head.state,digest:head.digest,
       nonce:challenge.nonce,issuedAt:fixedNow

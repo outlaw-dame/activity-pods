@@ -40,7 +40,8 @@ const permission=()=>({
   restricted:true,issuer:true,can_switch:false,revoker:false,
   signer:false,reader:false,sai_issuer:false,sai_attestor:false,
   schema_create:false,direct_oauth:false,direct_sai:false,
-  direct_id:false,direct_journal:false,direct_reservations:false,
+  direct_id:false,direct_journal:false,direct_accounts:false,
+  direct_reservations:false,
   can_claim_raw_owner:false,can_issue_session:true,
   can_issue_raw:false,can_revoke_session:false,memberships:1,
   bad_options:0,parent_roles:0
@@ -108,7 +109,7 @@ test('every PG connection must be a restricted exact-purpose issuer',async()=>{
     {revoker:true},{signer:true},{reader:true},
     {sai_issuer:true},{sai_attestor:true},{schema_create:true},
     {direct_oauth:true},{direct_sai:true},{direct_id:true},
-    {direct_journal:true},{direct_reservations:true},
+    {direct_journal:true},{direct_accounts:true},{direct_reservations:true},
     {can_claim_raw_owner:true},
     {can_issue_session:false},{can_issue_raw:true},
     {can_revoke_session:true},{memberships:2},{bad_options:1},

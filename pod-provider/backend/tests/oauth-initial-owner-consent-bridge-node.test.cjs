@@ -83,10 +83,8 @@ test('issuer refuses production flags, raw user selectors, wrong scope and stale
     {tokenHash:Buffer.alloc(33),grantId,scope:SCOPE},
     {tokenHash:'a'.repeat(64),grantId,scope:SCOPE},
     {tokenHash:TOKEN_HASH,grantId:'bad',scope:SCOPE},
-    {tokenHash:TOKEN_HASH,grantId,scope:'atproto'},
-    {tokenHash:TOKEN_HASH,grantId,scope:SCOPE,canonicalAccountId:'https://attacker.example.org'}
+    {tokenHash:TOKEN_HASH,grantId,scope:'atproto'}
   ]){
-    if(request.canonicalAccountId)continue; // not a recognized API argument
     await code(()=>adapter.issueFirst(request),'OWNER_OAUTH_EPOCH_SCOPE_INVALID');
   }
   assert.equal(f.calls.length,0);
@@ -252,20 +250,14 @@ test('independent witness failure leaves an unexposed canonical pending epoch',a
 });
 
 test('credential rotation/logout during WORM readback blocks grant before Redis CAS',async()=>{
-  for(const action of [
-    s=>{s.active=false},
-    s=>{s.credentialCurrent=false},
-    s=>{s.redis.delete(s.sessionKey)}
+  for(const [action,expectedRedisCalls] of [
+    [s=>{s.active=false},0],
+    [s=>{s.credentialCurrent=false},0],
+    [s=>{s.redis.delete(s.sessionKey)},1]
   ]){
     const f=coordinatorFixture({onAttest:action});
-    await code(()=>f.execute(),
-      action.toString().includes('redis.delete')?
-        'OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT':'OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT'
-    ).catch(async()=>{
-      // Redis session deletion alone is caught by the atomic CAS rather
-      // than the independent credential/session verifier stub.
-      assert.equal(f.state.calls.redis,1);
-    });
+    await code(()=>f.execute(),'OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT');
+    assert.equal(f.state.calls.redis,expectedRedisCalls);
     assert.equal(f.state.epoch,1,'No unsafe SQL rollback on unknown edge');
     assert.equal(f.state.redis.has(consentKey('oauth:grant',OWNER,CLIENT)),false);
   }

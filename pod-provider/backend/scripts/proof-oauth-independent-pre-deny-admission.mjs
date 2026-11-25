@@ -23,6 +23,9 @@ const REVISION='7';
 const SIGNATURE_DOMAIN=Buffer.from('paper:oauth:admission-head:v1\0');
 const FIXED_TIME=1800000000;
 const SUBJECT=subjectHash(OWNER,CLIENT);
+const EPOCH_SUBJECT=crypto.createHash('sha256')
+ .update('paper:witness:subject:v1\0').update(OWNER)
+ .update('\0').update(CLIENT).digest('hex');
 const GRANT_HASH=crypto.createHash('sha256').update(GRANT).digest('hex');
 const EVENT='e'.repeat(64);
 const RECEIPT='f'.repeat(64);
@@ -36,7 +39,8 @@ const baseGrant=()=>({
  oauthRevision:REVISION,saiRevision:'4',credentialEpoch:'11'
 });
 const baseEvent=()=>({
- status:'active',subject:SUBJECT,grantSha256:GRANT_HASH,
+ status:'active',subject:SUBJECT,epochSubject:EPOCH_SUBJECT,
+ grantSha256:GRANT_HASH,
  revision:REVISION,witnessEventSha256:EVENT,
  receiptSha256:RECEIPT,operationId:OPERATION
 });
@@ -76,6 +80,7 @@ function fixture(faults={}){
   if(env.witnessRevoked||env.witnessRevokedOnRead===hits.witness)
    event.status='blocked';
   if(env.witnessRewind)event.revision='6';
+  if(env.witnessWrongEpochSubject)event.epochSubject='0'.repeat(64);
   if(env.witnessEventDrift&&hits.witness>1)
    event.witnessEventSha256='1'.repeat(64);
   return event;
@@ -90,6 +95,7 @@ function fixture(faults={}){
   if(env.archiveRevoked||env.archiveRevokedOnRead===hits.archive)
    event.status='blocked';
   if(env.archiveRewind)event.revision='6';
+  if(env.archiveWrongEpochSubject)event.epochSubject='0'.repeat(64);
   if(env.historyTruncated)event.versionHistoryComplete=false;
   if(env.archiveRetentionLost)event.retentionVerified=false;
   if(env.archiveVersionDrift&&hits.archive>1)
@@ -104,7 +110,8 @@ function fixture(faults={}){
   const payload={
    kind:'paper.oauth.admission-head.v1',
    authority:'independent-signing.test',
-   subject:lastArchive.subject,grantSha256:lastArchive.grantSha256,
+   subject:lastArchive.subject,epochSubject:lastArchive.epochSubject,
+   grantSha256:lastArchive.grantSha256,
    revision:lastArchive.revision,operationId:lastArchive.operationId,
    witnessEventSha256:lastArchive.witnessEventSha256,
    receiptSha256:lastArchive.receiptSha256,
@@ -112,6 +119,7 @@ function fixture(faults={}){
   };
   if(env.signerOldRevision)payload.revision='6';
   if(env.signerWrongSubject)payload.subject='0'.repeat(64);
+  if(env.signerWrongEpochSubject)payload.epochSubject='0'.repeat(64);
   if(env.signerWrongGrant)payload.grantSha256='2'.repeat(64);
   if(env.signerWrongNonce)payload.nonce='q'.repeat(43);
   if(env.signerOldClock)payload.issuedAt=FIXED_TIME-180;
@@ -139,6 +147,14 @@ function fixture(faults={}){
   gate.inspect({surface,context});
  return {gate,check,hits,env,args};
 }
+test('historical epoch and signed-write pre-deny subjects are independent cryptographic domains',()=>{
+ assert.notEqual(EPOCH_SUBJECT,SUBJECT);
+ assert.equal(SUBJECT,crypto.createHash('sha256').update(
+  'paper:witness:subject:v1:'+OWNER.length+':'+OWNER+':'+CLIENT).digest('hex'));
+ assert.equal(EPOCH_SUBJECT,crypto.createHash('sha256')
+  .update('paper:witness:subject:v1\0').update(OWNER)
+  .update('\0').update(CLIENT).digest('hex'));
+});
 test('all 15 grant-consuming surfaces require current independently signed authority',async()=>{
  assert.equal(DENIAL_SURFACES.length,15);
  assert.equal(new Set(DENIAL_SURFACES).size,DENIAL_SURFACES.length);
@@ -202,7 +218,8 @@ test('stale witness or unavailable independent recovery witness denies',async()=
  for(const [faults,code] of [
   [{witnessOffline:true},'OAUTH_DENIAL_WITNESS_UNAVAILABLE'],
   [{witnessRevoked:true},'OAUTH_DENIAL_WITNESS_STALE'],
-  [{witnessRewind:true},'OAUTH_DENIAL_WITNESS_STALE']
+  [{witnessRewind:true},'OAUTH_DENIAL_WITNESS_STALE'],
+  [{witnessWrongEpochSubject:true},'OAUTH_DENIAL_WITNESS_STALE']
  ]){
   const f=fixture(faults);
   await denied(()=>f.check(),code);
@@ -215,7 +232,8 @@ test('missing, incomplete or rewound WORM history prevents signer consultation',
   [{archiveRewind:true},'OAUTH_DENIAL_ARCHIVE_INVALID'],
   [{historyTruncated:true},'OAUTH_DENIAL_ARCHIVE_INVALID'],
   [{archiveRetentionLost:true},'OAUTH_DENIAL_ARCHIVE_INVALID'],
-  [{archiveDigestDrift:true},'OAUTH_DENIAL_ARCHIVE_STALE']
+  [{archiveDigestDrift:true},'OAUTH_DENIAL_ARCHIVE_STALE'],
+  [{archiveWrongEpochSubject:true},'OAUTH_DENIAL_ARCHIVE_INVALID']
  ]){
   const f=fixture(faults);
   await denied(()=>f.check(),code);
@@ -228,6 +246,7 @@ test('Ed25519 signer must be current, correctly scoped, nonreplayed and public-k
   [{signerWrongKey:true},'OAUTH_DENIAL_SIGNER_SIGNATURE_INVALID'],
   [{signerOldRevision:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerWrongSubject:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
+  [{signerWrongEpochSubject:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID']
   [{signerWrongGrant:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerWrongNonce:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerOldClock:true},'OAUTH_DENIAL_SIGNER_CLOCK_INVALID'],

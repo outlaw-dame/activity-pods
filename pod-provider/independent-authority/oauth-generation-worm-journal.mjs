@@ -113,7 +113,7 @@ export function createDisposableGenerationWormJournal({
     typeof clock!=='function')
   fail('GENERATION_JOURNAL_CONFIGURATION_UNSAFE');
  const base={provider,endpoint,approvedEndpoint,bucket,reader,commands,clock,
-  minRetentionDays:400,minRemainingDays:400};
+  minRetentionDays:400,minRemainingDays:30};
  async function send(name,args){
   try{
    return await reader.send(new commands[name]({Bucket:bucket,...args}),{
@@ -137,9 +137,9 @@ export function createDisposableGenerationWormJournal({
    });
    if(list?.IsTruncated!==false||!Array.isArray(list.Versions)||
       !Array.isArray(list.DeleteMarkers??[])||
-      list.DeleteMarkers.length!==0||
+      (list.DeleteMarkers??[]).length!==0||
       !Array.isArray(list.CommonPrefixes??[])||
-      list.CommonPrefixes.length!==0||
+      (list.CommonPrefixes??[]).length!==0||
       list.Versions.length>LIMIT)
     fail('GENERATION_JOURNAL_HISTORY_INCOMPLETE');
    const result=list.Versions.map(v=>{
@@ -192,6 +192,8 @@ export function createDisposableGenerationWormJournal({
   const second=await manifest();
   if(JSON.stringify(first)!==JSON.stringify(second))
    fail('GENERATION_JOURNAL_CHANGED_DURING_READ');
+  if(retained.at(-1)?.record.status==='blocked')
+   await checkPreDeny(retained.at(-1).record);
   // A fresh source-of-truth head requires a separately administered
   // high-water signer. The journal cannot certify absence of a hidden tail.
   return Object.freeze({

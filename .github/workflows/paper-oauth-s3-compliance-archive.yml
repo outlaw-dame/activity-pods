@@ -21,6 +21,7 @@ on:
       - 'pod-provider/backend/candidates/oauth-pre-deny-signed-head.mjs'
       - 'pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs'
       - 'pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs'
       - 'pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs'
@@ -77,6 +78,8 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs
           node --check pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
           PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs
+          PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_WITNESS_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs
           node --check pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs
           node --check pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
           PAPER_OAUTH_PRE_DENY_ADMISSION_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_WITNESS_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs

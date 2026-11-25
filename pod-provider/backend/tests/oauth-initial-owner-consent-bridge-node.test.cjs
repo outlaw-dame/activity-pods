@@ -246,6 +246,19 @@ test('first grant: owner credential, PG CAS, WORM latest readback and Redis sess
   assert.equal(f.state.calls.redis,1,'Never overwrite with a replayed initial grant');
 });
 
+test('non-string session proof is denied before PG or witness work',async()=>{
+  const f=coordinatorFixture();
+  f.options.verifyLiveOwner=async()=>({
+    canonicalAccountId:OWNER,
+    sessionId:{toString:()=>SESSION},
+    enrollmentTokenHash:Buffer.from(TOKEN_HASH)
+  });
+  await code(()=>f.execute(),'OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT');
+  assert.equal(f.state.calls.issue,0);
+  assert.equal(f.state.calls.attest,0);
+  assert.equal(f.state.calls.redis,0);
+});
+
 test('concurrent first approvals have one canonical CAS winner and one visible consent',async()=>{
   const f=coordinatorFixture();
   const outcomes=await Promise.allSettled([f.execute(),f.execute()]);

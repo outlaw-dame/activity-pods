@@ -104,7 +104,8 @@ function fixture(opts={}){
      return {IsTruncated:opts.truncated===true,
       Versions:v.map(x=>({Key:x.Key,VersionId:x.VersionId,
        IsLatest:x.IsLatest,Size:x.Size})),
-      DeleteMarkers:opts.marker?[{Key:input.Prefix,VersionId:'delete'}]:[],
+      DeleteMarkers:(opts.marker||(opts.preDenyMarker&&input.Prefix.startsWith('paper/oauth-witness/pre-deny/')))?
+       [{Key:input.Prefix,VersionId:'delete'}]:[],
       CommonPrefixes:[]};
     }
     case 'HeadObjectCommand':
@@ -118,7 +119,8 @@ function fixture(opts={}){
      const v=entries.find(x=>x.VersionId===input.VersionId);
      if(!v)throw Error('No such version');
      return {VersionId:v.VersionId,Body:(async function*(){
-      yield opts.corrupt?Buffer.from('bad'):v.Body;
+      yield opts.corrupt||(opts.corruptPreDeny&&input.Key===PRE_KEY)?
+       Buffer.from('bad'):v.Body;
      })()};
     }
     default:throw Error('Unexpected read '+name);
@@ -201,13 +203,19 @@ test('genesis ACTIVE and retained BLOCKED are observed but NEVER authorize resto
  assert.equal(f.state.reads.includes('DeleteObjectCommand'),false);
 });
 test('PRE-DENY must independently exist with matching operation and grant',async()=>{
- for(const fault of [{preDeny:false},{corrupt:true},{marker:true}]){
-  const f=fixture(fault);
-  await f.journal.append(GENESIS).catch(()=>{});
-  // Separate corruption/marker faults may refuse earlier genesis;
-  // absence itself must refuse the BLOCKED transition.
+ const absent=fixture({preDeny:false});
+ await absent.journal.append(GENESIS);
+ await denied(()=>absent.journal.append(BLOCK),
+  'GENERATION_JOURNAL_PRE_DENY_UNVERIFIED');
+ // First create an ACTIVE genesis while the independent archive is clean;
+ // introduce a fault only in the PRE-DENY read used to prove a block.
+ for(const injected of ['corruptPreDeny','preDenyMarker']){
+  const fault={};const f=fixture(fault);
+  await f.journal.append(GENESIS);
+  fault[injected]=true;
   await denied(()=>f.journal.append(BLOCK),
    'GENERATION_JOURNAL_PRE_DENY_UNVERIFIED');
+  assert.equal(f.state.puts,1);
  }
  const mismatch=fixture();
  await mismatch.journal.append(GENESIS);
@@ -279,6 +287,16 @@ test('S3 gateways that ignore If-None-Match cannot hide a second version',async(
  // Hostile out-of-band write attempts are caught by ListObjectVersions.
  f.add(GENERATION_BASE+'0000000000000000001',GENESIS_BYTES);
  await denied(()=>f.read(),'GENERATION_JOURNAL_GAP_OR_FORK');
+});
+test('provider may replay a coherent older listing: ACTIVE still never authorizes',async()=>{
+ const fault={};const f=fixture(fault);
+ await f.journal.append(GENESIS);await f.journal.append(BLOCK);
+ fault.hideLast=true; // The provider maliciously hides its latest generation.
+ const rewound=await f.read();
+ assert.equal(rewound.head.record.status,'active');
+ assert.equal(rewound.activeAuthorizes,false);
+ assert.equal(rewound.completeExternallyVerified,false);
+ assert.equal(rewound.releaseAccepted,false);
 });
 test('single-attempt SDK, exact scope and disabled-production boundary',async()=>{
  const retries=fixture({writerAttempts:3});

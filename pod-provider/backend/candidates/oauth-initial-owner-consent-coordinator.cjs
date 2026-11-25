@@ -41,7 +41,8 @@ function gate(){
 }
 function validOwner(x) {
   return x&&typeof x==='object'&&!Array.isArray(x)&&
-    https(x.canonicalAccountId)&&SESSION_ID.test(x.sessionId||'')&&
+    https(x.canonicalAccountId)&&typeof x.sessionId==='string'&&
+    SESSION_ID.test(x.sessionId)&&
     Buffer.isBuffer(x.enrollmentTokenHash)&&x.enrollmentTokenHash.length===32;
 }
 function sameOwner(a,b){

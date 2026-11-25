@@ -144,8 +144,8 @@ function fixture(opts={}){
    return {VersionId:opts.wrongAck?'not-the-version':result.VersionId};
   }};
  const args={provider:'custom-s3',
-  endpoint:'https://archive.identity-operator.example/',
-  approvedEndpoint:'https://archive.identity-operator.example/',
+  endpoint:'https://objects.vendor-domain.com/',
+  approvedEndpoint:'https://objects.vendor-domain.com/',
   bucket:'independent-custody-fixture',
   reader,writer,commands,clock:()=>NOW,fixtureOnly:true};
  return {args,state,read:()=>createDisposableGenerationWormJournal(args).inspect(SUB),

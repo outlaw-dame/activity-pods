@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import {assertReceipt} from '../candidates/oauth-s3-compliance-archive.mjs';
 import {createDisposablePreDenySignedHead} from
  '../candidates/oauth-pre-deny-signed-head.mjs';
-import {createDisposablePreDenyIntentCoordinator} from
+import {createDisposablePreDenyIntentCoordinator,subjectHash} from
  '../candidates/oauth-pre-deny-intent-coordinator.mjs';
 
 if(process.env.NODE_ENV!=='test'||
@@ -128,6 +128,28 @@ function fixture(options={}){
 const call=f=>f.coordinator.retainBeforeMutation({
  context:Object.freeze({untrustedOwner:'https://attacker.invalid'}),
  clientId:CLIENT,expectedGrantId:GRANT
+});
+
+test('pre-denial owner/client subject is length-framed and canonical',()=>{
+ assert.equal(subjectHash(OWNER,CLIENT),SUBJECT);
+ assert.equal(subjectHash(OWNER,CLIENT),
+  crypto.createHash('sha256').update('paper:witness:subject:v1:'+
+   OWNER.length+':'+OWNER+':'+CLIENT,'utf8').digest('hex'));
+ assert.notEqual(subjectHash(OWNER,CLIENT),
+  crypto.createHash('sha256').update('paper:witness:subject:v1\0')
+   .update(OWNER).update('\0').update(CLIENT).digest('hex'),
+  'Legacy NUL-framed v1 was incompatible with independent PG18');
+ assert.notEqual(subjectHash(OWNER,CLIENT),
+  subjectHash(OWNER+'/different-owner',CLIENT));
+ assert.notEqual(subjectHash(OWNER,CLIENT),
+  subjectHash(OWNER,'https://another-client.example.org/oauth'));
+ for(const bad of ['https://paper.example.org/users/raw space',
+   'https://paper.example.org/users/é','http://paper.example.org/owner',
+   'https://paper.example.org/owner#fragment',
+   'https://paper.example.org/owner?query=x']){
+  assert.throws(()=>subjectHash(bad,CLIENT),
+   e=>e?.code==='PRE_DENY_SCOPE_INVALID');
+ }
 });
 
 test('strict pre-denial receipt key, typed revisions, exact canonical JSON',()=>{

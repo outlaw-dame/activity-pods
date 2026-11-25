@@ -6,6 +6,7 @@ const { KEY_PREFIX, digest, sessionKey, UPSERT_CONSENT_IF_SESSION_LIVE,
 const crypto = require('node:crypto');
 const { parseIntWithBounds, nowEpochSec } = require('../../utils/oauth-security');
 const { consentKey } = require('../../utils/oauth-refresh-atomic-policy');
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 // Every owner-approved OAuth consent has an independently unpredictable
 // generation. Reapproval can never make an old access/refresh token current.
@@ -64,6 +65,9 @@ module.exports = {
         ownerSessionId: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$', optional: true }
       },
       async handler(ctx) {
+        // Direct service calls must not persist a renewable Redis-only owner
+        // grant before the independent production recovery gate is released.
+        pgEpoch.enabled();
         const {canonicalAccountId,clientId,scope,ownerSessionId}=ctx.params;
         if(scope.length>8192)throw Error('OAuth consent scope invalid');
         const now = nowEpochSec();

@@ -54,6 +54,9 @@ module.exports = {
         htu: { type: 'string', min: 1 }
       },
       async handler(ctx) {
+        // Deny before spending an OAuth code, refresh family or DPoP nonce.
+        // Only disposable PG/witness tests may exercise this unshipped issuer.
+        pgEpoch.enabled();
         const input = ctx.params;
         const proof = await ctx.call('oauth-dpop-nonce.verifyProof', {
           proofJwt: input.dpop_proof,
@@ -220,6 +223,8 @@ module.exports = {
     },
 
     async issueAccessToken(session, ctx) {
+      // Internal callers cannot bypass the unreleased production issuer.
+      pgEpoch.enabled();
       await requireCurrentConsent(ctx,session);
       const epoch=await pgEpoch.current(ctx,session);
       if(epoch!==null&&session.oauthPgRevision!==epoch){

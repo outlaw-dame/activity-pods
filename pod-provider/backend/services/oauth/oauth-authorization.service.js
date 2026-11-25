@@ -1,4 +1,5 @@
 const { MoleculerError } = require('moleculer').Errors;
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 module.exports = {
   name: 'oauth-authorization',
@@ -40,6 +41,10 @@ module.exports = {
         ownerSessionId: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$', optional: true }
       },
       async handler(ctx) {
+        // Never consume an approval challenge/PAR or persist owner consent
+        // while the production PDS OAuth authorization authority is unreleased.
+        // Denial remains available, but approval cannot fall back to Redis.
+        if (ctx.params.decision === 'approve') pgEpoch.enabled();
         const requestUri = String(ctx.params.request_uri).trim();
         const challenge = await ctx.call('oauth-consent-challenge.consume', {
           challengeId: ctx.params.consentChallenge

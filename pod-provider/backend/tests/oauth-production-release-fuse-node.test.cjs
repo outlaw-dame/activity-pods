@@ -148,6 +148,48 @@ test('owner/operator revocation remains possible when new grants are closed', as
   });
 });
 
+test('restored encrypted refresh family cannot be rotated or introspected as active', async () => {
+  await withEnvironment({ NODE_ENV: 'production' }, async () => {
+    const refreshToken = 'r'.repeat(43);
+    const old = {
+      tokenId: 'T'.repeat(24), familyId: 'F'.repeat(24),
+      ...AUTHORIZATION, did: 'did:plc:' + 'q'.repeat(24),
+      dpopJkt: 'a'.repeat(43), active: true,
+      expiresAt: Math.floor(Date.now() / 1000) + 3600
+    };
+    let redisWrites = 0;
+    const state = {
+      settings: {
+        tokenPrefix: 'oauth:refresh',
+        familyPrefix: 'oauth:refresh-family',
+        revokedPrefix: 'oauth:refresh-family-revoked',
+        consentPrefix: 'oauth:grant',
+        ttlSec: 3600
+      },
+      ...oauthRefresh.methods,
+      decrypt: () => old,
+      redis: {
+        get: async key => {
+          if (key.includes(':lookup:')) return old.tokenId;
+          if (key.endsWith(':' + old.tokenId)) return 'encrypted-record';
+          return JSON.stringify({ ...AUTHORIZATION, grantId: GRANT, revoked: false });
+        },
+        exists: async () => 0,
+        eval: async () => { redisWrites += 1; noCall(); }
+      }
+    };
+    await assert.rejects(
+      oauthRefresh.actions.rotateRefreshToken.handler.call(state, {
+        params: { refreshToken, dpopJkt: old.dpopJkt }, call: noCall
+      }), closed);
+    await assert.rejects(
+      oauthRefresh.actions.introspectRefreshToken.handler.call(state, {
+        params: { refreshToken }, call: noCall
+      }), closed);
+    assert.equal(redisWrites, 0);
+  });
+});
+
 test('disposable test mode remains compatible without production authority', async () => {
   await withEnvironment({ NODE_ENV: 'test' }, () => {
     assert.equal(pgEpoch.enabled(), false);

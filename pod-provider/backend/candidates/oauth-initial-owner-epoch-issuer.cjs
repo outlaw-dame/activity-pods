@@ -142,10 +142,15 @@ function createDisposableInitialOwnerEpochIssuer({
         deny('OWNER_OAUTH_EPOCH_SCOPE_INVALID');
       // Do not retain a caller-mutable Buffer across asynchronous admission.
       const trustedHash=Buffer.from(tokenHash);
-      let c,discard=false;
+      let c,discard=false,inTransaction=false;
       try {
         c=await borrow();
-        // Admission and the CAS must run on the SAME restricted PG LOGIN.
+        // A PgBouncer transaction pool can remap *separate statements* on
+        // the same logical client to different physical PG backends. BEGIN
+        // pins privilege admission + the irreversible CAS + commit to one
+        // server transaction. Never borrow again between these statements.
+        await c.query({text:'BEGIN',query_timeout:2000});
+        inTransaction=true;
         await admission(c);
         const r=await c.query({
           text:'SELECT paper_atproto_authority.issue_session_oauth_generation('+
@@ -157,9 +162,21 @@ function createDisposableInitialOwnerEpochIssuer({
         if(r?.rowCount!==1||typeof rev!=='string'||!EPOCH.test(rev)||
            BigInt(rev)>MAX||rev!=='1')
           deny('OWNER_OAUTH_EPOCH_JOURNAL_NOT_CURRENT');
+        // A lost COMMIT ACK is ambiguous, even if the function returned 1.
+        // Never reissue this grant after an uncertain transaction outcome.
+        const committed=await c.query({text:'COMMIT',query_timeout:3000});
+        if(committed?.command!=='COMMIT')
+          deny('OWNER_OAUTH_EPOCH_UNAVAILABLE');
+        inTransaction=false;
         return rev;
       }catch(e){
         discard=true;
+        // Rollback is a best-effort cleanup, never an issuance retry.
+        // COMMIT may already have succeeded before its acknowledgement
+        // disappeared. Discard that connection in every failure case.
+        if(inTransaction){
+          await c.query({text:'ROLLBACK',query_timeout:2000}).catch(()=>{});
+        }
         if(typeof e?.code==='string'&&e.code.startsWith('OWNER_OAUTH_EPOCH_'))
           throw e;
         deny('OWNER_OAUTH_EPOCH_UNAVAILABLE');

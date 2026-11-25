@@ -306,7 +306,7 @@ if(process.env.PAPER_OWNER_OAUTH_REDIS_DISPOSABLE==='confirmed') {
     try{
       await redis.connect();
       assert.equal(await redis.ping(),'PONG');
-      assert.match(await redis.info('server'),/redis_version:8\\.2\\./u);
+      assert.match(await redis.info('server'),/redis_version:8\.2\./u);
       await redis.del(grantKey,ownerKey);
       assert.equal(await redis.set(ownerKey,digest(OWNER),'EX',120),'OK');
       const f=coordinatorFixture();

@@ -59,6 +59,9 @@ export function assertReceipt(key,bytes){
      v.kind!=='paper.oauth.pre-deny.v1'||v.subject!==pre[1]||
      !SUBJECT.test(v.grantSha256)||!SUBJECT.test(v.scopeSha256)||
      !UUID.test(v.operationId)||v.operationId!==pre[3]||
+     typeof v.revision!=='string'||
+     typeof v.credentialEpoch!=='string'||
+     typeof v.saiRevision!=='string'||
      asRevision(v.revision)!==v.revision||
      v.revision.padStart(19,'0')!==pre[2]||
      asRevision(v.credentialEpoch)!==v.credentialEpoch||

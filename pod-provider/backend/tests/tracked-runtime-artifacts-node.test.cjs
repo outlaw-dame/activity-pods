@@ -61,3 +61,34 @@ test('current Git index and tracked test fixtures pass hardened source guard', (
   const count = auditTrackedArtifacts();
   assert.ok(count > 0);
 });
+
+test('local example separates Redis service databases and binds them to loopback', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const example = readAssignments(fs.readFileSync(
+    path.join(__dirname, '../.env.example'), 'utf8'
+  ));
+  const names = [
+    'SEMAPPS_REDIS_CACHE_URL',
+    'SEMAPPS_QUEUE_SERVICE_URL',
+    'SEMAPPS_REDIS_TRANSPORTER_URL',
+    'SEMAPPS_REDIS_OIDC_PROVIDER_URL'
+  ];
+  const databases = new Set();
+  for (const key of names) {
+    const address = new URL(example.get(key));
+    assert.equal(address.protocol, 'redis:');
+    assert.equal(address.hostname, 'localhost');
+    assert.equal(address.port, '6379');
+    assert.match(address.pathname, /^\/[0-9]+$/u);
+    assert.equal(address.username, '');
+    assert.equal(address.password, '');
+    assert.equal(address.search, '');
+    assert.equal(address.hash, '');
+    assert.equal(databases.has(address.pathname), false,
+      'Two local Redis services must not share a database');
+    databases.add(address.pathname);
+  }
+  assert.equal(databases.size, names.length);
+  assert.equal(example.get('SEMAPPS_FUSEKI_BASE'), '../data/fuseki');
+});

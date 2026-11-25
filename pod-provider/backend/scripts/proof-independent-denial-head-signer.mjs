@@ -220,6 +220,16 @@ test('bad external signing key, lost KMS and expired deadline cannot release sig
   ...f.opts,trustedPublicKey:'-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----'
  }),e=>e?.code==='DENIAL_SIGNER_KEY_UNSAFE');
 });
+test('in-flight caller cancellation after KMS prevents a late denial-head response',async()=>{
+ const controller=new AbortController();
+ const f=fixture({abortDuringSign:controller});
+ await refused(()=>f.signer.respond({
+  kind:'paper.oauth.pre-deny.challenge.v1',subject:SUB,
+  nonce:crypto.randomBytes(32).toString('base64url'),
+  signal:controller.signal
+ }), 'DENIAL_SIGNER_CHALLENGE_ABORTED');
+ assert.equal(f.state.signs,1);
+});
 test('strict challenge scope, abort and post-construction production gate',async()=>{
  const f=fixture();
  await refused(()=>f.signer.respond({
@@ -230,6 +240,15 @@ test('strict challenge scope, abort and post-construction production gate',async
   kind:'paper.oauth.pre-deny.challenge.v1',subject:SUB,
   nonce:crypto.randomBytes(32).toString('base64url'),
   ownerWebId:'https://wrong.example'
+ }), 'DENIAL_SIGNER_CHALLENGE_UNSAFE');
+ await refused(()=>f.signer.respond({
+  kind:'paper.oauth.pre-deny.challenge.v1',subject:{toString:()=>SUB},
+  nonce:crypto.randomBytes(32).toString('base64url')
+ }), 'DENIAL_SIGNER_CHALLENGE_UNSAFE');
+ await refused(()=>f.signer.respond({
+  kind:'paper.oauth.pre-deny.challenge.v1',subject:SUB,
+  nonce:crypto.randomBytes(32).toString('base64url'),
+  signal:null
  }), 'DENIAL_SIGNER_CHALLENGE_UNSAFE');
  const stopped=new AbortController();stopped.abort();
  await refused(()=>f.signer.respond({

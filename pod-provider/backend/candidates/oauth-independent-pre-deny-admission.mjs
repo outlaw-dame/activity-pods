@@ -178,7 +178,8 @@ function signedHead(reply,nonce,expected,{key,authority,now}){
 export const DENIAL_SURFACES=SURFACES;
 export function createDisposableIndependentPreDenyAdmission({
  authenticateGrant,readCanonical,readWitness,readLatestArchive,
- readSignedHead,trustedPublicKey,authority,now=()=>Math.floor(Date.now()/1000),
+ readPreDenyInventory=null,readSignedHead,trustedPublicKey,authority,
+ now=()=>Math.floor(Date.now()/1000),
  timeoutMs=2500,fixtureOnly=false
 }={}){
  enabled();
@@ -191,6 +192,18 @@ export function createDisposableIndependentPreDenyAdmission({
     typeof now!=='function'||!AUTH.test(authority||'')||
     !Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>5000)
   fail('OAUTH_DENIAL_CONFIGURATION_INVALID');
+ // When the concrete portable S3 pre-deny inventory is supplied, insist on
+ // a distinct independently credentialed read capability. Its ABSENCE is
+ // NEVER an allow, and even observed absence cannot override signed-head
+ // and writer-reservation requirements.
+ const inventoryFlag=process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE;
+ if((inventoryFlag!==undefined||readPreDenyInventory!==null)&&
+    (inventoryFlag!=='confirmed'||
+     typeof readPreDenyInventory!=='function'||
+     [authenticateGrant,readCanonical,readWitness,readLatestArchive,
+      readSignedHead].includes(readPreDenyInventory)))
+  fail('OAUTH_DENIAL_INVENTORY_CONFIG_INVALID');
+ const inventoryEnabled=inventoryFlag==='confirmed';
  const key=publicKey(trustedPublicKey);
  const verifier=Object.freeze({key,authority,now});
  async function independentRead(fn,record,code){
@@ -199,6 +212,19 @@ export function createDisposableIndependentPreDenyAdmission({
     timeoutMs);}
   catch{fail(code)}
   return result;
+ }
+ async function vetoArchivedDeny(probe){
+  if(!inventoryEnabled)return;
+  if(process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE!=='confirmed')
+   fail('OAUTH_DENIAL_INVENTORY_NOT_RELEASED');
+  const evidence=await independentRead(readPreDenyInventory,probe,
+   'OAUTH_DENIAL_INVENTORY_UNAVAILABLE');
+  if(!evidence||evidence.releaseAccepted!==false||
+     evidence.absenceAuthorizes!==false||
+     ![true,false].includes(evidence.retainedDenialObserved))
+   fail('OAUTH_DENIAL_INVENTORY_UNSAFE');
+  if(evidence.retainedDenialObserved===true)
+   fail('OAUTH_DENIAL_RETAINED_PRE_DENY');
  }
  return Object.freeze({
   releaseAccepted:false,
@@ -238,6 +264,7 @@ export function createDisposableIndependentPreDenyAdmission({
       grantSha256,r.oauthRevision)||
       firstWitness.status!=='active')
     fail('OAUTH_DENIAL_WITNESS_STALE');
+   await vetoArchivedDeny(probe);
    const archive=await independentRead(readLatestArchive,probe,
     'OAUTH_DENIAL_ARCHIVE_UNAVAILABLE');
    if(!archiveState(archive,subject,epochSubject,
@@ -288,6 +315,9 @@ export function createDisposableIndependentPreDenyAdmission({
        'witnessEventSha256','receiptSha256','operationId',
        'archiveVersion'])||finalArchive.status!=='active')
     fail('OAUTH_DENIAL_ARCHIVE_STALE');
+   // Recheck retained denial after independent archive and signer network
+   // reads; a pre-deny found in either scan vetoes even restored PG state.
+   await vetoArchivedDeny(probe);
    let last;
    try{last=trustedGrant(await limited(signal=>authenticateGrant({
     context,surface,signal

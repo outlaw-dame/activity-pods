@@ -16,7 +16,7 @@ generation journal for **one independently observed ACTIVE genesis and
 one terminal BLOCKED transition**. The object key format is
 `paper/oauth-authority/generations/v1/<64hex-signed-v5-subject>/<19-digit-sequence>`.
 Receipts use the existing `assertReceipt` validation and have a
-strict schema, canonical UTF-8 bytes, maximum 1024 bytes, an authenticated
+strict schema, canonical UTF-8 bytes, maximum 1024 bytes, a recorded
 legacy epoch-v1 NUL-framed subject digest **explicitly distinct** from
 the v5 subject digest, stable grant/scope/owner-proof hashes,
 canonical OAuth/credential/SAI revisions, UUID operation, previous
@@ -61,6 +61,11 @@ ACTIVE generation 1 --[independently prepared + sealed PRE-DENY]-->
 BLOCKED, generation 2 (terminal)
 BLOCKED --[anything in v1]--> REJECT
 ```
+
+The journal checks both subject fields for canonical hash format and
+immutability, **not their mathematical derivation from the same WebID and
+client ID**. That cross-domain identity mapping must be verified by the
+actual authenticated provider and independent custodian before release.
 
 The genesis' `ownerProofSha256` is opaque **evidence metadata**, not a
 verified owner session or approval. The actual owner-consent ceremony

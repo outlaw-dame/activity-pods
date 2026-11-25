@@ -213,6 +213,10 @@ async function run(){
   'Exact same operation can be reconciled after lost prepare ACK');
  assert.equal(await prepare(preparer,ownerA,crypto.randomUUID()),false);
  assert.equal(await prepare(preparer,ownerA,opA,12),false);
+ await denied(()=>root.query(
+  'UPDATE paper_oauth_restore_witness.current_epochs '+
+  'SET deny_sealed_at=clock_timestamp() WHERE owner_webid=$1',
+  [ownerA]),'23514');
  assert.equal(await verify(reader,ownerA),false);
  const active=await reader.query(
   'SELECT * FROM paper_oauth_restore_witness.active_checkpoint('+

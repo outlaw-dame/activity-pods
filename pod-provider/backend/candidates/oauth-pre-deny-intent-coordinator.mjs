@@ -132,6 +132,23 @@ export function createDisposablePreDenyIntentCoordinator({
       archived.versionId.length<1||archived.versionId.length>512)
     refuse('PRE_DENY_ARCHIVE_UNVERIFIED');
 
+   // The archive PUT may outlast the browser login or credential epoch.
+   // Recheck the same independently attested owner/grant before publishing
+   // an irreversible denial; an archived orphan is never a revoke ACK.
+   let current;
+   try{
+    current=await bounded(()=>ownerReader.inspectForDeny({
+      context,clientId,expectedGrantId
+    }),timeoutMs);
+   }catch{refuse('PRE_DENY_OWNER_NOT_CURRENT')}
+   if(!valid(current,clientId,expectedGrantId)||
+      current.ownerWebId!==r.ownerWebId||
+      current.appUri!==r.appUri||
+      current.oauthRevision!==r.oauthRevision||
+      current.saiRevision!==r.saiRevision||
+      current.credentialEpoch!==r.credentialEpoch||
+      current.scopeSha256!==r.scopeSha256)
+    refuse('PRE_DENY_OWNER_NOT_CURRENT');
    const expected=Object.freeze({
     subject,grantSha256,revision,operationId:op,receiptSha256:sha256
    });

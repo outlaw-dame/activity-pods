@@ -221,9 +221,11 @@ async function run(){
  await denied(()=>reserve(writer,ownerA),'P0001');
  assert.equal(await block(revoker,ownerA,opA),'0',
   'No owner-visible revoke ACK before independent WORM sealing');
- await denied(()=>denyAttestor.query(fun('seal_pre_deny',
+ const wrongSeal=await denyAttestor.query(fun('seal_pre_deny',
   '$1,$2,$3::uuid,$4'),
-  [ownerA,cli,opA,Buffer.alloc(32)]),'42501').catch(()=>{});
+  [ownerA,cli,opA,Buffer.alloc(32)]);
+ assert.equal(wrongSeal.rows[0]?.value,false,
+  'Correct attestor role MUST reject a forged/unarchived receipt digest');
  // Unretained or corrupted object must strand denial, never reopen grant.
  assert.equal(await archivePreDeny(denyAttestor,ownerA,opA),true);
  assert.equal(await block(revoker,ownerA,crypto.randomUUID()),'0');

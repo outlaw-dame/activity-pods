@@ -292,6 +292,37 @@ test('forks, gaps, delete markers and unsafe historical retention fail closed',a
   Buffer.from(JSON.stringify(BLOCK)));
  await denied(()=>missing.read(),'GENERATION_JOURNAL_GAP_OR_FORK');
 });
+test('concurrent competing genesis writers cannot create two accepted heads',async()=>{
+ const f=fixture();
+ const competing={...GENESIS,
+  operationId:'c9f97f9f-625c-4b62-8f64-2c6e57401994',
+  grantSha256:'f'.repeat(64),ownerProofSha256:'f'.repeat(64)
+ };
+ const outcomes=await Promise.allSettled([
+  f.journal.append(GENESIS),f.journal.append(competing)
+ ]);
+ assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1,
+  'Only one competing owner/grant generation may be retained');
+ assert.equal(outcomes.filter(x=>x.status==='rejected').length,1);
+ assert.ok(['GENERATION_JOURNAL_TRANSITION_INVALID',
+  'GENERATION_JOURNAL_COMMIT_AMBIGUOUS'].includes(
+  outcomes.find(x=>x.status==='rejected').reason.code));
+ assert.equal(f.state.stored.get(GENERATION_BASE+'0000000000000000001').length,1);
+ const retained=await f.read();
+ assert.equal(retained.observedGenerations,1);
+ assert.equal(retained.activeAuthorizes,false);
+ assert.equal(retained.releaseAccepted,false);
+});
+test('idempotent same-byte contested generation retains one S3 version',async()=>{
+ const f=fixture();
+ const results=await Promise.allSettled([
+  f.journal.append(GENESIS),f.journal.append(GENESIS)
+ ]);
+ for(const outcome of results)
+  assert.equal(outcome.status,'fulfilled');
+ assert.equal(f.state.stored.get(GENERATION_BASE+'0000000000000000001').length,1);
+ assert.equal((await f.read()).activeAuthorizes,false);
+});
 test('S3 gateways that ignore If-None-Match cannot hide a second version',async()=>{
  const f=fixture({ignoreCondition:true});
  await f.journal.append(GENESIS);

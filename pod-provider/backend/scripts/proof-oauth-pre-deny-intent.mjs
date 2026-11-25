@@ -25,8 +25,10 @@ const SCOPE_HASH='f'.repeat(64);
 const AUTHORITY='pre_deny.independent.test';
 const CLOCK=1800000000;
 const DOMAIN=Buffer.from('paper:oauth:pre-deny:head:v1\0');
-const SUBJECT=crypto.createHash('sha256').update('paper:witness:subject:v1\0')
- .update(OWNER).update('\0').update(CLIENT).digest('hex');
+// Independent PG18 witness v5 uses length-framed canonical WebID and client.
+const SUBJECT=crypto.createHash('sha256').update(
+ 'paper:witness:subject:v1:'+OWNER.length+':'+OWNER+':'+CLIENT,
+ 'utf8').digest('hex');
 const HASH=crypto.createHash('sha256').update(GRANT).digest('hex');
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const grantRecord=()=>({

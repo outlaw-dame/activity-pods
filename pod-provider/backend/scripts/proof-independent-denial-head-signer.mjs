@@ -137,10 +137,11 @@ test('separately signed BLOCKED head reconstructed from retained WORM after both
  assert.equal(f.state.oldSignerCachedState,'ACTIVE');
  assert.equal(f.calls.length,1);
  const raw=await f.request();
+ const again=await f.request();
+ assert.notEqual(JSON.parse(raw.body).nonce,JSON.parse(again.body).nonce,
+  'New independent signer challenges cannot replay a previous head');
  assert.equal(raw.denied,true);
  assert.equal(raw.releaseAccepted,false);
- assert.notEqual(raw.body.toString('base64'),
-  f.calls[0].toString('base64'),'Fresh nonce required for each statement');
  const head=JSON.parse(raw.body);
  assert.equal(head.receiptSha256,SHA);
  assert.equal(head.revision,'7');
@@ -161,10 +162,7 @@ test('old signer replay and independently rotated private key cannot forge curre
  const stale=fixture();
  await refused(()=>stale.verifier.assertDenied({
   ...stale.expected,revision:'6'
- }), 'PRE_DENY_HEAD_SCOPE_INVALID').catch(async error=>{
-  // The actual retained-receipt mismatch is discovered by signature scope.
-  if(error?.code)throw error;
- });
+ }), 'PRE_DENY_HEAD_SCOPE_INVALID');
  // Signed valid historical nonce is never accepted as a new nonce.
  const oldVerifier=createDisposablePreDenySignedHead({
   readHead:async()=>first,trustedPublicKey:PUBLIC,

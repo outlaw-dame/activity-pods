@@ -69,7 +69,10 @@ function fixture(opts={}){
   versions.push(v);stored.set(key,versions);
   return v;
  }
- if(opts.preDeny!==false)add(PRE_KEY,PRE_BYTES);
+ // PRE-DENY must be retained only after genesis; a pre-existing denial
+ // correctly prevents an old ACTIVE generation from being recreated.
+ function stagePreDeny(){return add(PRE_KEY,PRE_BYTES)}
+ if(opts.preDenyAlreadyRetained===true)stagePreDeny();
  function versions(prefix){
   let entries=[...stored.entries()]
    .flatMap(([key,items])=>key.startsWith(prefix)?items:[])
@@ -149,7 +152,7 @@ function fixture(opts={}){
   bucket:'independent-custody-fixture',
   reader,writer,commands,clock:()=>NOW,fixtureOnly:true};
  return {args,state,read:()=>createDisposableGenerationWormJournal(args).inspect(SUB),
-  journal:createDisposableGenerationWormJournal(args),add};
+  journal:createDisposableGenerationWormJournal(args),add,stagePreDeny};
 }
 test('canonical dual-status schema binds legacy epoch and v5 subject, chain hash, consent and PRE-DENY',()=>{
  const key=GENERATION_BASE+'0000000000000000001';
@@ -187,6 +190,7 @@ test('genesis ACTIVE and retained BLOCKED are observed but NEVER authorize resto
  assert.equal(r.head.record.status,'active');
  assert.equal(r.activeAuthorizes,false,'Positive is not usable as access proof');
  assert.equal(r.completeExternallyVerified,false);
+ f.stagePreDeny();
  const deniedHead=await f.journal.append(BLOCK);
  assert.equal(deniedHead.observedGeneration,'2');
  assert.equal(deniedHead.retainedBlocked,true);
@@ -202,8 +206,15 @@ test('genesis ACTIVE and retained BLOCKED are observed but NEVER authorize resto
  assert.ok(f.state.reads.includes('GetObjectRetentionCommand'));
  assert.equal(f.state.reads.includes('DeleteObjectCommand'),false);
 });
+test('a retained pre-denial before a restored ACTIVE genesis is a hard veto',async()=>{
+ const f=fixture({preDenyAlreadyRetained:true});
+ await denied(()=>f.journal.append(GENESIS),
+  'GENERATION_JOURNAL_PRE_DENY_UNVERIFIED');
+ assert.equal(f.state.puts,0);
+ assert.equal((await f.read()).activeAuthorizes,false);
+});
 test('PRE-DENY must independently exist with matching operation and grant',async()=>{
- const absent=fixture({preDeny:false});
+ const absent=fixture();
  await absent.journal.append(GENESIS);
  await denied(()=>absent.journal.append(BLOCK),
   'GENERATION_JOURNAL_PRE_DENY_UNVERIFIED');
@@ -212,6 +223,7 @@ test('PRE-DENY must independently exist with matching operation and grant',async
  for(const injected of ['corruptPreDeny','preDenyMarker']){
   const fault={};const f=fixture(fault);
   await f.journal.append(GENESIS);
+  f.stagePreDeny();
   fault[injected]=true;
   await denied(()=>f.journal.append(BLOCK),
    'GENERATION_JOURNAL_PRE_DENY_UNVERIFIED');
@@ -219,6 +231,7 @@ test('PRE-DENY must independently exist with matching operation and grant',async
  }
  const mismatch=fixture();
  await mismatch.journal.append(GENESIS);
+ mismatch.stagePreDeny();
  await denied(()=>mismatch.journal.append({
   ...BLOCK,operationId:OP1
  }), 'GENERATION_JOURNAL_TRANSITION_INVALID');
@@ -228,7 +241,8 @@ test('PRE-DENY must independently exist with matching operation and grant',async
 });
 test('replaying a block or trying to reactivate a revoked consent is denied',async()=>{
  const f=fixture();
- await f.journal.append(GENESIS);await f.journal.append(BLOCK);
+ await f.journal.append(GENESIS);f.stagePreDeny();
+ await f.journal.append(BLOCK);
  await denied(()=>f.journal.append(BLOCK),
   'GENERATION_JOURNAL_TRANSITION_INVALID');
  await denied(()=>f.journal.append({
@@ -290,7 +304,8 @@ test('S3 gateways that ignore If-None-Match cannot hide a second version',async(
 });
 test('provider may replay a coherent older listing: ACTIVE still never authorizes',async()=>{
  const fault={};const f=fixture(fault);
- await f.journal.append(GENESIS);await f.journal.append(BLOCK);
+ await f.journal.append(GENESIS);f.stagePreDeny();
+ await f.journal.append(BLOCK);
  fault.hideLast=true; // The provider maliciously hides its latest generation.
  const rewound=await f.read();
  assert.equal(rewound.head.record.status,'active');
@@ -310,7 +325,7 @@ test('single-attempt SDK, exact scope and disabled-production boundary',async()=
   'GENERATION_JOURNAL_SCOPE_INVALID');
  const old=process.env.NODE_ENV;process.env.NODE_ENV='production';
  try{
-  await denied(()=>f.read(),'GENERATION_JOURNAL_NOT_RELEASED');
+  await denied(async()=>f.read(),'GENERATION_JOURNAL_NOT_RELEASED');
   await denied(()=>f.journal.append(GENESIS),
    'GENERATION_JOURNAL_NOT_RELEASED');
   assert.throws(()=>createDisposableGenerationWormJournal(f.args),

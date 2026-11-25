@@ -76,6 +76,10 @@ function fixture(options={}){
    const record=grantRecord();
    if(options.corruptOwner)record.grantId='z'.repeat(32);
    if(options.oldCredential)record.credentialEpoch='0';
+   if(options.ownerChangedAfterArchive&&state.owner>1)
+     record.credentialEpoch='12';
+   if(options.logoutAfterArchive&&state.owner>1)
+     throw Error('Signed browser session expired during archival');
    assert.equal(clientId,CLIENT);
    assert.equal(expectedGrantId,GRANT);
    return record;
@@ -163,7 +167,7 @@ test('exact owner-bound pre-deny archive is retained before independent signer r
  assert.equal(result.releaseAccepted,false);
  assert.equal(result.subject,SUBJECT);
  assert.equal(result.revision,REV);
- assert.equal(f.state.owner,1);
+ assert.equal(f.state.owner,2);
  assert.equal(f.state.put,1);
  assert.equal(f.state.publish,1);
  assert.equal(f.state.signature,1);
@@ -204,6 +208,20 @@ test('unsafe S3 receipt/readback cannot reach signer or revoker',async()=>{
    'PRE_DENY_ARCHIVE_AMBIGUOUS':'PRE_DENY_ARCHIVE_UNVERIFIED');
   assert.equal(f.state.put,1);
   assert.equal(f.state.publish,0);
+  assert.equal(f.state.mutations,0);
+ }
+});
+
+test('logout or owner credential rotation during archive prevents denial-head publish',async()=>{
+ for(const options of [
+   {logoutAfterArchive:true},{ownerChangedAfterArchive:true}
+ ]){
+  const f=fixture(options);
+  await denied(()=>call(f),'PRE_DENY_OWNER_NOT_CURRENT');
+  assert.equal(f.state.owner,2);
+  assert.equal(f.state.put,1);
+  assert.equal(f.state.publish,0);
+  assert.equal(f.state.signature,0);
   assert.equal(f.state.mutations,0);
  }
 });

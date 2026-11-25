@@ -20,7 +20,14 @@ import {inspectDisposablePortablePreDenyInventory} from
 import {assertReceipt} from '../backend/candidates/oauth-s3-compliance-archive.mjs';
 
 const HEX=/^[a-f0-9]{64}$/u;
-const VERSION=/^[^\x00-\x20\x7f]{1,512}$/u;
+const VERSION=/^.{1,512}$/u;
+function validVersion(value){
+ return typeof value==='string'&&VERSION.test(value)&&
+  [...value].every(ch=>{
+   const point=ch.codePointAt(0);
+   return point>32&&point!==127;
+  });
+}
 const REV=/^[1-9][0-9]{0,18}$/u;
 const MAX=9223372036854775807n;
 const ZERO='0'.repeat(64);
@@ -149,7 +156,7 @@ export function createDisposableGenerationWormJournal({
     if(!match||match[1]!==subject||
        match[2]==='0000000000000000000'||
        BigInt(match[2])>MAX||
-       typeof v.VersionId!=='string'||!VERSION.test(v.VersionId)||
+       !validVersion(v.VersionId)||
        v.VersionId==='null'||v.IsLatest!==true||
        !Number.isSafeInteger(v.Size)||v.Size<32||v.Size>1024)
      fail('GENERATION_JOURNAL_HISTORY_INVALID');

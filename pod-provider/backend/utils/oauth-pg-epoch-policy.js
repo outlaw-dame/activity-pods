@@ -11,6 +11,16 @@ const MAX=9223372036854775807n;
 const GRANT=/^[A-Za-z0-9_-]{32}$/u;
 
 function enabled() {
+  // This runtime still has Redis-only OAuth grant/refresh issuance when the
+  // disposable PG epoch candidate is not enabled. Production (and ordinary
+  // development) must NEVER silently fall back to that rewindable authority.
+  // Source-controlled closed gate: NO environment flag can enable it.
+  // A separate reviewed production integration must replace this branch only
+  // after independently administered immutable-head and restore acceptance.
+  if (process.env.NODE_ENV !== 'test') {
+    throw new MoleculerError('PDS OAuth issuer is not released for non-test use',
+      503,'PDS_OAUTH_RELEASE_GATE_CLOSED',{retryable:false});
+  }
   const configured=process.env.PAPER_OAUTH_PG_EPOCH_DISPOSABLE;
   if(configured===undefined)return false;
   if(configured!=='confirmed'||process.env.NODE_ENV!=='test'||

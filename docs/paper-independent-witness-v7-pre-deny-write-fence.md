@@ -17,6 +17,11 @@ source-controlled release remains CLOSED.
 
 ## What is implemented
 
+- **Same-session owner proof:** The nonactivated coordinator now requires
+  a provider-derived SHA256 authentication-proof identifier on both
+  authenticated owner reads, and refuses to seal or publish if that proof
+  changes after immutable archival (including same-owner relogin with an
+  unchanged credential epoch). The digest never enters a WORM receipt.
 - **One-way PREPARE CAS:** Restricted `paper_oauth_witness_pre_deny_preparer`
   may call only the `prepare_pre_deny` function. It locks the exact
   independent owner/client witness epoch and records the immutable

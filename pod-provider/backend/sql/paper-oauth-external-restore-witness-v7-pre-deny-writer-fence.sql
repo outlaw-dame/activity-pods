@@ -54,7 +54,8 @@ ALTER TABLE paper_oauth_restore_witness.current_epochs
    deny_scope_sha256 IS NOT NULL AND
    octet_length(deny_scope_sha256)=32 AND
    ((deny_receipt_sha256 IS NULL AND deny_sealed_at IS NULL)
-     OR (octet_length(deny_receipt_sha256)=32 AND
+     OR (deny_receipt_sha256 IS NOT NULL AND
+         octet_length(deny_receipt_sha256)=32 AND
          deny_sealed_at IS NOT NULL)))
  );
 

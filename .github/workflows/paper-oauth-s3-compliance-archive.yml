@@ -21,6 +21,8 @@ on:
       - 'pod-provider/backend/candidates/oauth-pre-deny-signed-head.mjs'
       - 'pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs'
+      - 'pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs'
       - 'pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs'
@@ -75,6 +77,14 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs
           node --check pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
           PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
+          node --check pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
+          PAPER_OAUTH_PRE_DENY_ADMISSION_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_WITNESS_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
+          grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs
+          if grep -R -nE 'oauth-independent-pre-deny-admission' pod-provider/backend/services pod-provider/backend/moleculer.config.js; then
+            echo '::error::Independent current-head candidate is NOT a production issuer or signer'
+            exit 1
+          fi
           if grep -R -nE 'oauth-pre-deny-(intent-coordinator|signed-head)' pod-provider/backend/services pod-provider/backend/moleculer.config.js; then
             echo '::error::Independent pre-denial authority cannot be activated in production services'
             exit 1

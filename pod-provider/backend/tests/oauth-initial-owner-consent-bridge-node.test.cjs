@@ -286,3 +286,96 @@ test('no production config flag enables the new approval coordinator',async()=>{
     e=>e?.code==='OWNER_INITIAL_CONSENT_NOT_RELEASED');
   enable();
 });
+
+if(process.env.PAPER_OWNER_OAUTH_REDIS_DISPOSABLE==='confirmed') {
+  test('real Redis 8.2 DUMP/RESTORE cannot reauthorize signed OAuth token after witness block',async()=>{
+    enable();
+    process.env.SEMAPPS_AVAILABLE_LOCALES='en';
+    process.env.SEMAPPS_AUTH_RESERVED_USER_NAMES='admin,root';
+    const Redis=require('ioredis');
+    const {SignJWT,generateKeyPair,exportJWK}=require('jose');
+    const oauthToken=require('../services/oauth/oauth-token.service.js');
+    const oauthConsent=require('../services/oauth/oauth-consent.service.js');
+    const redis=new Redis('redis://127.0.0.1:6398',{
+      lazyConnect:true,enableOfflineQueue:false,
+      autoResendUnfulfilledCommands:false,maxRetriesPerRequest:1,
+      connectTimeout:2500
+    });
+    const grantKey=consentKey('oauth:grant',OWNER,CLIENT);
+    const ownerKey=sessionKey(KEY_PREFIX,SESSION);
+    try{
+      await redis.connect();
+      assert.equal(await redis.ping(),'PONG');
+      assert.match(await redis.info('server'),/redis_version:8\\.2\\./u);
+      await redis.del(grantKey,ownerKey);
+      assert.equal(await redis.set(ownerKey,digest(OWNER),'EX',120),'OK');
+      const f=coordinatorFixture();
+      f.options.redis=redis;
+      const grant=await f.execute();
+      const snapshot=await redis.callBuffer('DUMP',grantKey);
+      assert.ok(Buffer.isBuffer(snapshot)&&snapshot.length>0);
+      const issuer='https://paper.example.org';
+      const audience='https://pds.paper.example.org';
+      const did='did:plc:'+'b'.repeat(24);
+      const {privateKey,publicKey}=await generateKeyPair('ES256');
+      const publicJwk={...await exportJWK(publicKey),alg:'ES256'};
+      const token=await new SignJWT({
+        scope:grant.scope,client_id:grant.clientId,
+        canonical_account_id:grant.canonicalAccountId,
+        consent_grant_id:grant.grantId,
+        oauth_pg_revision:grant.oauthPgRevision,
+        cnf:{jkt:'a'.repeat(43)}
+      }).setProtectedHeader({alg:'ES256',typ:'at+jwt'})
+        .setIssuer(issuer).setAudience(audience).setSubject(did)
+        .setIssuedAt().setExpirationTime('2m').sign(privateKey);
+      const ctx={params:{token},call:async(name,args)=>{
+        if(name==='jwk.get')return {publicJwk};
+        if(name==='oauth-consent.get')
+          return oauthConsent.actions.get.handler.call({
+            redis,settings:{keyPrefix:'oauth:grant'}
+          },{params:args});
+        if(name==='oauth-pg-epoch.verify')
+          return f.options.canonicalReader.verify({
+            canonicalAccountId:args.canonicalAccountId,
+            clientId:args.clientId,
+            consentGrantId:args.consentGrantId,
+            scope:args.scope,oauthPgRevision:args.oauthPgRevision
+          });
+        if(name==='oauth-witness-epoch.verify')
+          return f.options.immutableWitnessReader.verify({
+            canonicalAccountId:args.canonicalAccountId,
+            clientId:args.clientId,
+            consentGrantId:args.consentGrantId,scope:SCOPE,
+            oauthPgRevision:args.oauthPgRevision
+          });
+        assert.fail('Unexpected service action: '+name);
+      }};
+      const introspect=()=>oauthToken.actions.introspectAccessToken.handler.call({
+        settings:{issuer,audience}
+      },ctx);
+      assert.equal((await introspect()).active,true,
+        'Baseline validates the actual signed OAuth handler');
+      // Revocation advanced canonical and independently retained authority,
+      // but the attacker reintroduced the prior Redis grant snapshot.
+      f.state.canonicalCurrent=false;
+      f.state.witnessCurrent=false;
+      await redis.del(grantKey);
+      assert.equal(await redis.restore(grantKey,120000,snapshot),'OK');
+      assert.equal((await introspect()).active,false,
+        'Restored Redis grant cannot override canonical revocation');
+      // An administrator also rewound the *primary* database; a separately
+      // retained latest independent head still denies. No positive claim of
+      // actual PG WAL PITR is made by this callback-only fixture.
+      f.state.canonicalCurrent=true;
+      assert.equal((await introspect()).active,false,
+        'Dual Redis/primary rollback still denied by external high-water');
+      f.state.witnessCurrent=false;
+      assert.equal((await introspect()).active,false);
+    }finally{
+      if(redis.status==='ready'){
+        await redis.del(grantKey,ownerKey).catch(()=>{});
+        await redis.quit().catch(()=>redis.disconnect());
+      }else redis.disconnect();
+    }
+  });
+}

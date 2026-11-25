@@ -26,7 +26,9 @@ const MAX=9223372036854775807n;
 const ZERO='0'.repeat(64);
 const BASE='paper/oauth-authority/generations/v1/';
 const KEY=/^paper\/oauth-authority\/generations\/v1\/([a-f0-9]{64})\/([0-9]{19})$/u;
-const LIMIT=16;
+// Version 1 permits only genesis ACTIVE and one terminal BLOCKED.
+// Refuse extra versions before unnecessary retained-object reads.
+const LIMIT=2;
 function fail(code){
  const error=new Error('Independent authorization generation evidence unavailable');
  error.code=code;throw error;

@@ -37,17 +37,19 @@ function epoch(s){return typeof s==='string'&&EPOCH.test(s)&&BigInt(s)<=MAX}
 function same(a,b){
   if(!a||!b)return false;
   return a.webId===b.webId&&a.sessionId===b.sessionId&&
-    a.credentialSeal===b.credentialSeal;
+    a.credentialSeal===b.credentialSeal&&
+    a.credentialEpoch===b.credentialEpoch;
 }
 function ownerProof(x){
   if(!x||typeof x!=='object'||Array.isArray(x)||
      !webid(x.webId)||typeof x.sessionId!=='string'||
      !SESSION.test(x.sessionId)||typeof x.credentialSeal!=='string'||
-     !SESSION.test(x.credentialSeal))
+     !SESSION.test(x.credentialSeal)||!epoch(x.credentialEpoch))
     reject('OWNER_POST_ENROLLMENT_SESSION_INVALID');
   return Object.freeze({
     webId:x.webId,sessionId:x.sessionId,
-    credentialSeal:x.credentialSeal
+    credentialSeal:x.credentialSeal,
+    credentialEpoch:x.credentialEpoch
   });
 }
 async function bounded(task,timeoutMs){
@@ -220,6 +222,8 @@ function createDisposablePostEnrollmentOwnerReader({
         reject('OWNER_POST_ENROLLMENT_SCOPE_INVALID');
       const first=await session(context);
       const epochBefore=await credential(first.webId);
+      if(epochBefore!==first.credentialEpoch)
+        reject('OWNER_POST_ENROLLMENT_CREDENTIAL_NOT_CURRENT');
       const r=await readPrimary(first.webId,clientId);
       if(r.grant_id!==expectedGrantId||
          r.credential_epoch!==epochBefore)

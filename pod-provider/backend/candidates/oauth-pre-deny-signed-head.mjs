@@ -101,7 +101,8 @@ export function createDisposablePreDenySignedHead({
    operationId:data.operationId,receiptSha256:data.receiptSha256,
    nonce:data.nonce,issuedAt:data.issuedAt
   }),'utf8');
-  if(!crypto.timingSafeEqual(canonical,reply.body))
+  if(canonical.length!==reply.body.length||
+     !crypto.timingSafeEqual(canonical,reply.body))
    deny('PRE_DENY_HEAD_CANONICAL_INVALID');
   let timestamp;
   try{timestamp=now()}catch{deny('PRE_DENY_HEAD_CLOCK_INVALID')}

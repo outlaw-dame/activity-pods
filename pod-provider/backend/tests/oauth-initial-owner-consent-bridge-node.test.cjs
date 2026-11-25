@@ -100,7 +100,8 @@ test('issuer refuses production flags, raw user selectors, wrong scope and stale
 test('every PG connection must be a restricted exact-purpose issuer',async()=>{
   enable();
   for(const bad of [
-    {version:170000},{own_login:false},{primary_host:false},
+    {version:170000},{version:'180000'},{version:undefined},
+    {own_login:false},{primary_host:false},
     {restricted:false},{issuer:false},{can_switch:true},
     {revoker:true},{signer:true},{reader:true},
     {sai_issuer:true},{sai_attestor:true},{schema_create:true},
@@ -124,6 +125,18 @@ test('every PG connection must be a restricted exact-purpose issuer',async()=>{
     tokenHash:TOKEN_HASH,grantId:'y'.repeat(32),scope:SCOPE
   }),'OWNER_OAUTH_EPOCH_ROLE_UNSAFE');
   assert.deepEqual(f.released,[{lease:1,discard:false},{lease:2,discard:true}]);
+});
+
+test('enrollment hash is snapshotted before an asynchronous PG lease',async()=>{
+  const f=pgFixture();
+  const data=Buffer.from(TOKEN_HASH);
+  const pending=issuer(f).issueFirst({
+    tokenHash:data,grantId:'x'.repeat(32),scope:SCOPE
+  });
+  data.fill(0);
+  assert.equal(await pending,'1');
+  assert.deepEqual(f.calls[1].values[2],TOKEN_HASH);
+  assert.notDeepEqual(f.calls[1].values[2],data);
 });
 
 test('PG refusal and unknown write ACK do not retry the irreversible CAS',async()=>{

@@ -25,6 +25,9 @@ on:
       - 'pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs'
       - 'pod-provider/backend/candidates/oauth-portable-pre-deny-inventory.mjs'
       - 'pod-provider/independent-authority/immutable-denial-head-signer.mjs'
+      - 'pod-provider/independent-authority/oauth-generation-worm-journal.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-generation-worm-journal.mjs'
+      - 'docs/paper-independent-generation-journal-gate.md'
       - 'pod-provider/backend/scripts/proof-independent-denial-head-signer.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs'
@@ -88,6 +91,14 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs
           node --check pod-provider/independent-authority/immutable-denial-head-signer.mjs
           node --check pod-provider/backend/scripts/proof-independent-denial-head-signer.mjs
+          node --check pod-provider/independent-authority/oauth-generation-worm-journal.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-generation-worm-journal.mjs
+          NODE_ENV=test PAPER_OAUTH_GENERATION_JOURNAL_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed \
+            node pod-provider/backend/scripts/proof-oauth-generation-worm-journal.mjs
+          if grep -R -n 'oauth-generation-worm-journal' pod-provider/backend/services; then
+            echo '::error::Independent generation journal is not an ordinary provider service'
+            exit 1
+          fi
           NODE_ENV=test PAPER_INDEPENDENT_DENIAL_SIGNER_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed \
             node pod-provider/backend/scripts/proof-independent-denial-head-signer.mjs
           if grep -R -nE 'independent-authority/immutable-denial-head-signer|proof-independent-denial-head-signer' pod-provider/backend/services; then
@@ -180,6 +191,9 @@ jobs:
           NODE_ENV=test PAPER_INDEPENDENT_DENIAL_SIGNER_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed \
             PAPER_OAUTH_S3_SDK_ENTRY="$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js" \
             node pod-provider/backend/scripts/proof-independent-denial-head-signer.mjs
+          NODE_ENV=test PAPER_OAUTH_GENERATION_JOURNAL_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed \
+            PAPER_OAUTH_S3_SDK_ENTRY="$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js" \
+            node pod-provider/backend/scripts/proof-oauth-generation-worm-journal.mjs
           PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
             node pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs

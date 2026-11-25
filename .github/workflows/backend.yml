@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pod-provider/backend/**'
+      - 'pod-provider/independent-authority/**'
       - 'tests/**'
       - '.github/workflows/backend.yml'
   workflow_dispatch:

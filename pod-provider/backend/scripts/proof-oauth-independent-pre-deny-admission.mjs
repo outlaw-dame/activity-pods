@@ -246,7 +246,7 @@ test('Ed25519 signer must be current, correctly scoped, nonreplayed and public-k
   [{signerWrongKey:true},'OAUTH_DENIAL_SIGNER_SIGNATURE_INVALID'],
   [{signerOldRevision:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerWrongSubject:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
-  [{signerWrongEpochSubject:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID']
+  [{signerWrongEpochSubject:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerWrongGrant:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerWrongNonce:true},'OAUTH_DENIAL_SIGNER_SCOPE_INVALID'],
   [{signerOldClock:true},'OAUTH_DENIAL_SIGNER_CLOCK_INVALID'],

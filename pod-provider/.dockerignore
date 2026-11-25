@@ -9,3 +9,9 @@ backend/jwt
 frontend/.yalc
 
 data/
+# Keep credentials and serialized runtime state out of Docker build contexts.
+backend/.env
+backend/.env.*
+backend/*.rdb
+backend/*.aof
+backend/appendonlydir/

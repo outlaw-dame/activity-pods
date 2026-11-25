@@ -139,6 +139,9 @@ jobs:
           ATPROTO_PDS_WRITE_TEST_DISPOSABLE: confirmed
           ATPROTO_PDS_OAUTH_TEST_DISPOSABLE: confirmed
           ATPROTO_PDS_OAUTH_REDIS_URL: redis://127.0.0.1:6398
+          # Required nonsecret SemApps config; never source the tracked runtime .env.
+          SEMAPPS_AVAILABLE_LOCALES: en
+          SEMAPPS_AUTH_RESERVED_USER_NAMES: admin,root
         run: node scripts/proof-provider-pds-oauth.js
 
       - name: Remove disposable Redis DPoP test container

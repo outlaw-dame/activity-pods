@@ -20,6 +20,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Refuse committed runtime credentials and Redis persistence
+        run: |
+          node pod-provider/backend/scripts/proof-no-tracked-runtime-artifacts.cjs
+          node --test pod-provider/backend/tests/tracked-runtime-artifacts-node.test.cjs
       - name: Install locked application dependencies
         run: |
           npm ci --ignore-scripts --no-audit --no-fund

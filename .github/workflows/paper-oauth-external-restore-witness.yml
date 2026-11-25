@@ -10,6 +10,10 @@ on:
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v4-commit-only-reconciliation.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v5-immutable-signed-intent-receipts.sql'
       - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql'
+      - 'pod-provider/backend/sql/paper-oauth-external-restore-witness-v7-pre-deny-writer-fence.sql'
+      - 'pod-provider/backend/scripts/proof-oauth-witness-v7-pre-deny-pg18.mjs'
+      - 'pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-external-witness.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs'
@@ -105,6 +109,12 @@ jobs:
           set -euo pipefail
           node --check pod-provider/backend/scripts/proof-oauth-external-witness.mjs
           node --check pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-witness-v7-pre-deny-pg18.mjs
+          grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v7-pre-deny-writer-fence.sql
+          if grep -R -n 'paper-oauth-external-restore-witness-v7-pre-deny-writer-fence' pod-provider/backend/services; then
+            echo '::error::Witness v7 may not be auto-migrated or activated by production services'
+            exit 1
+          fi
           node --check pod-provider/backend/scripts/proof-oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-worm-epoch-attestor.mjs
           node --check pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs
@@ -181,3 +191,10 @@ jobs:
         run: |
           set -euo pipefail
           node pod-provider/backend/scripts/proof-oauth-worm-signed-intents.mjs
+      - name: Prove PG18 v7 prepared denial prevents new signed writes and preserves pending intent
+        shell: bash
+        env:
+          PAPER_OAUTH_PRE_DENY_WITNESS_DISPOSABLE: confirmed
+        run: |
+          set -euo pipefail
+          node pod-provider/backend/scripts/proof-oauth-witness-v7-pre-deny-pg18.mjs

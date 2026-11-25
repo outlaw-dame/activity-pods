@@ -48,8 +48,11 @@ ALTER TABLE paper_oauth_restore_witness.current_epochs
    deny_sai_revision IS NULL AND deny_scope_sha256 IS NULL AND
    deny_receipt_sha256 IS NULL AND deny_sealed_at IS NULL)
   OR
-  (deny_operation_id IS NOT NULL AND deny_credential_epoch>0 AND
-   deny_sai_revision>0 AND octet_length(deny_scope_sha256)=32 AND
+  (deny_operation_id IS NOT NULL AND
+   deny_credential_epoch IS NOT NULL AND deny_credential_epoch>0 AND
+   deny_sai_revision IS NOT NULL AND deny_sai_revision>0 AND
+   deny_scope_sha256 IS NOT NULL AND
+   octet_length(deny_scope_sha256)=32 AND
    ((deny_receipt_sha256 IS NULL AND deny_sealed_at IS NULL)
      OR (octet_length(deny_receipt_sha256)=32 AND
          deny_sealed_at IS NOT NULL)))

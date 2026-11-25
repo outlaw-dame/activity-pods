@@ -11,6 +11,9 @@ on:
       - 'pod-provider/backend/candidates/oauth-pg-epoch-reader.js'
       - 'pod-provider/backend/utils/oauth-pg-epoch-policy.js'
       - 'pod-provider/backend/services/oauth/oauth-token.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-authorization.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
+      - 'pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs'
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
@@ -33,6 +36,9 @@ on:
       - 'pod-provider/backend/candidates/oauth-pg-epoch-reader.js'
       - 'pod-provider/backend/utils/oauth-pg-epoch-policy.js'
       - 'pod-provider/backend/services/oauth/oauth-token.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-authorization.service.js'
+      - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
+      - 'pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs'
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
@@ -138,6 +144,14 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --prefix pod-provider/backend --ignore-scripts --no-audit --no-fund
+      - name: Reject production PDS OAuth issuance and restored Redis JWT reuse
+        env:
+          NODE_ENV: production
+          SEMAPPS_AVAILABLE_LOCALES: en
+          SEMAPPS_AUTH_RESERVED_USER_NAMES: admin,root
+        run: |
+          node --check pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs
+          node --test pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs
       - name: Prove monotonic PG revocation survives a restored Redis grant
         run: |
           set -euo pipefail

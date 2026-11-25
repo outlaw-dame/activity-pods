@@ -95,7 +95,7 @@ function fixture(fault={}){
   context:{untrustedOwner:'https://evil.example.org'},
   clientId:CLIENT,expectedGrantId:GRANT
  });
- return {make,invoke,events,objects,get mutations(){return mutations;}};
+ return {make,invoke,args,events,objects,get mutations(){return mutations;}};
 }
 test('independent PG18 prepared-deny happens before WORM, and exact seal before signer',async()=>{
  const f=fixture();
@@ -151,13 +151,14 @@ test('ambiguous signer or invalid head cannot mutate owner grant',async()=>{
   assert.equal(f.mutations,0);
  }
 });
-test('reject missing or identical prepare/seal capabilities in witness mode',()=>{
+test('reject missing or shared prepare/seal capabilities in witness mode',()=>{
  const f=fixture();
- const c=f.make();
  assert.throws(()=>createDisposablePreDenyIntentCoordinator({
-  ...f.make().impossibleForRequest
- }),e=>e?.code==='PRE_DENY_CONFIGURATION_UNSAFE');
- assert.ok(c);
+  ...f.args,sealIndependentFence:null
+ }),e=>e?.code==='PRE_DENY_WITNESS_CONFIGURATION_UNSAFE');
+ assert.throws(()=>createDisposablePreDenyIntentCoordinator({
+  ...f.args,prepareIndependentFence:f.args.sealIndependentFence
+ }),e=>e?.code==='PRE_DENY_WITNESS_CONFIGURATION_UNSAFE');
 });
 test('witness gate removal after constructor denies invocation',async()=>{
  const f=fixture(),c=f.make();

@@ -37,10 +37,16 @@ const user='post_enrollment_reader_'+crypto.randomBytes(5).toString('hex');
 const credentialUser='post_enrollment_credential_'+crypto.randomBytes(5).toString('hex');
 const secrets=[crypto.randomBytes(20).toString('hex'),crypto.randomBytes(20).toString('hex')];
 const ident=s=>'"'+s.replaceAll('"','""')+'"';
+// Separate DATABASE, not just a random row prefix: the earlier credential
+// proof intentionally leaves its disposable schema alive in the CI cluster.
+const fixtureDb='paper_post_enroll_'+crypto.randomBytes(6).toString('hex');
+const adminBase={host:process.env.PGHOST,port:Number(process.env.PGPORT),
+  user:process.env.PGUSER,password:process.env.PGPASSWORD,
+  max:1,connectionTimeoutMillis:2500};
+const bootstrap=new Pool({...adminBase,database:process.env.PGDATABASE});
 const base={host:process.env.PGHOST,port:Number(process.env.PGPORT),
-  database:process.env.PGDATABASE};
-const admin=new Pool({...base,user:process.env.PGUSER,
-  password:process.env.PGPASSWORD,max:1,connectionTimeoutMillis:2500});
+  database:fixtureDb};
+const admin=new Pool({...adminBase,database:fixtureDb});
 let pgPool,credPool,error;
 // Use relative paths from the script directory. No filesystem writes.
 const read=async name=>fs.readFile(
@@ -85,6 +91,7 @@ const independentWitness={async verify(record){
     record.oauthPgRevision==='1';
 }};
 async function main(){
+  await bootstrap.query('CREATE DATABASE '+ident(fixtureDb));
   const sqlFiles=[
     'paper-credential-epoch-authority-v1.sql',
     'paper-credential-epoch-authority-v2-certified-head.sql',
@@ -262,6 +269,12 @@ async function run(){
       'paper_credential_enroller','paper_credential_coordinator'
     ])await clean('DROP ROLE IF EXISTS '+ident(role));
     await admin.end().catch(()=>{});
+    try {
+      // PostgreSQL roles are cluster-global: drop restricted test logins
+      // and child roles before dropping this isolated fixture database.
+      await bootstrap.query('DROP DATABASE IF EXISTS '+ident(fixtureDb)+' WITH (FORCE)');
+    }catch(e){failures.push(e)}
+    await bootstrap.end().catch(()=>{});
     if(failures.length&&!error){
       process.exitCode=1;console.error('Fixture cleanup failed:',failures[0]?.message);
     }

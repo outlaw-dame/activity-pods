@@ -51,15 +51,30 @@ function sameOwner(a,b){
     a.sessionId===b.sessionId&&
     crypto.timingSafeEqual(a.enrollmentTokenHash,b.enrollmentTokenHash);
 }
+// Bound dependency waits. If a non-idempotent call times out it may still
+// commit later; that is an ambiguous result and MUST NOT be retried.
+async function limited(work,ms){
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(work),
+      new Promise((_,reject)=>{
+        timer=setTimeout(()=>reject(Error('Owner consent dependency timed out')),ms);
+      })
+    ]);
+  }finally{clearTimeout(timer)}
+}
 function createDisposableInitialConsentCoordinator({
   verifyLiveOwner,epochIssuer,canonicalReader,witnessAttestor,
   immutableWitnessReader,redis,approvedClientId,
-  grantTtlSec=TTL,fixtureOnly=false
+  grantTtlSec=TTL,operationTimeoutMs=5000,fixtureOnly=false
 }={}){
   gate();
   if(fixtureOnly!==true||!https(approvedClientId)||
      !Number.isSafeInteger(grantTtlSec)||grantTtlSec<300||
      grantTtlSec>60*60*24*180||
+     !Number.isSafeInteger(operationTimeoutMs)||
+     operationTimeoutMs<20||operationTimeoutMs>15000||
      typeof verifyLiveOwner!=='function'||
      typeof epochIssuer?.issueFirst!=='function'||
      typeof canonicalReader?.verify!=='function'||
@@ -71,7 +86,7 @@ function createDisposableInitialConsentCoordinator({
   async function owner(context){
     gate();
     let proof;
-    try{proof=await verifyLiveOwner(context)}catch{
+    try{proof=await limited(()=>verifyLiveOwner(context),operationTimeoutMs)}catch{
       deny('OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT');
     }
     if(!validOwner(proof))deny('OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT');
@@ -92,14 +107,14 @@ function createDisposableInitialConsentCoordinator({
   }
   async function readCanonical(record){
     let allowed;
-    try {allowed=await canonicalReader.verify(record)}catch{
+    try {allowed=await limited(()=>canonicalReader.verify(record),operationTimeoutMs)}catch{
       deny('OWNER_INITIAL_CONSENT_CANONICAL_UNAVAILABLE');
     }
     if(allowed!==true)deny('OWNER_INITIAL_CONSENT_EPOCH_NOT_CURRENT');
   }
   async function readWitness(record){
     let allowed;
-    try {allowed=await immutableWitnessReader.verify(record)}catch{
+    try {allowed=await limited(()=>immutableWitnessReader.verify(record),operationTimeoutMs)}catch{
       deny('OWNER_INITIAL_CONSENT_WITNESS_UNAVAILABLE');
     }
     if(allowed!==true)deny('OWNER_INITIAL_CONSENT_WITNESS_NOT_CURRENT');
@@ -116,10 +131,10 @@ function createDisposableInitialConsentCoordinator({
       const bound=recordFor(initial,grantId);
       let revision;
       try{
-        revision=await epochIssuer.issueFirst({
+        revision=await limited(()=>epochIssuer.issueFirst({
           tokenHash:Buffer.from(initial.enrollmentTokenHash),
           grantId,scope:SCOPE
-        });
+        }),operationTimeoutMs);
       }catch{
         // A lost PG ACK might have committed. Never blindly retry.
         deny('OWNER_INITIAL_CONSENT_COMMIT_AMBIGUOUS');
@@ -132,7 +147,7 @@ function createDisposableInitialConsentCoordinator({
       // is sealed, read back, and compared to the canonical current epoch.
       await readCanonical(bound);
       let sealed;
-      try{sealed=await witnessAttestor.attestFirst(bound)}catch{
+      try{sealed=await limited(()=>witnessAttestor.attestFirst(bound),operationTimeoutMs)}catch{
         deny('OWNER_INITIAL_CONSENT_WITNESS_COMMIT_AMBIGUOUS');
       }
       if(sealed!==true)
@@ -154,11 +169,11 @@ function createDisposableInitialConsentCoordinator({
       try{
         // This is the *existing* browser-session-aware Lua CAS, NOT a
         // second read/modify/write path. Logout races serialize with it.
-        persisted=await redis.eval(UPSERT_CONSENT_IF_SESSION_LIVE,2,
+        persisted=await limited(()=>redis.eval(UPSERT_CONSENT_IF_SESSION_LIVE,2,
           consentKey('oauth:grant',bound.canonicalAccountId,approvedClientId),
           sessionKey(KEY_PREFIX,stillLive.sessionId),
           digest(bound.canonicalAccountId),JSON.stringify(stored),
-          String(grantTtlSec));
+          String(grantTtlSec)),operationTimeoutMs);
       }catch{
         // Redis may have committed before losing the ACK; no retries.
         deny('OWNER_INITIAL_CONSENT_REDIS_AMBIGUOUS');

@@ -26,7 +26,7 @@ const commands=Object.fromEntries([
 }]));
 const denied=(fn,code)=>assert.rejects(fn,e=>e?.code===code);
 function setup(options={}){
-  const receiptKey=options.receiptKey||receiptKey;
+  const receiptKey=options.receiptKey||key;
   const versions=[],calls=[];
   const controls={...options,putCount:0};
   let active=null;

@@ -80,7 +80,6 @@ function fixture(opts={}){
   if(opts.reversed)entries.reverse();
   if(opts.duplicateVersion&&entries.length)
    entries.push({...entries[0],VersionId:'duplicate-version'});
-  if(opts.hideLast&&entries.length)entries=entries.slice(0,-1);
   if(opts.gap&&entries.some(e=>e.Key.endsWith('0000000000000000002')))
    entries=entries.filter(e=>!e.Key.endsWith('0000000000000000001'));
   return entries;
@@ -102,6 +101,11 @@ function fixture(opts={}){
        Days:430}}}};
     case 'ListObjectVersionsCommand':{
      let v=versions(input.Prefix);
+     // Simulate a malicious S3 LIST showing an internally consistent
+     // older prefix; exact historical versions remain independently GETable.
+     if(opts.hideLast&&input.MaxKeys===64&&
+        input.Prefix===GENERATION_BASE+'/'&&v.length)
+      v=v.slice(0,-1);
      if(input.MaxKeys===10&&opts.historyFork&&v.length)
       v=[...v,{...v[0],VersionId:'unexpected'}];
      return {IsTruncated:opts.truncated===true,
@@ -331,7 +335,7 @@ test('S3 gateways that ignore If-None-Match cannot hide a second version',async(
   'GENERATION_JOURNAL_TRANSITION_INVALID');
  // Hostile out-of-band write attempts are caught by ListObjectVersions.
  f.add(GENERATION_BASE+'0000000000000000001',GENESIS_BYTES);
- await denied(()=>f.read(),'GENERATION_JOURNAL_GAP_OR_FORK');
+ await denied(()=>f.read(),'GENERATION_JOURNAL_HISTORY_INVALID');
 });
 test('provider may replay a coherent older listing: ACTIVE still never authorizes',async()=>{
  const fault={};const f=fixture(fault);

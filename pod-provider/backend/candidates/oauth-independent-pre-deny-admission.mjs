@@ -244,10 +244,10 @@ export function createDisposableIndependentPreDenyAdmission({
     })),timeoutMs);
    }catch{fail('OAUTH_DENIAL_SIGNER_UNAVAILABLE')}
    const signed=signedHead(signature,nonce,archive,verifier);
-   if(signed.status!=='archive'&&signed.status!=='active'){
-    // Any blocked/invalid signer state can never authorize an old JWT.
+   // A signed BLOCKED or mismatching response cannot authorize an old
+   // JWT, DPoP proof, refresh family or signed repository write.
+   if(signed.status!=='active')
     fail('OAUTH_DENIAL_BLOCKED');
-   }
    if(signed.status!==archive.status)
     fail('OAUTH_DENIAL_SIGNER_STALE');
 

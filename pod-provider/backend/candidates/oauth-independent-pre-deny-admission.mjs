@@ -2,10 +2,10 @@
  * NONACTIVATED deny-first admission contract for all OAuth/PDS grant uses.
  * Does not sign, issue, authorize, revoke, authenticate or change state.
  *
- * Requires three independent observations of the EXACT current account:
- * canonical ActivityPods grant, independent PG18 sealed witness and the
- * independently governed latest immutable WORM head. A separate public-only
- * pinned Ed25519 verifier authenticates a fresh, nonce-bound latest statement.
+ * Requires canonical ActivityPods state, an independent PG18 sealed witness,
+ * the immutable epoch/archive evidence and a separately checkpointed
+ * generation head. A public-only pinned Ed25519 verifier authenticates the
+ * fresh, nonce-bound monotonic checkpoint.
  *
  * This is a test-only interface. An S3 version or a signed historical
  * statement is NOT nonrewindable on its own. A deployed independent,
@@ -14,6 +14,8 @@
  * prerequisites. No positive result returned here is a production permit.
  */
 import crypto from 'node:crypto';
+import {verifyDisposableSignedGenerationHighWater} from
+ '../../independent-authority/signed-generation-high-water.mjs';
 import {subjectHash} from './oauth-pre-deny-intent-coordinator.mjs';
 
 const HEX=/^[a-f0-9]{64}$/u;
@@ -22,8 +24,7 @@ const MAX=9223372036854775807n;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const GRANT=/^[A-Za-z0-9_-]{32}$/u;
 const AUTH=/^[a-z0-9._:-]{3,128}$/u;
-const DOMAIN=Buffer.from('paper:oauth:admission-head:v1\0');
-const HEAD_FIELDS='authority,epochSubject,grantSha256,issuedAt,kind,nonce,operationId,receiptSha256,revision,status,subject,witnessEventSha256';
+const ZERO='0'.repeat(64);
 const SURFACES=Object.freeze([
   'authorization-code-issue',
   'authorization-code-redeem',
@@ -52,7 +53,8 @@ function enabled(){
     process.env.PAPER_OAUTH_PRE_DENY_ADMISSION_DISPOSABLE!=='confirmed'||
     process.env.PAPER_OAUTH_PRE_DENY_DISPOSABLE!=='confirmed'||
     process.env.PAPER_OAUTH_WORM_READBACK_DISPOSABLE!=='confirmed'||
-    process.env.PAPER_OAUTH_WITNESS_DISPOSABLE!=='confirmed')
+    process.env.PAPER_OAUTH_WITNESS_DISPOSABLE!=='confirmed'||
+    process.env.PAPER_OAUTH_SIGNED_HIGHWATER_DISPOSABLE!=='confirmed')
    fail('OAUTH_DENIAL_NOT_RELEASED');
 }
 function https(x){
@@ -107,6 +109,55 @@ function archiveState(x,subject,epochSubject,grantHash,revision){
    !Array.from(x.archiveVersion).some(ch=>ch.codePointAt(0)<=32||
      ch.codePointAt(0)===127);
 }
+const GENERATION_FIELDS=[
+ 'subject','epochSubject','sequence','status','headSha256','previousSha256',
+ 'grantSha256','scopeSha256','ownerProofSha256','oauthRevision',
+ 'credentialEpoch','saiRevision','operationId','preDenyReceiptSha256',
+ 'objectVersion'
+];
+const GENERATION_RECORD_FIELDS=[
+ 'kind','subject','epochSubject','sequence','status','grantSha256',
+ 'scopeSha256','ownerProofSha256','oauthRevision','credentialEpoch',
+ 'saiRevision','operationId','previousSha256','preDenyReceiptSha256'
+];
+function generationState(e,r,subject,epochSubject,grantSha256){
+ const h=e?.head,record=h?.record;
+ if(!e||e.releaseAccepted!==false||e.activeAuthorizes!==false||
+    e.completeExternallyVerified!==false||
+    e.operatorIndependenceVerified!==false||
+    e.retainedBlocked!==false||e.observedGenerations!==1||
+    !h||!record||typeof record!=='object'||Array.isArray(record)||
+    Object.keys(record).sort().join(',')!==
+      [...GENERATION_RECORD_FIELDS].sort().join(',')||
+    record.kind!=='paper.oauth.authority-generation.v1'||
+    record.subject!==subject||record.epochSubject!==epochSubject||
+    record.sequence!=='1'||record.status!=='active'||
+    h.sha256?.match(HEX)?.[0]!==h.sha256||
+    typeof h.versionId!=='string'||h.versionId.length<1||
+    h.versionId.length>512||h.versionId==='null'||
+    [...h.versionId].some(ch=>ch.codePointAt(0)<=32||
+      ch.codePointAt(0)===127)||
+    record.previousSha256!==ZERO||record.grantSha256!==grantSha256||
+    record.scopeSha256!==r.scopeSha256||
+    record.ownerProofSha256!==r.authProofSha256||
+    record.oauthRevision!==r.oauthRevision||
+    record.credentialEpoch!==r.credentialEpoch||
+    record.saiRevision!==r.saiRevision||
+    !UUID.test(record.operationId||'')||
+    record.preDenyReceiptSha256!==ZERO)
+  return null;
+ return Object.freeze({
+  subject,epochSubject,sequence:record.sequence,status:record.status,
+  headSha256:h.sha256,previousSha256:record.previousSha256,
+  grantSha256,scopeSha256:record.scopeSha256,
+  ownerProofSha256:record.ownerProofSha256,
+  oauthRevision:record.oauthRevision,
+  credentialEpoch:record.credentialEpoch,saiRevision:record.saiRevision,
+  operationId:record.operationId,
+  preDenyReceiptSha256:record.preDenyReceiptSha256,
+  objectVersion:h.versionId
+ });
+}
 async function limited(task,timeoutMs){
  const controller=new AbortController();
  let timer;
@@ -119,66 +170,11 @@ async function limited(task,timeoutMs){
   ]);
  }finally{clearTimeout(timer);controller.abort();}
 }
-function publicKey(input){
- let key;
- try{
-  if(typeof input==='string'&&Buffer.byteLength(input)>512)
-   fail('OAUTH_DENIAL_SIGNER_KEY_INVALID');
-  key=typeof input==='string'?crypto.createPublicKey(input):input;
- }catch{fail('OAUTH_DENIAL_SIGNER_KEY_INVALID')}
- if(!(key instanceof crypto.KeyObject)||key.type!=='public'||
-    key.asymmetricKeyType!=='ed25519')
-  fail('OAUTH_DENIAL_SIGNER_KEY_INVALID');
- return key;
-}
-function signedHead(reply,nonce,expected,{key,authority,now}){
- if(!Buffer.isBuffer(reply?.body)||!Buffer.isBuffer(reply?.signature)||
-    reply.body.length<220||reply.body.length>1024||
-    reply.signature.length!==64)
-   fail('OAUTH_DENIAL_SIGNER_FORMAT_INVALID');
- if(!crypto.verify(null,Buffer.concat([DOMAIN,reply.body]),
-   key,reply.signature))
-   fail('OAUTH_DENIAL_SIGNER_SIGNATURE_INVALID');
- let head;
- try{head=JSON.parse(reply.body.toString('utf8'))}
- catch{fail('OAUTH_DENIAL_SIGNER_FORMAT_INVALID')}
- if(!head||Array.isArray(head)||
-    Object.keys(head).sort().join(',')!==HEAD_FIELDS||
-    head.kind!=='paper.oauth.admission-head.v1'||
-    head.authority!==authority||head.nonce!==nonce||
-    head.subject!==expected.subject||
-    head.epochSubject!==expected.epochSubject||
-    head.grantSha256!==expected.grantSha256||
-    head.revision!==expected.revision||
-    head.operationId!==expected.operationId||
-    head.witnessEventSha256!==expected.witnessEventSha256||
-    head.receiptSha256!==expected.receiptSha256||
-    !['active','blocked'].includes(head.status)||
-    !Number.isSafeInteger(head.issuedAt)||head.issuedAt<=0)
-   fail('OAUTH_DENIAL_SIGNER_SCOPE_INVALID');
- const canonical=Buffer.from(JSON.stringify({
-  kind:head.kind,authority:head.authority,
-  subject:head.subject,epochSubject:head.epochSubject,
-  grantSha256:head.grantSha256,
-  revision:head.revision,operationId:head.operationId,
-  witnessEventSha256:head.witnessEventSha256,
-  receiptSha256:head.receiptSha256,status:head.status,
-  nonce:head.nonce,issuedAt:head.issuedAt
- }), 'utf8');
- if(canonical.length!==reply.body.length||
-    !crypto.timingSafeEqual(canonical,reply.body))
-  fail('OAUTH_DENIAL_SIGNER_CANONICAL_INVALID');
- let instant;
- try{instant=now()}catch{fail('OAUTH_DENIAL_SIGNER_CLOCK_INVALID')}
- if(!Number.isSafeInteger(instant)||instant<=0||
-    Math.abs(instant-head.issuedAt)>15)
-  fail('OAUTH_DENIAL_SIGNER_CLOCK_INVALID');
- return head;
-}
 export const DENIAL_SURFACES=SURFACES;
 export function createDisposableIndependentPreDenyAdmission({
  authenticateGrant,readCanonical,readWitness,readLatestArchive,
- readPreDenyInventory=null,readSignedHead,trustedPublicKey,authority,
+ readGenerationHead,readPreDenyInventory=null,readSignedHead,
+ trustedPublicKeys,minimumKeyEpoch='1',authority,
  now=()=>Math.floor(Date.now()/1000),
  timeoutMs=2500,fixtureOnly=false
 }={}){
@@ -186,9 +182,10 @@ export function createDisposableIndependentPreDenyAdmission({
  if(fixtureOnly!==true||
     typeof authenticateGrant!=='function'||
     typeof readCanonical!=='function'||typeof readWitness!=='function'||
-    typeof readLatestArchive!=='function'||typeof readSignedHead!=='function'||
+    typeof readLatestArchive!=='function'||
+    typeof readGenerationHead!=='function'||typeof readSignedHead!=='function'||
     new Set([authenticateGrant,readCanonical,readWitness,
-      readLatestArchive,readSignedHead]).size!==5||
+      readLatestArchive,readGenerationHead,readSignedHead]).size!==6||
     typeof now!=='function'||!AUTH.test(authority||'')||
     !Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>5000)
   fail('OAUTH_DENIAL_CONFIGURATION_INVALID');
@@ -201,11 +198,9 @@ export function createDisposableIndependentPreDenyAdmission({
     (inventoryFlag!=='confirmed'||
      typeof readPreDenyInventory!=='function'||
      [authenticateGrant,readCanonical,readWitness,readLatestArchive,
-      readSignedHead].includes(readPreDenyInventory)))
+      readGenerationHead,readSignedHead].includes(readPreDenyInventory)))
   fail('OAUTH_DENIAL_INVENTORY_CONFIG_INVALID');
  const inventoryEnabled=inventoryFlag==='confirmed';
- const key=publicKey(trustedPublicKey);
- const verifier=Object.freeze({key,authority,now});
  async function independentRead(fn,record,code){
   let result;
   try{result=await limited(signal=>fn(Object.freeze({...record,signal})),
@@ -279,19 +274,31 @@ export function createDisposableIndependentPreDenyAdmission({
     ['status','subject','epochSubject','grantSha256','revision',
      'witnessEventSha256','receiptSha256','operationId']))
     fail('OAUTH_DENIAL_ARCHIVE_STALE');
+   const firstGenerationEvidence=await independentRead(readGenerationHead,probe,
+    'OAUTH_DENIAL_GENERATION_UNAVAILABLE');
+   const firstGeneration=generationState(firstGenerationEvidence,r,
+    subject,epochSubject,grantSha256);
+   if(!firstGeneration)
+    fail('OAUTH_DENIAL_GENERATION_INVALID');
    const nonce=crypto.randomBytes(32).toString('base64url');
    let signature;
    try{
     signature=await limited(signal=>readSignedHead(Object.freeze({
+      kind:'paper.oauth.generation-high-water.challenge.v1',
       subject,nonce,surface,signal
     })),timeoutMs);
    }catch{fail('OAUTH_DENIAL_SIGNER_UNAVAILABLE')}
-   const signed=signedHead(signature,nonce,archive,verifier);
+   let signed;
+   try{signed=verifyDisposableSignedGenerationHighWater({
+    reply:signature,nonce,expected:firstGeneration,authority,
+    trustedPublicKeys,minimumKeyEpoch,now,fixtureOnly:true
+   })}catch{fail('OAUTH_DENIAL_HIGH_WATER_INVALID')}
    // A signed BLOCKED or mismatching response cannot authorize an old
    // JWT, DPoP proof, refresh family or signed repository write.
    if(signed.status!=='active')
     fail('OAUTH_DENIAL_BLOCKED');
-   if(signed.status!==archive.status)
+   if(signed.status!==archive.status||
+      signed.oauthRevision!==archive.revision)
     fail('OAUTH_DENIAL_SIGNER_STALE');
 
    const secondCanonical=await independentRead(readCanonical,probe,
@@ -318,6 +325,13 @@ export function createDisposableIndependentPreDenyAdmission({
        'witnessEventSha256','receiptSha256','operationId',
        'archiveVersion'])||finalArchive.status!=='active')
     fail('OAUTH_DENIAL_ARCHIVE_STALE');
+   const finalGenerationEvidence=await independentRead(readGenerationHead,probe,
+    'OAUTH_DENIAL_GENERATION_UNAVAILABLE');
+   const finalGeneration=generationState(finalGenerationEvidence,r,
+    subject,epochSubject,grantSha256);
+   if(!finalGeneration||!same(firstGeneration,finalGeneration,
+      GENERATION_FIELDS))
+    fail('OAUTH_DENIAL_GENERATION_STALE');
    // Recheck retained denial after independent archive and signer network
    // reads; a pre-deny found in either scan vetoes even restored PG state.
    await vetoArchivedDeny(probe);
@@ -335,6 +349,8 @@ export function createDisposableIndependentPreDenyAdmission({
    return Object.freeze({
     checked:true,surface,subject,
     oauthRevision:r.oauthRevision,
+    generationSequence:firstGeneration.sequence,
+    generationHeadSha256:firstGeneration.headSha256,
     witnessEventSha256:archive.witnessEventSha256,
     releaseAccepted:false
    });

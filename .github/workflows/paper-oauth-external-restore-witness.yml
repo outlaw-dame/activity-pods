@@ -21,6 +21,8 @@ on:
       - 'pod-provider/backend/candidates/oauth-s3-compliance-archive.mjs'
       - 'pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs'
+      - 'pod-provider/independent-authority/signed-generation-high-water.mjs'
+      - 'pod-provider/backend/scripts/proof-signed-generation-high-water.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs'
       - '.github/workflows/paper-oauth-s3-compliance-archive.yml'
       - 'pod-provider/backend/candidates/atproto-signed-repo-proof/reference-mst-writer.mjs'

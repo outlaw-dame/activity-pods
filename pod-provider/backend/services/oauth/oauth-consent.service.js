@@ -65,6 +65,9 @@ module.exports = {
         ownerSessionId: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$', optional: true }
       },
       async handler(ctx) {
+        // Direct service calls must not persist a renewable Redis-only owner
+        // grant before the independent production recovery gate is released.
+        pgEpoch.enabled();
         const {canonicalAccountId,clientId,scope,ownerSessionId}=ctx.params;
         if(scope.length>8192)throw Error('OAuth consent scope invalid');
         const now = nowEpochSec();

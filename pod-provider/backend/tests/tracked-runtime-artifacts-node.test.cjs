@@ -32,10 +32,10 @@ test('reject populated sensitive templates, unexpected test keys and duplicates'
   ];
   const example = keys.map(key => key + '=').join('\n');
   const fixture = [
-    'SEMAPPS_SPARQL_ENDPOINT=http://localhost:3030',
-    'SEMAPPS_QUEUE_SERVICE_URL=redis://localhost:6379',
-    'SEMAPPS_REDIS_TRANSPORTER_URL=redis://localhost:6379',
-    'SEMAPPS_REDIS_OIDC_PROVIDER_URL=redis://localhost:6379'
+    'SEMAPPS_SPARQL_ENDPOINT=http://localhost:3040/',
+    'SEMAPPS_QUEUE_SERVICE_URL=redis://localhost:6379/11',
+    'SEMAPPS_REDIS_TRANSPORTER_URL=redis://localhost:6379/12',
+    'SEMAPPS_REDIS_OIDC_PROVIDER_URL=redis://localhost:6379/13'
   ].join('\n');
   assert.doesNotThrow(() => validateSafeTemplates({
     example, testFixture: fixture
@@ -46,7 +46,13 @@ test('reject populated sensitive templates, unexpected test keys and duplicates'
   }), /SEMAPPS_COOKIE_SECRET/u);
   assert.throws(() => validateSafeTemplates({
     example, testFixture: fixture + '\nSIGNING_API_TOKEN=leaked'
-  }), /Unexpected tracked test environment key/u);
+  }), /Unexpected tracked test environment value/u);
+  assert.throws(() => validateSafeTemplates({
+    example: example + '\nNEW_SERVICE_TOKEN=leaked', testFixture: fixture
+  }), /NEW_SERVICE_TOKEN/u);
+  assert.throws(() => validateSafeTemplates({
+    example, testFixture: fixture.replace('localhost:6379/12', 'external.example.org:6379/12')
+  }), /Unexpected tracked test environment value/u);
   assert.throws(() => readAssignments('A=one\nA=two'), /Duplicate/u);
   assert.throws(() => readAssignments('this is not an assignment'), /Invalid/u);
 });

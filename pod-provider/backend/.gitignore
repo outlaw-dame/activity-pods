@@ -10,3 +10,11 @@
 /exports
 /logs
 /.tmp
+# Local credentials and runtime state must never enter commits.
+.env
+.env.*
+!.env.example
+!.env.test
+*.rdb
+*.aof
+appendonlydir/

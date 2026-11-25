@@ -19,6 +19,7 @@ const ACCOUNT=/^[0-9]{12}$/u;
 const MAX_BYTES=1024;
 const EPOCH_KEY=/^paper\/oauth-witness\/epochs\/v1\/([a-f0-9]{64})\/([0-9]{19})$/u;
 const INTENT_KEY=/^paper\/oauth-witness\/signed-intents\/v1\/([0-9a-f-]{36})\/(pending|resolved)$/u;
+const PRE_DENY_KEY=/^paper\/oauth-witness\/pre-deny\/v1\/([a-f0-9]{64})\/([0-9]{19})\/([0-9a-f-]{36})$/u;
 function deny(code) {
  const e=new Error('Immutable S3 compliance receipt unavailable');
  e.code=code;
@@ -45,6 +46,25 @@ export function assertReceipt(key,bytes){
      asRevision(String(v.revision))!==v.revision||
      v.revision.padStart(19,'0')!==epoch[2]||
      JSON.stringify(v)!==s)deny('S3_RECEIPT_FORMAT_INVALID');
+  return;
+ }
+ const pre=PRE_DENY_KEY.exec(key);
+ if(pre){
+  if(!UUID.test(pre[3]))deny('S3_RECEIPT_FORMAT_INVALID');
+  let v;
+  try{v=JSON.parse(s)}catch{deny('S3_RECEIPT_FORMAT_INVALID')}
+  if(!v||Array.isArray(v)||
+     Object.keys(v).sort().join(',')!==
+       'credentialEpoch,grantSha256,kind,operationId,revision,saiRevision,scopeSha256,subject'||
+     v.kind!=='paper.oauth.pre-deny.v1'||v.subject!==pre[1]||
+     !SUBJECT.test(v.grantSha256)||!SUBJECT.test(v.scopeSha256)||
+     !UUID.test(v.operationId)||v.operationId!==pre[3]||
+     asRevision(v.revision)!==v.revision||
+     v.revision.padStart(19,'0')!==pre[2]||
+     asRevision(v.credentialEpoch)!==v.credentialEpoch||
+     asRevision(v.saiRevision)!==v.saiRevision||
+     JSON.stringify(v)!==s)
+    deny('S3_RECEIPT_FORMAT_INVALID');
   return;
  }
  const intent=INTENT_KEY.exec(key);

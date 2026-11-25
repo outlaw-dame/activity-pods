@@ -301,3 +301,62 @@ test('reject swapped identities for independently supplied callbacks and keys',(
   ...f.args,trustedPublicKey:'not a real public key'
  }),e=>e?.code==='OAUTH_DENIAL_SIGNER_KEY_INVALID');
 });
+
+
+test('independent S3 retained PRE-DENY vetoes rewound active grant before and after signer',async()=>{
+ const f=fixture(); // Existing authenticated/canonical/witness/signer fixture.
+ const examples=Array.from({length:4},()=>fixture());
+ const ok=fixture();
+ const prior=process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE;
+ process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE='confirmed';
+ try{
+  assert.throws(()=>createDisposableIndependentPreDenyAdmission(f.args),
+   e=>e?.code==='OAUTH_DENIAL_INVENTORY_CONFIG_INVALID');
+  const cases=[
+   {seenAt:1,code:'OAUTH_DENIAL_RETAINED_PRE_DENY',signer:0},
+   {seenAt:2,code:'OAUTH_DENIAL_RETAINED_PRE_DENY',signer:1},
+   {offline:true,code:'OAUTH_DENIAL_INVENTORY_UNAVAILABLE',signer:0},
+   {unsafe:true,code:'OAUTH_DENIAL_INVENTORY_UNSAFE',signer:0}
+  ];
+  for(const [i,item] of cases.entries()){
+   const x=examples[i];
+   let reads=0;
+   const readPreDenyInventory=async (challenge)=>{
+    reads++;
+    assert.equal(challenge.subject,SUBJECT);
+    assert.deepEqual(Object.keys(challenge).sort(),['signal','subject'],
+     'External S3 inventory never receives owner WebID, grant or token');
+    if(item.offline)throw Error('Independent S3 unavailable');
+    return {retainedDenialObserved:reads===item.seenAt,
+     absenceAuthorizes:item.unsafe?true:false,releaseAccepted:false};
+   };
+   const gate=createDisposableIndependentPreDenyAdmission({
+    ...x.args,readPreDenyInventory
+   });
+   await denied(()=>gate.inspect({surface:'access-token-sign',context:{}}),
+    item.code);
+   assert.equal(x.hits.signer,item.signer);
+   assert.equal(x.hits.sideEffects,0);
+  }
+  let calls=0;
+  const readPreDenyInventory=async()=>{
+   calls++;
+   return {retainedDenialObserved:false,
+    absenceAuthorizes:false,releaseAccepted:false};
+  };
+  const gate=createDisposableIndependentPreDenyAdmission({
+   ...ok.args,readPreDenyInventory
+  });
+  const result=await gate.inspect({surface:'signed-pds-commit',context:{}});
+  assert.equal(calls,2,'Two complete archive inventories required');
+  assert.equal(result.checked,true);
+  assert.equal(result.releaseAccepted,false,
+   'Even empty inventory cannot give production authorization');
+  delete process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE;
+  await denied(()=>gate.inspect({surface:'signed-pds-commit',context:{}}),
+   'OAUTH_DENIAL_INVENTORY_NOT_RELEASED');
+ }finally{
+  if(prior===undefined)delete process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE;
+  else process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=prior;
+ }
+});

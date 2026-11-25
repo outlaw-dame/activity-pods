@@ -14,6 +14,9 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-authorization.service.js'
       - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
       - 'pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs'
+      - 'pod-provider/backend/candidates/oauth-initial-owner-epoch-issuer.cjs'
+      - 'pod-provider/backend/candidates/oauth-initial-owner-consent-coordinator.cjs'
+      - 'pod-provider/backend/tests/oauth-initial-owner-consent-bridge-node.test.cjs'
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
@@ -39,6 +42,9 @@ on:
       - 'pod-provider/backend/services/oauth/oauth-authorization.service.js'
       - 'pod-provider/backend/services/oauth/oauth-consent.service.js'
       - 'pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs'
+      - 'pod-provider/backend/candidates/oauth-initial-owner-epoch-issuer.cjs'
+      - 'pod-provider/backend/candidates/oauth-initial-owner-consent-coordinator.cjs'
+      - 'pod-provider/backend/tests/oauth-initial-owner-consent-bridge-node.test.cjs'
       - 'pod-provider/backend/services/oauth/oauth-refresh-session.service.js'
       - 'pod-provider/backend/services/oauth/oauth-code-store.service.js'
       - 'pod-provider/backend/scripts/proof-oauth-pg-restore-fence.mjs'
@@ -130,6 +136,13 @@ jobs:
           grep -q 'NONACTIVATED' pod-provider/backend/sql/paper-oauth-external-restore-witness-v6-immutable-highwater-read.sql
           node --check pod-provider/backend/candidates/oauth-pg-epoch-reader.js
           node --check pod-provider/backend/utils/oauth-pg-epoch-policy.js
+          node --check pod-provider/backend/candidates/oauth-initial-owner-epoch-issuer.cjs
+          node --check pod-provider/backend/candidates/oauth-initial-owner-consent-coordinator.cjs
+          node --check pod-provider/backend/tests/oauth-initial-owner-consent-bridge-node.test.cjs
+          if grep -R -nE 'oauth-initial-owner-(epoch-issuer|consent-coordinator)' pod-provider/backend/services; then
+            echo '::error::Nonactivated enrollment OAuth bridge cannot be imported by runtime services'
+            exit 1
+          fi
           node --check pod-provider/backend/services/oauth/oauth-token.service.js
           node --check pod-provider/backend/services/oauth/oauth-refresh-session.service.js
           node --check pod-provider/backend/services/oauth/oauth-code-store.service.js
@@ -152,6 +165,19 @@ jobs:
         run: |
           node --check pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs
           node --test pod-provider/backend/tests/oauth-production-release-fuse-node.test.cjs
+      - name: Prove owner-bound first grant staging and restored Redis ES256 denial
+        env:
+          PAPER_ACCOUNTS_DISPOSABLE: confirmed
+          PAPER_JOURNAL_BOUND_SAI_DISPOSABLE: confirmed
+          PAPER_OAUTH_WORM_READBACK_DISPOSABLE: confirmed
+          PAPER_OAUTH_WORM_HIGHWATER_DISPOSABLE: confirmed
+          PAPER_OAUTH_WITNESS_DISPOSABLE: confirmed
+          PAPER_OWNER_OAUTH_REDIS_DISPOSABLE: confirmed
+          SEMAPPS_AVAILABLE_LOCALES: en
+          SEMAPPS_AUTH_RESERVED_USER_NAMES: admin,root
+        run: |
+          set -euo pipefail
+          node --test pod-provider/backend/tests/oauth-initial-owner-consent-bridge-node.test.cjs
       - name: Prove monotonic PG revocation survives a restored Redis grant
         run: |
           set -euo pipefail

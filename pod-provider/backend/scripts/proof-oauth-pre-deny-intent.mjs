@@ -34,7 +34,7 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
 const grantRecord=()=>({
  ownerWebId:OWNER,clientId:CLIENT,appUri:APP,grantId:GRANT,
  oauthRevision:REV,saiRevision:SAI,credentialEpoch:EPOCH,
- scopeSha256:SCOPE_HASH
+ scopeSha256:SCOPE_HASH,authProofSha256:'a'.repeat(64)
 });
 const denied=async(fn,code)=>assert.rejects(fn,e=>e?.code===code);
 const {publicKey,privateKey}=crypto.generateKeyPairSync('ed25519');
@@ -80,6 +80,9 @@ function fixture(options={}){
    if(options.oldCredential)record.credentialEpoch='0';
    if(options.ownerChangedAfterArchive&&state.owner>1)
      record.credentialEpoch='12';
+   if(options.sessionRotatedAfterArchive&&state.owner>1)
+     record.authProofSha256='b'.repeat(64);
+   if(options.badAuthProof)record.authProofSha256='not-a-sha256';
    if(options.logoutAfterArchive&&state.owner>1)
      throw Error('Signed browser session expired during archival');
    assert.equal(clientId,CLIENT);
@@ -213,7 +216,8 @@ test('refuse wrong owner grant, absent browser or weak credential epoch before a
  for(const [options,expected] of [
   [{ownerUnavailable:true},'PRE_DENY_OWNER_NOT_CURRENT'],
   [{corruptOwner:true},'PRE_DENY_OWNER_NOT_CURRENT'],
-  [{oldCredential:true},'PRE_DENY_OWNER_NOT_CURRENT']
+  [{oldCredential:true},'PRE_DENY_OWNER_NOT_CURRENT'],
+  [{badAuthProof:true},'PRE_DENY_OWNER_NOT_CURRENT']
  ]){
   const f=fixture(options);
   await denied(()=>call(f),expected);
@@ -236,9 +240,10 @@ test('unsafe S3 receipt/readback cannot reach signer or revoker',async()=>{
  }
 });
 
-test('logout or owner credential rotation during archive prevents denial-head publish',async()=>{
+test('logout, session replacement or credential rotation during archive prevents denial-head publish',async()=>{
  for(const options of [
-   {logoutAfterArchive:true},{ownerChangedAfterArchive:true}
+   {logoutAfterArchive:true},{ownerChangedAfterArchive:true},
+   {sessionRotatedAfterArchive:true}
  ]){
   const f=fixture(options);
   await denied(()=>call(f),'PRE_DENY_OWNER_NOT_CURRENT');

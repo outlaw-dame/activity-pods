@@ -23,7 +23,8 @@ const SHA=value=>crypto.createHash('sha256').update(value).digest('hex');
 const denied=(fn,code)=>assert.rejects(fn,e=>e?.code===code,
  'Expected fail-closed error '+code);
 
-function generation(sequence='1',status='active',previousSha256=ZERO){
+function generation(sequence='1',status='active',previousSha256=ZERO,
+ objectVersion='object-version-'+sequence){
  const record={
   kind:'paper.oauth.authority-generation.v1',subject:SUBJECT,
   epochSubject:EPOCH_SUBJECT,sequence,status,grantSha256:GRANT,
@@ -34,7 +35,7 @@ function generation(sequence='1',status='active',previousSha256=ZERO){
  };
  const bytes=Buffer.from(JSON.stringify(record));
  return Object.freeze({record:Object.freeze(record),sha256:SHA(bytes),
-  versionId:'object-version-'+sequence});
+  versionId:objectVersion});
 }
 const ACTIVE=generation();
 const BLOCKED=generation('2','blocked',ACTIVE.sha256);
@@ -142,6 +143,22 @@ test('ACTIVE checkpoint is atomically created, signed and independently verified
   Buffer.concat([SIGNED_GENERATION_HIGH_WATER_DOMAIN,reply.body]),
   publicKey,reply.signature));
  assert.equal(Object.hasOwn(reply,'privateKey'),false);
+});
+
+test('accepted multibyte object-version boundary always round trips',async()=>{
+ const boundaryVersion='界'.repeat(170)+'aa';
+ assert.equal(Buffer.byteLength(boundaryVersion,'utf8'),512);
+ const boundaryHead=generation('1','active',ZERO,boundaryVersion);
+ const f=fixture({state:{head:boundaryHead}});
+ const reply=await f.respond();
+ assert.ok(reply.body.length<=2048);
+ assert.equal(f.verify(reply).objectVersion,boundaryVersion);
+
+ const oversizedHead=generation('1','active',ZERO,boundaryVersion+'界');
+ const oversized=fixture({state:{head:oversizedHead}});
+ await denied(()=>oversized.respond(),'GENERATION_HIGH_WATER_JOURNAL_INVALID');
+ assert.equal(oversized.state.writes,0);
+ assert.equal(oversized.state.signs,0);
 });
 
 test('BLOCKED advances exactly one hash-linked checkpoint and hidden tail is detected',async()=>{

@@ -22,8 +22,8 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}
 const NONCE=/^[A-Za-z0-9_-]{43}$/u;
 const AUTHORITY=/^[a-z0-9._:-]{3,128}$/u;
 const KEY_ID=/^[A-Za-z0-9._:-]{3,128}$/u;
-const VERSION=/^.{1,512}$/u;
 const ZERO='0'.repeat(64);
+const MAX_OBJECT_VERSION_BYTES=512;
 export const SIGNED_GENERATION_HIGH_WATER_DOMAIN=Buffer.from(
  'paper:oauth:generation-high-water:v1\0');
 const BODY_FIELDS='authority,credentialEpoch,epochSubject,grantSha256,headSha256,issuedAt,keyEpoch,keyId,kind,nonce,oauthRevision,objectVersion,operationId,ownerProofSha256,preDenyReceiptSha256,previousSha256,saiRevision,scopeSha256,sequence,status,subject';
@@ -52,8 +52,12 @@ function revision(x){
  return typeof x==='string'&&REV.test(x)&&BigInt(x)<=MAX;
 }
 function version(x){
- return typeof x==='string'&&VERSION.test(x)&&x!=='null'&&
-  [...x].every(ch=>ch.codePointAt(0)>32&&ch.codePointAt(0)!==127);
+ return typeof x==='string'&&x.length>0&&x!=='null'&&
+  Buffer.byteLength(x,'utf8')<=MAX_OBJECT_VERSION_BYTES&&
+  [...x].every(ch=>{
+   const point=ch.codePointAt(0);
+   return point>32&&!(point>=127&&point<=159);
+  });
 }
 function publicKey(input){
  if(typeof input!=='string'&&!(input instanceof crypto.KeyObject))

@@ -82,7 +82,7 @@ function pgFixture({roles,revision='1',sqlFailure=false,commitFailure=false}={})
       },
       release(discard){
         assert.equal(started,false,'A PostgreSQL transaction was left open');
-        releases.push({lease:id,discard:!!discard});
+        released.push({lease:id,discard:!!discard});
       }
     };
   }};

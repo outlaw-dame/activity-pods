@@ -79,6 +79,21 @@ function createDisposableInitialOwnerEpochIssuer({
           "pg_catalog.has_table_privilege(current_user,"+
           "'paper_atproto_authority.oauth_generations',"+
           "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') AS direct_oauth,"+
+          "pg_catalog.has_table_privilege(current_user,"+
+          "'paper_atproto_authority.consents',"+
+          "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') AS direct_sai,"+
+          "pg_catalog.has_table_privilege(current_user,"+
+          "'paper_atproto_authority.identities',"+
+          "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') AS direct_id,"+
+          "pg_catalog.has_table_privilege(current_user,"+
+          "'paper_account_candidate.signup_operations',"+
+          "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') AS direct_journal,"+
+          "pg_catalog.has_table_privilege(current_user,"+
+          "'paper_account_reservation_proof.reservations',"+
+          "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') AS direct_reservations,"+
+          "pg_catalog.has_function_privilege(current_user,"+
+          "'paper_atproto_authority.bound_signup_owner_scope(uuid,uuid,text)',"+
+          "'EXECUTE') AS can_claim_raw_owner,"+
           "pg_catalog.has_function_privilege(current_user,"+
           "'paper_atproto_authority.issue_session_oauth_generation(text,text,bytea,text,text,bigint)',"+
           "'EXECUTE') AS can_issue_session,"+
@@ -105,6 +120,9 @@ function createDisposableInitialOwnerEpochIssuer({
        x?.revoker!==false||x?.signer!==false||x?.reader!==false||
        x?.sai_issuer!==false||x?.sai_attestor!==false||
        x?.schema_create!==false||x?.direct_oauth!==false||
+       x?.direct_sai!==false||x?.direct_id!==false||
+       x?.direct_journal!==false||x?.direct_reservations!==false||
+       x?.can_claim_raw_owner!==false||
        x?.can_issue_session!==true||x?.can_issue_raw!==false||
        x?.can_revoke_session!==false||x?.memberships!==1||
        x?.bad_options!==0||x?.parent_roles!==0)

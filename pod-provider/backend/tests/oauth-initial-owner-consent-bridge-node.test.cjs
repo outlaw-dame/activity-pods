@@ -112,7 +112,11 @@ test('issuer refuses production flags, raw user selectors, wrong scope and stale
   }
   assert.equal(f.calls.length,0);
   assert.equal(await adapter.issueFirst({
-    tokenHash:TOKEN_HASH,grantId,scope:SCOPE
+    tokenHash:TOKEN_HASH,grantId,scope:SCOPE,
+    canonicalAccountId:'https://attacker.example.org',
+    clientId:'https://other-client.example.org/oauth',
+    appUri:'https://other-app.example.org',
+    expectedRevision:'9223372036854775807'
   }),'1');
   assert.equal(f.calls.length,4);
   assert.deepEqual(f.calls.map(c=>c.sql==='BEGIN'?'BEGIN':c.sql==='COMMIT'?'COMMIT':'SELECT'),

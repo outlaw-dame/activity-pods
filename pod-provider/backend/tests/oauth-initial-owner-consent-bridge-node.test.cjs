@@ -310,6 +310,16 @@ test('credential rotation/logout during WORM readback blocks grant before Redis 
   }
 });
 
+test('hung WORM response times out without leaking a Redis grant or retrying PG',async()=>{
+  const f=coordinatorFixture();
+  f.options.operationTimeoutMs=30;
+  f.options.witnessAttestor.attestFirst=async()=>new Promise(()=>{});
+  await code(()=>f.execute(),'OWNER_INITIAL_CONSENT_WITNESS_COMMIT_AMBIGUOUS');
+  assert.equal(f.state.calls.issue,1);
+  assert.equal(f.state.calls.redis,0);
+  assert.equal(f.state.redis.has(consentKey('oauth:grant',OWNER,CLIENT)),false);
+});
+
 test('lost Redis ACK, PG transition and witness mutation after CAS never report success',async()=>{
   const lost=coordinatorFixture({lostRedisAck:true});
   await code(()=>lost.execute(),'OWNER_INITIAL_CONSENT_REDIS_AMBIGUOUS');

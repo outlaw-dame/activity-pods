@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {createPortableS3ReceiptWriter} from
  '../candidates/oauth-portable-s3-receipt-writer.mjs';
+import {subjectHash} from '../candidates/oauth-pre-deny-intent-coordinator.mjs';
 
 if(process.env.NODE_ENV!=='test'||
    process.env.PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE!=='confirmed')
@@ -208,9 +209,8 @@ test('reject shared writer/reader roles and missing required SDK commands',()=>{
 });
 
 test('pre-denial receipt uses actual portable S3 conditional PutObject and COMPLIANCE readback',async()=>{
-  const subject=crypto.createHash('sha256').update('paper:witness:subject:v1\0')
-    .update('https://paper.example.org/users/s3-pre-deny').update('\0')
-    .update('https://paper-client.example.org/oauth').digest('hex');
+  const subject=subjectHash('https://paper.example.org/users/s3-pre-deny',
+    'https://paper-client.example.org/oauth');
   const operationId='9c3223e0-b10d-46de-b713-20a7b23a2307';
   const grantSha256=crypto.createHash('sha256')
     .update('p'.repeat(32)).digest('hex');

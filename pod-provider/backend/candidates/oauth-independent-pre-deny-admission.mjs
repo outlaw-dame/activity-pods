@@ -217,7 +217,10 @@ export function createDisposableIndependentPreDenyAdmission({
   if(!inventoryEnabled)return;
   if(process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE!=='confirmed')
    fail('OAUTH_DENIAL_INVENTORY_NOT_RELEASED');
-  const evidence=await independentRead(readPreDenyInventory,probe,
+  // The external archive reader needs only the hashed subject. Never pass
+  // owner WebID, OAuth grant, scopes, credential epoch or browser context.
+  const evidence=await independentRead(readPreDenyInventory,
+   Object.freeze({subject:probe.subject}),
    'OAUTH_DENIAL_INVENTORY_UNAVAILABLE');
   if(!evidence||evidence.releaseAccepted!==false||
      evidence.absenceAuthorizes!==false||

@@ -46,9 +46,19 @@ function valid(record,clientId,expectedGrantId){
   epoch(record.saiRevision)&&epoch(record.credentialEpoch)&&
   SHA.test(record.scopeSha256||'');
 }
-function subjectHash(owner,client){
- return crypto.createHash('sha256').update('paper:witness:subject:v1\0')
-  .update(owner).update('\0').update(client).digest('hex');
+// Must match the INDEPENDENT PostgreSQL 18 signed-intent witness v5
+// length-framed owner/client subject EXACTLY, not merely share a domain name.
+// Canonical HTTPS WebIDs and clients are ASCII (non-ASCII URL source is
+// percent-encoded); reject other inputs rather than mixing UTF-16 JS length
+// with PostgreSQL text character length.
+export function subjectHash(owner,client){
+ if(!https(owner)||!https(client)||
+    Buffer.byteLength(owner,'utf8')!==owner.length||
+    Buffer.byteLength(client,'utf8')!==client.length)
+  refuse('PRE_DENY_SCOPE_INVALID');
+ return crypto.createHash('sha256').update(
+  'paper:witness:subject:v1:'+owner.length+':'+owner+':'+client,
+  'utf8').digest('hex');
 }
 function operationId(subject,grantHash,revision){
  // Deterministic for EXACT owner/grant/revision: no unbounded duplicate

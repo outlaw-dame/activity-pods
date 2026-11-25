@@ -46,24 +46,44 @@ const permission=()=>({
   can_issue_raw:false,can_revoke_session:false,memberships:1,
   bad_options:0,parent_roles:0
 });
-function pgFixture({roles,revision='1',sqlFailure=false}={}){
+function pgFixture({roles,revision='1',sqlFailure=false,commitFailure=false}={}){
   let leased=0;
   const calls=[],released=[];
   const pool={async connect(){
     const id=++leased,p=roles?.[id-1]||permission();
+    let started=false;
     return {
       async query(query){
         const sql=typeof query==='string'?query:query.text;
         calls.push({lease:id,sql,values:query.values||[]});
+        if(sql==='BEGIN'){
+          assert.equal(started,false);
+          started=true;
+          return {command:'BEGIN'};
+        }
+        if(sql==='ROLLBACK'){
+          started=false;
+          return {command:'ROLLBACK'};
+        }
+        assert.equal(started,true,
+          'Admission and the PG CAS must share one physical transaction');
         if(sql.includes('FROM pg_catalog.pg_roles p'))
           return {rowCount:1,rows:[p]};
         if(sql.includes('issue_session_oauth_generation(')){
           if(sqlFailure)throw Error('Internal SQL failure containing secret DSN');
           return {rowCount:1,rows:[{revision}]};
         }
+        if(sql==='COMMIT'){
+          started=false;
+          if(commitFailure)throw Error('Lost COMMIT acknowledgment');
+          return {command:'COMMIT'};
+        }
         assert.fail('Unknown SQL or wrong restricted function');
       },
-      release(discard){released.push({lease:id,discard:!!discard})}
+      release(discard){
+        assert.equal(started,false,'A PostgreSQL transaction was left open');
+        releases.push({lease:id,discard:!!discard});
+      }
     };
   }};
   return {pool,calls,released};
@@ -94,9 +114,11 @@ test('issuer refuses production flags, raw user selectors, wrong scope and stale
   assert.equal(await adapter.issueFirst({
     tokenHash:TOKEN_HASH,grantId,scope:SCOPE
   }),'1');
-  assert.equal(f.calls.length,2);
-  assert.deepEqual(f.calls[1].values,[PROVIDER,ORIGIN,TOKEN_HASH,grantId,SCOPE,'0']);
-  assert.equal(f.calls[1].sql.includes('issue_oauth_generation('),false);
+  assert.equal(f.calls.length,4);
+  assert.deepEqual(f.calls.map(c=>c.sql==='BEGIN'?'BEGIN':c.sql==='COMMIT'?'COMMIT':'SELECT'),
+    ['BEGIN','SELECT','SELECT','COMMIT']);
+  assert.deepEqual(f.calls[2].values,[PROVIDER,ORIGIN,TOKEN_HASH,grantId,SCOPE,'0']);
+  assert.equal(f.calls[2].sql.includes('issue_oauth_generation('),false);
   assert.deepEqual(f.released,[{lease:1,discard:false}]);
 });
 
@@ -119,7 +141,8 @@ test('every PG connection must be a restricted exact-purpose issuer',async()=>{
     await code(()=>issuer(f).issueFirst({
       tokenHash:TOKEN_HASH,grantId:'x'.repeat(32),scope:SCOPE
     }),'OWNER_OAUTH_EPOCH_ROLE_UNSAFE');
-    assert.equal(f.calls.length,1,'Do not execute any issuer mutation');
+    assert.deepEqual(f.calls.map(c=>c.sql==='BEGIN'||c.sql==='ROLLBACK'?c.sql:'AUDIT'),
+      ['BEGIN','AUDIT','ROLLBACK'],'Do not execute any issuer mutation');
     assert.deepEqual(f.released,[{lease:1,discard:true}]);
   }
   const f=pgFixture({roles:[permission(),{...permission(),revoker:true}]});
@@ -141,8 +164,8 @@ test('enrollment hash is snapshotted before an asynchronous PG lease',async()=>{
   });
   data.fill(0);
   assert.equal(await pending,'1');
-  assert.deepEqual(f.calls[1].values[2],TOKEN_HASH);
-  assert.notDeepEqual(f.calls[1].values[2],data);
+  assert.deepEqual(f.calls[2].values[2],TOKEN_HASH);
+  assert.notDeepEqual(f.calls[2].values[2],data);
 });
 
 test('PG refusal and unknown write ACK do not retry the irreversible CAS',async()=>{
@@ -154,9 +177,23 @@ test('PG refusal and unknown write ACK do not retry the irreversible CAS',async(
       tokenHash:TOKEN_HASH,grantId:'x'.repeat(32),scope:SCOPE
     }),config.sqlFailure?'OWNER_OAUTH_EPOCH_UNAVAILABLE':
       'OWNER_OAUTH_EPOCH_JOURNAL_NOT_CURRENT');
-    assert.equal(f.calls.length,2);
+    assert.deepEqual(f.calls.map(c=>c.sql==='BEGIN'||c.sql==='ROLLBACK'?c.sql:'SELECT'),
+      ['BEGIN','SELECT','SELECT','ROLLBACK']);
     assert.deepEqual(f.released,[{lease:1,discard:true}]);
   }
+});
+
+test('COMMIT ACK loss is ambiguous: no automatic retry, connection discarded',async()=>{
+  enable();
+  const f=pgFixture({commitFailure:true});
+  await code(()=>issuer(f).issueFirst({
+    tokenHash:TOKEN_HASH,grantId:'x'.repeat(32),scope:SCOPE
+  }),'OWNER_OAUTH_EPOCH_UNAVAILABLE');
+  assert.deepEqual(f.calls.map(c=>c.sql==='BEGIN'||c.sql==='COMMIT'||
+    c.sql==='ROLLBACK'?c.sql:'SELECT'),
+  ['BEGIN','SELECT','SELECT','COMMIT','ROLLBACK']);
+  assert.equal(f.calls.filter(c=>c.sql.includes('SELECT paper_atproto_authority.issue_session')).length,1);
+  assert.deepEqual(f.released,[{lease:1,discard:true}]);
 });
 
 function coordinatorFixture(overrides={}){

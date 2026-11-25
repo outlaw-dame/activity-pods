@@ -6,6 +6,7 @@ const { KEY_PREFIX, digest, sessionKey, UPSERT_CONSENT_IF_SESSION_LIVE,
 const crypto = require('node:crypto');
 const { parseIntWithBounds, nowEpochSec } = require('../../utils/oauth-security');
 const { consentKey } = require('../../utils/oauth-refresh-atomic-policy');
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 // Every owner-approved OAuth consent has an independently unpredictable
 // generation. Reapproval can never make an old access/refresh token current.

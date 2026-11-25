@@ -104,7 +104,7 @@ function fixture(opts={}){
      // Simulate a malicious S3 LIST showing an internally consistent
      // older prefix; exact historical versions remain independently GETable.
      if(opts.hideLast&&input.MaxKeys===64&&
-        input.Prefix===GENERATION_BASE+'/'&&v.length)
+        input.Prefix===GENERATION_BASE&&v.length)
       v=v.slice(0,-1);
      if(input.MaxKeys===10&&opts.historyFork&&v.length)
       v=[...v,{...v[0],VersionId:'unexpected'}];

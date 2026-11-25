@@ -85,6 +85,7 @@ async function bounded(fn,ms){
 }
 export function createDisposablePreDenyIntentCoordinator({
  ownerReader,portableWriter,headPublisher,signedHead,
+ prepareIndependentFence=null,sealIndependentFence=null,
  timeoutMs=15000,fixtureOnly=false
 }={}){
  gate();
@@ -95,6 +96,18 @@ export function createDisposablePreDenyIntentCoordinator({
     typeof signedHead?.assertDenied!=='function'||
     !Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>20000)
   refuse('PRE_DENY_CONFIGURATION_UNSAFE');
+ // Stronger disposable mode: a restricted independent PG18 CAS fences
+ // future signed-PDS reservations BEFORE any potentially ambiguous S3 PUT.
+ // Existing signed intents stay pending until their signed COMMIT outcome.
+ const witnessFlag=process.env.PAPER_OAUTH_PRE_DENY_WITNESS_DISPOSABLE;
+ if((witnessFlag!==undefined||prepareIndependentFence!==null||
+    sealIndependentFence!==null)&&
+   (witnessFlag!=='confirmed'||
+    typeof prepareIndependentFence!=='function'||
+    typeof sealIndependentFence!=='function'||
+    prepareIndependentFence===sealIndependentFence))
+  refuse('PRE_DENY_WITNESS_CONFIGURATION_UNSAFE');
+ const preparedMode=witnessFlag==='confirmed';
  return Object.freeze({
   async retainBeforeMutation({context,clientId,expectedGrantId}={}){
    gate();
@@ -124,6 +137,22 @@ export function createDisposablePreDenyIntentCoordinator({
    try{assertReceipt(key,body)}
    catch{refuse('PRE_DENY_FORMAT_INVALID')}
    const sha256=crypto.createHash('sha256').update(body).digest('hex');
+   const witnessPlan=Object.freeze({
+    ownerWebId:r.ownerWebId,clientId,subject,grantSha256,
+    revision,operationId:op,receiptSha256:sha256,
+    credentialEpoch:r.credentialEpoch,saiRevision:r.saiRevision,
+    scopeSha256:r.scopeSha256
+   });
+   if(preparedMode){
+    let prepared;
+    try{
+     prepared=await bounded(()=>prepareIndependentFence(witnessPlan),timeoutMs);
+    }catch{refuse('PRE_DENY_WITNESS_PREPARE_AMBIGUOUS')}
+    if(prepared!==true)refuse('PRE_DENY_WITNESS_NOT_PREPARED');
+   }
+   // Never perform an S3 PUT until independent PG has fenced new signed
+   // writes in the prepared mode. A lost prepare ACK cannot be retried
+   // with a different operation ID or automatically cleared.
    let archived;
    try{
     archived=await bounded(()=>portableWriter.putAndVerify({
@@ -162,6 +191,17 @@ export function createDisposablePreDenyIntentCoordinator({
    const expected=Object.freeze({
     subject,grantSha256,revision,operationId:op,receiptSha256:sha256
    });
+   if(preparedMode){
+    let sealed;
+    try{
+     sealed=await bounded(()=>sealIndependentFence(Object.freeze({
+      ...witnessPlan,archiveKey:key,archiveVersion:archived.versionId
+     })),timeoutMs);
+    }catch{refuse('PRE_DENY_WITNESS_SEAL_AMBIGUOUS')}
+    if(sealed!==true)refuse('PRE_DENY_WITNESS_UNSEALED');
+   }
+   // Independent seal precedes monotonic latest-head publication. Neither
+   // can bypass the signed-PDS pending/COMMITTED receipt drain requirement.
    try{
     // A separate signer MUST atomically reject any stale/rewound head,
     // publish a WORM-backed monotonic pre-deny high-water and never

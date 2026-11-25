@@ -83,6 +83,7 @@ function fixture(options={}){
    if(options.sessionRotatedAfterArchive&&state.owner>1)
      record.authProofSha256='b'.repeat(64);
    if(options.badAuthProof)record.authProofSha256='not-a-sha256';
+   if(options.missingAuthProof)delete record.authProofSha256;
    if(options.logoutAfterArchive&&state.owner>1)
      throw Error('Signed browser session expired during archival');
    assert.equal(clientId,CLIENT);
@@ -217,7 +218,8 @@ test('refuse wrong owner grant, absent browser or weak credential epoch before a
   [{ownerUnavailable:true},'PRE_DENY_OWNER_NOT_CURRENT'],
   [{corruptOwner:true},'PRE_DENY_OWNER_NOT_CURRENT'],
   [{oldCredential:true},'PRE_DENY_OWNER_NOT_CURRENT'],
-  [{badAuthProof:true},'PRE_DENY_OWNER_NOT_CURRENT']
+  [{badAuthProof:true},'PRE_DENY_OWNER_NOT_CURRENT'],
+  [{missingAuthProof:true},'PRE_DENY_OWNER_NOT_CURRENT']
  ]){
   const f=fixture(options);
   await denied(()=>call(f),expected);

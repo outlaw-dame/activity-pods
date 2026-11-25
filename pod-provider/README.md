@@ -4,6 +4,26 @@ This directory contains the code of the Pod provider, with both the backend and 
 
 Please see the [documentation website](https://docs.activitypods.org) for more informations.
 
+## Runtime secrets and persistence
+
+The backend's former committed `.env` and `dump.rdb` were removed from the
+source tree because they could expose authentication secrets and serialized
+Redis data. The old Git history still contains those files; do not reuse any
+previously committed credentials. See
+[the credential-rotation runbook](../docs/activitypods-tracked-runtime-artifacts-incident.md).
+
+For a disposable local provider only, copy `backend/.env.example` to the
+Git-ignored `backend/.env` and supply fresh, unique local credentials before
+starting services. For production, use an external secrets manager and
+deployment-specific configuration; never copy the example into a deployed
+environment without setting required secrets and reviewing all endpoints.
+The Docker Compose Fuseki password is separately supplied to Compose as
+`SEMAPPS_JENA_PASSWORD`; it is not read automatically from
+`backend/.env`. Redis persistence must live on a private data volume.
+
+The source-controlled account/signup release fuse remains CLOSED regardless
+of environment settings. This cleanup is not a production release approval.
+
 ## Getting started
 
 ### Launch Fuseki and Redis

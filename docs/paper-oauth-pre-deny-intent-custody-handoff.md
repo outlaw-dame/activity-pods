@@ -12,7 +12,16 @@ existing S3-compatible COMPLIANCE receipt grammar:
 
 The authenticated owner, managed client, exact grant and revision are
 inherited from the certified post-enrollment owner reader introduced in
-ActivityPods #314. The subject hash reuses the existing witness domain.
+ActivityPods #314. **The subject digest MUST be byte-for-byte identical to
+the independent witness PostgreSQL v5 signed-intent receipt**, not merely
+share its domain name. The canonical UTF-8 input is the literal ASCII
+`paper:witness:subject:v1:<owner-character-count>:<owner-webid>:<client-id>`
+using the same owner length and separators as
+`paper_oauth_restore_witness.signed_intent_receipt`. Canonical HTTPS URLs
+must be ASCII (percent encoded) and normalized. An earlier implementation
+of the pre-deny candidate used NUL delimiters and produced a *different*
+subject: the explicit real PostgreSQL 18 cross-witness CI regression must
+remain required. No production release was performed with that candidate.
 The operation ID is deterministic for the exact owner/client/grant/epoch
 to permit independent reconciliation of an ambiguous failed PUT without
 creating unbounded new keys. Receipt bytes include the exact scope SHA256,

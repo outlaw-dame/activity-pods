@@ -1,4 +1,5 @@
 const { MoleculerError } = require('moleculer').Errors;
+const pgEpoch = require('../../utils/oauth-pg-epoch-policy');
 
 module.exports = {
   name: 'oauth-authorization',

@@ -265,8 +265,10 @@ async function run(){
       'paper_oauth_epoch_revoker','paper_oauth_epoch_reader','paper_oauth_epoch_signer',
       'paper_atproto_consent_issuer','paper_atproto_consent_attestor',
       'paper_atproto_authority_reader','paper_atproto_authority_revoker',
-      'paper_atproto_authority_importer','paper_credential_reader',
-      'paper_credential_enroller','paper_credential_coordinator'
+      'paper_atproto_authority_importer'
+      // The credential roles may be shared with the preceding certified
+      // head proof in the default CI database. Never DROP cluster-global
+      // roles that a different fixture database still owns.
     ])await clean('DROP ROLE IF EXISTS '+ident(role));
     await admin.end().catch(()=>{});
     try {

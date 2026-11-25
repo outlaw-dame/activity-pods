@@ -305,6 +305,8 @@ test('reject swapped identities for independently supplied callbacks and keys',(
 
 test('independent S3 retained PRE-DENY vetoes rewound active grant before and after signer',async()=>{
  const f=fixture(); // Existing authenticated/canonical/witness/signer fixture.
+ const examples=Array.from({length:4},()=>fixture());
+ const ok=fixture();
  const prior=process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE;
  process.env.PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE='confirmed';
  try{
@@ -316,8 +318,8 @@ test('independent S3 retained PRE-DENY vetoes rewound active grant before and af
    {offline:true,code:'OAUTH_DENIAL_INVENTORY_UNAVAILABLE',signer:0},
    {unsafe:true,code:'OAUTH_DENIAL_INVENTORY_UNSAFE',signer:0}
   ];
-  for(const item of cases){
-   const x=fixture();
+  for(const [i,item] of cases.entries()){
+   const x=examples[i];
    let reads=0;
    const readPreDenyInventory=async ({subject:readSubject})=>{
     reads++;
@@ -334,7 +336,6 @@ test('independent S3 retained PRE-DENY vetoes rewound active grant before and af
    assert.equal(x.hits.signer,item.signer);
    assert.equal(x.hits.sideEffects,0);
   }
-  const ok=fixture();
   let calls=0;
   const readPreDenyInventory=async()=>{
    calls++;

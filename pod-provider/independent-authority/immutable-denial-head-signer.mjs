@@ -14,6 +14,8 @@
  * nonrewindable custody.
  */
 import crypto from 'node:crypto';
+import {Buffer} from 'node:buffer';
+import {setTimeout,clearTimeout} from 'node:timers';
 import {inspectDisposablePortablePreDenyInventory} from
  '../backend/candidates/oauth-portable-pre-deny-inventory.mjs';
 
@@ -70,7 +72,7 @@ function same(a,b){
   'operationId','versionId'].every(field=>a[field]===b[field]);
 }
 async function limited(task,ms){
- const controller=new AbortController();
+ const controller=new globalThis.AbortController();
  let timer;
  try{
   return await Promise.race([

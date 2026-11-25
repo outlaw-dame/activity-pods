@@ -98,8 +98,12 @@ export function createDisposableImmutableDenialHeadSigner({
  }),timeoutMs);
  async function respond(challenge){
   gated(fixtureOnly);
-  if(!challenge||typeof challenge!=='object'||Array.isArray(challenge)||
-     Object.keys(challenge).sort().join(',')!=='kind,nonce,subject'||
+  const fields=challenge&&typeof challenge==='object'&&!Array.isArray(challenge)?
+   Object.keys(challenge).sort().join(','):'';
+  if(!challenge||!['kind,nonce,subject','kind,nonce,signal,subject'].includes(fields)||
+     (challenge.signal!==undefined&&(
+      typeof challenge.signal.aborted!=='boolean'||challenge.signal.aborted||
+      typeof challenge.signal.addEventListener!=='function'))||
      challenge.kind!=='paper.oauth.pre-deny.challenge.v1'||
      !HEX.test(challenge.subject||'')||!NONCE.test(challenge.nonce||''))
    deny('DENIAL_SIGNER_CHALLENGE_UNSAFE');
@@ -135,6 +139,8 @@ export function createDisposableImmutableDenialHeadSigner({
   catch{deny('DENIAL_SIGNER_POST_SIGN_WORM_UNAVAILABLE')}
   if(!same(first,second))
    deny('DENIAL_SIGNER_HEAD_CHANGED');
+  if(challenge.signal?.aborted)
+   deny('DENIAL_SIGNER_CHALLENGE_ABORTED');
   // Only a DENIAL attestation. The consumer must verify the pinned key,
   // receipt/hash/operation, new random nonce and bounded issuance time.
   return Object.freeze({body,signature:Buffer.from(signature),

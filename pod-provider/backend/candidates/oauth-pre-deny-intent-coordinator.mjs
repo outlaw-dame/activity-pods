@@ -111,6 +111,9 @@ export function createDisposablePreDenyIntentCoordinator({
  return Object.freeze({
   async retainBeforeMutation({context,clientId,expectedGrantId}={}){
    gate();
+   if(preparedMode&&
+      process.env.PAPER_OAUTH_PRE_DENY_WITNESS_DISPOSABLE!=='confirmed')
+    refuse('PRE_DENY_WITNESS_NOT_RELEASED');
    if(!https(clientId)||!GRANT.test(expectedGrantId||''))
     refuse('PRE_DENY_SCOPE_INVALID');
    let r;

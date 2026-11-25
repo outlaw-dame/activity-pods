@@ -98,7 +98,8 @@ function createDisposableInitialOwnerEpochIssuer({
       });
     }catch{deny('OWNER_OAUTH_EPOCH_ROLE_UNSAFE')}
     const x=r?.rows?.[0];
-    if(r?.rowCount!==1||x?.version<180000||x?.own_login!==true||
+    if(r?.rowCount!==1||!Number.isInteger(x?.version)||
+       x.version<180000||x?.own_login!==true||
        x?.primary_host!==true||x?.restricted!==true||
        x?.issuer!==true||x?.can_switch!==false||
        x?.revoker!==false||x?.signer!==false||x?.reader!==false||
@@ -117,6 +118,8 @@ function createDisposableInitialOwnerEpochIssuer({
       if(!Buffer.isBuffer(tokenHash)||tokenHash.length!==32||
          !GRANT.test(grantId||'')||scope!==SCOPE)
         deny('OWNER_OAUTH_EPOCH_SCOPE_INVALID');
+      // Do not retain a caller-mutable Buffer across asynchronous admission.
+      const trustedHash=Buffer.from(tokenHash);
       let c,discard=false;
       try {
         c=await borrow();
@@ -125,7 +128,7 @@ function createDisposableInitialOwnerEpochIssuer({
         const r=await c.query({
           text:'SELECT paper_atproto_authority.issue_session_oauth_generation('+
             '$1::text,$2::text,$3::bytea,$4::text,$5::text,$6::bigint) AS revision',
-          values:[providerId,browserOrigin,tokenHash,grantId,SCOPE,'0'],
+          values:[providerId,browserOrigin,trustedHash,grantId,SCOPE,'0'],
           query_timeout:5000
         });
         const rev=r?.rows?.[0]?.revision;

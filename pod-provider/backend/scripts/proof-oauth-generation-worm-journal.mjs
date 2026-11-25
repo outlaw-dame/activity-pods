@@ -296,6 +296,20 @@ test('forks, gaps, delete markers and unsafe historical retention fail closed',a
   Buffer.from(JSON.stringify(BLOCK)));
  await denied(()=>missing.read(),'GENERATION_JOURNAL_GAP_OR_FORK');
 });
+test('unsupported third immutable generation is refused before expensive reads',async()=>{
+ const f=fixture();
+ await f.journal.append(GENESIS);f.stagePreDeny();
+ await f.journal.append(BLOCK);
+ const forged={...GENESIS,sequence:'3',oauthRevision:'2',
+  operationId:'c9f97f9f-625c-4b62-8f64-2c6e57401994',
+  previousSha256:SHA(Buffer.from(JSON.stringify(BLOCK))),
+  grantSha256:'f'.repeat(64),ownerProofSha256:'f'.repeat(64),
+  credentialEpoch:'12',saiRevision:'10'
+ };
+ f.add(GENERATION_BASE+'0000000000000000003',
+  Buffer.from(JSON.stringify(forged)));
+ await denied(()=>f.read(),'GENERATION_JOURNAL_HISTORY_INCOMPLETE');
+});
 test('concurrent competing genesis writers cannot create two accepted heads',async()=>{
  const f=fixture();
  const competing={...GENESIS,

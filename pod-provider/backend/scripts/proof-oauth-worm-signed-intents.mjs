@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import pg from 'pg';
+import {subjectHash} from '../candidates/oauth-pre-deny-intent-coordinator.mjs';
 const PRIMARY='postgres://paper_probe:probe_local_only@127.0.0.1:5549/atproto_signed_repo_proof_test';
 const WITNESS='postgres://witness_probe:fixture_witness_only@127.0.0.1:5550/oauth_witness_disposable';
 if(process.env.NODE_ENV!=='test'||
@@ -172,6 +173,16 @@ async function fixture(){
   'SELECT paper_oauth_restore_witness.signed_intent_receipt('+
   '$1::uuid,$2) AS body',[op,'pending'])).rows[0].body;
  assert.ok(Buffer.isBuffer(pending));
+ // Cross-component contract against the REAL independent PG18 signed intent
+ // receipt bytes: no JS-only expected fixture can conceal subject drift.
+ const witnessSubject=pending.toString('utf8').split('\n')[1];
+ assert.match(witnessSubject,/^[0-9a-f]{64}$/u);
+ assert.equal(subjectHash(owner,client),witnessSubject,
+  'Pre-deny subject must equal independent witness v5 subject');
+ assert.notEqual(subjectHash(owner,client),
+  crypto.createHash('sha256').update('paper:witness:subject:v1\0')
+   .update(owner).update('\0').update(client).digest('hex'),
+  'Reject legacy NUL-delimited mismatch');
  assert.ok(!pending.includes(Buffer.from(owner))&&!pending.includes(Buffer.from(client)),
   'No unpseudonymized owner/client names may enter WORM');
  assert.ok(pending.includes(Buffer.from(cid1))&&

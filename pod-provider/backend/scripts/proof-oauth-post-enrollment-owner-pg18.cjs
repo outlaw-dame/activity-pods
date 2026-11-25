@@ -31,7 +31,6 @@ const GRANT='a'.repeat(32);
 const SCOPE='atproto repo:app.bsky.feed.post?action=create';
 const OP=crypto.randomUUID();
 const B32=crypto.randomBytes(32);
-const CERT_EPOCH='1';
 const fixedNow=1800000000;
 const DOMAIN=Buffer.from('paper:credential:attest:v1\0');
 const user='post_enrollment_reader_'+crypto.randomBytes(5).toString('hex');
@@ -43,8 +42,6 @@ const base={host:process.env.PGHOST,port:Number(process.env.PGPORT),
 const admin=new Pool({...base,user:process.env.PGUSER,
   password:process.env.PGPASSWORD,max:1,connectionTimeoutMillis:2500});
 let pgPool,credPool,error;
-const sql=path=>fs.readFile(new URL(path,__filename.startsWith('file:')
-  ?__filename:'file://'+__filename),'utf8');
 // Use relative paths from the script directory. No filesystem writes.
 const read=async name=>fs.readFile(
   require('node:path').join(__dirname,'../sql',name),'utf8');
@@ -146,8 +143,105 @@ async function main(){
     oauthRevision:'1',saiRevision:'1',credentialEpoch:'1',
     scopeSha256:crypto.createHash('sha256').update(SCOPE).digest('hex')
   });
-  assert.equal(await admin.query('SELECT count(*)::int AS n FROM paper_credential_epoch.owners'),
-    undefined,'unreachable');
+  // The trusted cookie proof cannot be replaced with a browser-supplied
+  // WebID/client/grant ID. A second owner has no selectable authority.
+  await expectCode(()=>reader.inspectForDeny({
+    context:{webId:OTHER},
+    clientId:CLIENT,expectedGrantId:'b'.repeat(32)
+  }),'OWNER_POST_ENROLLMENT_GRANT_NOT_CURRENT');
+  await expectCode(()=>reader.inspectForDeny({
+    context:{webId:OTHER},clientId:'https://evil.example.org/oauth',
+    expectedGrantId:GRANT
+  }),'OWNER_POST_ENROLLMENT_SCOPE_INVALID');
+  const absent=await pgPool.query(
+    'SELECT * FROM paper_atproto_authority.current_post_enrollment_owner_grant($1,$2)',
+    [OTHER,CLIENT]);
+  assert.equal(absent.rowCount,0);
+  await assert.rejects(pgPool.query(
+    'SELECT * FROM paper_atproto_authority.oauth_generations'),
+    e=>e?.code==='42501');
+  await assert.rejects(pgPool.query(
+    "SELECT paper_atproto_authority.revoke_oauth_generation($1,$2,$3,1)",
+    [OWNER,CLIENT,GRANT]),e=>e?.code==='42501');
+
+  controls.native=false;
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_SAI_NOT_CURRENT');
+  controls.native=true;
+  controls.witness=false;
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_WITNESS_NOT_CURRENT');
+  controls.witness=true;
+  controls.head=false;
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_CREDENTIAL_NOT_CURRENT');
+  controls.head=true;
+  controls.live=false;
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_SESSION_INVALID');
+  controls.live=true;
+  controls.sessionEpoch='2';
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_CREDENTIAL_NOT_CURRENT');
+  controls.sessionEpoch='1';
+
+  // A password change in progress suspends PG credential admission.
+  await admin.query(
+    "UPDATE paper_credential_epoch.owners SET state='pending',"+
+    'operation_id=$2,next_epoch=2,mutation_digest=NULL WHERE webid=$1',
+    [OWNER,crypto.randomUUID()]);
+  head.state='pending';
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_CREDENTIAL_NOT_CURRENT');
+  await admin.query(
+    "UPDATE paper_credential_epoch.owners SET state='active',"+
+    'epoch=2,operation_id=NULL,next_epoch=NULL WHERE webid=$1',[OWNER]);
+  head.state='active';head.epoch='2';
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_CREDENTIAL_NOT_CURRENT');
+  // Only a new, independently verified credential-epoch-bound login passes.
+  controls.sessionEpoch='2';
+  controls.credentialSeal='w'.repeat(43);
+  controls.sessionId='q'.repeat(43);
+  assert.equal((await inspect()).credentialEpoch,'2');
+
+  // Primary SQL (or physical PITR) returning to old epoch is rejected by the
+  // independently challenge-signed latest credential head, even if the
+  // signed browser session remains present in Redis.
+  await admin.query(
+    'UPDATE paper_credential_epoch.owners SET epoch=1 WHERE webid=$1',[OWNER]);
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_CREDENTIAL_NOT_CURRENT');
+  await admin.query(
+    'UPDATE paper_credential_epoch.owners SET epoch=2 WHERE webid=$1',[OWNER]);
+  assert.equal((await inspect()).credentialEpoch,'2');
+
+  // Revocation/SAI permission changes between readback passes deny.
+  let raced=false;
+  const racingReader=createDisposablePostEnrollmentOwnerReader({
+    ...options,nativeSaiReader:{
+      async verifyFresh(){
+        if(!raced){
+          raced=true;
+          await admin.query(
+            "UPDATE paper_atproto_authority.consents SET state='blocked',revision=2"+
+            ' WHERE owner_webid=$1 AND app_uri=$2',[OWNER,APP]);
+        }
+        return true;
+      }
+    }
+  });
+  await expectCode(()=>racingReader.inspectForDeny({
+    context:{},clientId:CLIENT,expectedGrantId:GRANT
+  }),'OWNER_POST_ENROLLMENT_GRANT_NOT_CURRENT');
+  assert.equal(raced,true);
+
+  // Harden the actual restricted login: extra issuer/revoker role membership
+  // (even with SET ROLE disabled) invalidates every subsequent read.
+  await admin.query('GRANT paper_oauth_epoch_revoker TO '+ident(user)+
+    ' WITH INHERIT TRUE,SET FALSE,ADMIN FALSE');
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_ROLE_UNSAFE');
+  await admin.query('REVOKE paper_oauth_epoch_revoker FROM '+ident(user));
+
+  // A blocked canonical grant is denied independently of native callbacks.
+  await admin.query(
+    "UPDATE paper_atproto_authority.oauth_generations SET state='blocked',revision=2"+
+    ' WHERE owner_webid=$1 AND client_id=$2',[OWNER,CLIENT]);
+  await expectCode(inspect,'OWNER_POST_ENROLLMENT_GRANT_NOT_CURRENT');
+  console.log('PASS: real PG18 managed WebID/SAI/OAuth/credential join, signed Ed25519 latest credential head, restricted reader, browser epoch, SAI and revocation race; NONACTIVATED');
+
 }
 async function run(){
   try{await main()}

@@ -9,7 +9,7 @@ managed ATProto DID and canonical account identity stay with ActivityPods.
 
 | Authority | Function | What it must *not* do |
 | --- | --- | --- |
-| Authenticated owner browser + enrollment journal | Privately verify the live signed owner session, credential seal and an independently issued enrollment token hash | Infer the owner from a browser-supplied WebID, unsiged JWT, old RS256 bearer or Redis-only enrollment |
+| Authenticated owner browser + enrollment journal | Privately verify the live signed owner session, credential seal and an independently issued enrollment token hash | Infer the owner from a browser-supplied WebID, unsigned JWT, old RS256 bearer or Redis-only enrollment |
 | Canonical PostgreSQL 18 | Use the existing **v7** `issue_session_oauth_generation` function on a restricted issuer LOGIN, derive WebID/client/app/SAI from the verified signup journal, and atomically issue **only revision 1** | Accept caller-supplied owner, DID, app, client, ACL selection or a raw unrestricted SQL issuer function |
 | Independent witness + immutable archive | Seal and verify the latest exact owner/client/grant/revision receipt, with independent signing/custody, object version, retention policy and an *uncached* fresh high-water read | Trust an ordinary R2 bucket lock, a primary-PG snapshot, an S3 PUT ACK, a stale cached head, or a callback controlled by the OAuth client |
 | Redis 8.2 | Persist the first authorized grant only after canonical and independent receipt readbacks, with the existing browser-session Lua CAS | Override PG/witness revocation, approve from a restored session alone, or retry unknown write ACK |

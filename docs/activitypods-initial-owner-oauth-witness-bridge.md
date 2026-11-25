@@ -16,7 +16,11 @@ managed ATProto DID and canonical account identity stay with ActivityPods.
 
 The new `oauth-initial-owner-epoch-issuer.cjs` checks actual PG18 LOGIN
 privileges on **every borrowed connection**, and performs its journal-bound
-CAS on that *same* connection. It rejects permission inheritance, direct
+CAS, role admission and durable COMMIT in one *explicit server transaction*.
+This also prevents a transaction-pooling proxy from moving the audit and the
+write onto different PostgreSQL backend sessions. Unknown COMMIT results are
+treated as irreversible ambiguity, with best-effort rollback, connection
+discard and no issuance retry. It rejects unsafe role inheritance, direct
 OAuth-table privilege, role switching, reader/revoker/signer/SAI privileges,
 and the legacy raw issue function. It cannot reapprove or revoke a grant.
 

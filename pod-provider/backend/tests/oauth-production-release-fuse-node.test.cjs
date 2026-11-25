@@ -62,12 +62,14 @@ test('production and development cannot enable the Redis-only PDS OAuth issuer',
         PAPER_OAUTH_WITNESS_DISPOSABLE: 'confirmed'
       }
     ]) {
-      await withEnvironment(overrides, () => {
+      await withEnvironment(overrides, async () => {
         assert.throws(() => pgEpoch.enabled(), closed);
-        assert.throws(() => pgEpoch.current({ call: noCall }, AUTHORIZATION), closed);
-        assert.throws(() => pgEpoch.verify({ call: noCall }, {
-          ...AUTHORIZATION, oauthPgRevision: '1'
-        }), closed);
+        await assert.rejects(
+          pgEpoch.current({ call: noCall }, AUTHORIZATION), closed);
+        await assert.rejects(
+          pgEpoch.verify({ call: noCall }, {
+            ...AUTHORIZATION, oauthPgRevision: '1'
+          }), closed);
       });
     }
   }

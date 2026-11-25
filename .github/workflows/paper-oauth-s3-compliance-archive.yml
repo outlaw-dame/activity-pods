@@ -26,7 +26,9 @@ on:
       - 'pod-provider/backend/candidates/oauth-portable-pre-deny-inventory.mjs'
       - 'pod-provider/independent-authority/immutable-denial-head-signer.mjs'
       - 'pod-provider/independent-authority/oauth-generation-worm-journal.mjs'
+      - 'pod-provider/independent-authority/signed-generation-high-water.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-generation-worm-journal.mjs'
+      - 'pod-provider/backend/scripts/proof-signed-generation-high-water.mjs'
       - 'docs/paper-independent-generation-journal-gate.md'
       - 'pod-provider/backend/scripts/proof-independent-denial-head-signer.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs'
@@ -99,6 +101,14 @@ jobs:
             echo '::error::Independent generation journal is not an ordinary provider service'
             exit 1
           fi
+          node --check pod-provider/independent-authority/signed-generation-high-water.mjs
+          node --check pod-provider/backend/scripts/proof-signed-generation-high-water.mjs
+          NODE_ENV=test PAPER_OAUTH_SIGNED_HIGHWATER_DISPOSABLE=confirmed \
+            node pod-provider/backend/scripts/proof-signed-generation-high-water.mjs
+          if grep -R -nE 'signed-generation-high-water|proof-signed-generation-high-water' pod-provider/backend/services pod-provider/backend/moleculer.config.js; then
+            echo '::error::Independent high-water authority must not be imported by ordinary provider services'
+            exit 1
+          fi
           NODE_ENV=test PAPER_INDEPENDENT_DENIAL_SIGNER_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed \
             node pod-provider/backend/scripts/proof-independent-denial-head-signer.mjs
           if grep -R -nE 'independent-authority/immutable-denial-head-signer|proof-independent-denial-head-signer' pod-provider/backend/services; then
@@ -113,7 +123,7 @@ jobs:
           fi
           node --check pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs
           node --check pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
-          PAPER_OAUTH_PRE_DENY_ADMISSION_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_WITNESS_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
+          PAPER_OAUTH_PRE_DENY_ADMISSION_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_WITNESS_DISPOSABLE=confirmed PAPER_OAUTH_SIGNED_HIGHWATER_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
           grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs
           if grep -R -nE 'oauth-independent-pre-deny-admission' pod-provider/backend/services pod-provider/backend/moleculer.config.js; then
             echo '::error::Independent current-head candidate is NOT a production issuer or signer'

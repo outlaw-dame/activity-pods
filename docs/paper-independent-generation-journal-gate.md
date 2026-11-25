@@ -8,7 +8,11 @@ a replacement for Solid-OIDC/SAI, or an ordinary S3 object media pipeline.
 
 ## Security objective and exact implementation
 
-Source: `pod-provider/independent-authority/oauth-generation-worm-journal.mjs`
+Sources:
+
+- `pod-provider/independent-authority/oauth-generation-worm-journal.mjs`
+- `pod-provider/independent-authority/signed-generation-high-water.mjs`
+- `pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs`
 
 The historical PRE-DENY-only signer has been extended *by a separate
 candidate*, not weakened, with a durable, cryptographically hash-linked
@@ -52,6 +56,34 @@ Every possible response, including a successfully recovered ACTIVE
 genesis, explicitly states `activeAuthorizes:false` and
 `releaseAccepted:false`. Neither the journal nor denial signer is
 imported into the ordinary ActivityPods service tree.
+
+The signed high-water candidate now reconciles each journal observation
+against a separately injected, subject-scoped compare-and-set checkpoint.
+It permits only an identical reread or the next hash-linked generation.
+If the checkpoint has already observed generation 2 while object storage
+shows a coherent generation-1 prefix, the authority fails with an explicit
+journal-rewind error before signing. A failed, conflicted or timed-out
+checkpoint CAS is never retried; the exact desired value must already be
+independently readable or the outcome remains ambiguous and denied.
+
+After two agreeing journal observations, the authority signs a canonical,
+fresh-nonce response covering both subject domains, generation number,
+status, current and previous receipt hashes, exact object version,
+grant/scope/owner-proof hashes, OAuth/credential/SAI revisions, operation,
+signing-key identifier and monotonic key epoch. The Ed25519 adapter receives
+only those canonical bytes and an abort signal. The implementation retains
+public keys only, verifies the returned signature before responding, and
+rechecks both journal and checkpoint after signing. Key rotation can pin a
+new minimum epoch so an otherwise valid retired key is rejected.
+
+The deny-first admission candidate now requires that signed generation
+checkpoint, in addition to canonical PostgreSQL, the independent PG18
+witness, historical immutable epoch receipt and PRE-DENY inventory. It binds
+the generation's owner-proof digest to the current server-authenticated
+proof and rechecks the generation after the signer call for all 15 OAuth,
+DPoP, refresh, owner-consent and signed-PDS admission surfaces. The returned
+result remains diagnostic evidence with `releaseAccepted:false`; it is not
+imported by any running provider service.
 
 ## State machine — intentionally narrow
 
@@ -108,9 +140,11 @@ history. BLOCKED stays terminal in this version.
   remaining >=30 days are checked. No 400-day retention window is
   permanent; a separately certified checkpoint renewal and permanent
   reference must exist *before* the oldest genesis could expire.
-- **External signing key:** the existing nonce-bound ED25519 denial
-  signer remains separate. This journal does not add an ACTIVE
-  signing mode, a KMS owner, an HTTP endpoint, or a private key.
+- **External signing key:** the new authority accepts only a signing
+  callback plus pinned Ed25519 public keys. It contains no private key,
+  KMS client, network endpoint or provider credentials. Its compare-and-set
+  and signing interfaces do not prove that the actual deployment is
+  independently administered, nonrewindable or hardware protected.
 
 ## Remaining production gate, not accomplished by this PR
 
@@ -125,8 +159,9 @@ history. BLOCKED stays terminal in this version.
    of direct version delete, overwrite and retention shortening,
    original and historical exact-version readback and lost-ACK
    reconciliation, without automated retry.
-3. Deploy and certify a genuinely **nonrewindable externally
-   authenticated sequencer and monotonic latest-head signer** with
+3. Deploy and certify the new protocol against a genuinely
+   **nonrewindable externally authenticated compare-and-set sequencer and
+   monotonic latest-head signer** with
    key custody independent of ActivityPods, PG, Redis, Jena,
    federated actors and Paper deployment administration. The
    externally signed checkpoint must be fresh, nonce-bound, cover
@@ -145,6 +180,8 @@ history. BLOCKED stays terminal in this version.
 ## Evidence and references
 
 - Test: `pod-provider/backend/scripts/proof-oauth-generation-worm-journal.mjs`
+- High-water test: `pod-provider/backend/scripts/proof-signed-generation-high-water.mjs`
+- Admission test: `pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs`
 - CI: `.github/workflows/paper-oauth-s3-compliance-archive.yml`
 - Existing denial signer: `pod-provider/independent-authority/immutable-denial-head-signer.mjs`
 - AWS Object Lock: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html

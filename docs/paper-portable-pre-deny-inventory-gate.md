@@ -45,7 +45,9 @@ is a strictly **read-only**, test-gated S3-compatible inventory that:
 ## Denial admission integration (nonactivated)
 
 The existing `oauth-independent-pre-deny-admission.mjs` now offers an
-explicit **optional test-only** `readPreDenyInventory` adapter. When its
+explicit **optional test-only** `readPreDenyInventory` adapter. It
+receives only the pseudonymized SHA256 subject and abort signal — never
+owner WebID, grant ID, scopes, browser context or credential epoch. When its
 inventory flag is set, it must be a distinct restricted read callback
 and is checked **twice**: after the first independent witness read and
 again after the final signed-head and archive recheck. A retained

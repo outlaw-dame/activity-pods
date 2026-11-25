@@ -223,6 +223,8 @@ module.exports = {
     },
 
     async issueAccessToken(session, ctx) {
+      // Internal callers cannot bypass the unreleased production issuer.
+      pgEpoch.enabled();
       await requireCurrentConsent(ctx,session);
       const epoch=await pgEpoch.current(ctx,session);
       if(epoch!==null&&session.oauthPgRevision!==epoch){

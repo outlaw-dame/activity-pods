@@ -28,7 +28,9 @@ function fixture(fault={}){
   return {ownerWebId:OWNER,clientId:CLIENT,
    appUri:'https://paper.example.org/apps/paper',grantId:GRANT,
    oauthRevision:'3',saiRevision:'5',credentialEpoch:'11',
-   scopeSha256:'b'.repeat(64)};
+   scopeSha256:'b'.repeat(64),authProofSha256:
+    (fault.sessionRotatedAfterArchive&&prepared&&objects.size)?
+     'c'.repeat(64):'a'.repeat(64)};
  }};
  const portableWriter={async putAndVerify({key,bytes}){
   events.push('put');
@@ -124,11 +126,13 @@ test('ambiguous archive after independent prepare leaves witness denial prepared
  assert.deepEqual(f.events,['owner','prepare','put']);
  assert.equal(f.mutations,0);
 });
-test('owner logout after WORM PUT prevents sealing and publication',async()=>{
- const f=fixture({logoutAfterArchive:true});
- await reject(()=>f.invoke(f.make()),'PRE_DENY_OWNER_NOT_CURRENT');
- assert.deepEqual(f.events,['owner','prepare','put','owner']);
- assert.equal(f.objects.size,1);
+test('owner logout or session replacement after WORM PUT denies seal and publication',async()=>{
+ for(const fault of [{logoutAfterArchive:true},{sessionRotatedAfterArchive:true}]){
+  const f=fixture(fault);
+  await reject(()=>f.invoke(f.make()),'PRE_DENY_OWNER_NOT_CURRENT');
+  assert.deepEqual(f.events,['owner','prepare','put','owner']);
+  assert.equal(f.objects.size,1);
+ }
 });
 test('failed separate WORM seal never reaches independent signer',async()=>{
  for(const [fault,code] of [

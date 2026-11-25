@@ -44,7 +44,8 @@ function valid(record,clientId,expectedGrantId){
   https(record.appUri)&&GRANT.test(record.grantId||'')&&
   record.grantId===expectedGrantId&&epoch(record.oauthRevision)&&
   epoch(record.saiRevision)&&epoch(record.credentialEpoch)&&
-  SHA.test(record.scopeSha256||'');
+  SHA.test(record.scopeSha256||'')&&
+  SHA.test(record.authProofSha256||'');
 }
 // Must match the INDEPENDENT PostgreSQL 18 signed-intent witness v5
 // length-framed owner/client subject EXACTLY, not merely share a domain name.
@@ -124,6 +125,9 @@ export function createDisposablePreDenyIntentCoordinator({
    }catch{refuse('PRE_DENY_OWNER_NOT_CURRENT')}
    if(!valid(r,clientId,expectedGrantId))
     refuse('PRE_DENY_OWNER_NOT_CURRENT');
+   // This session-proof digest must originate from authenticated provider
+   // state, not caller JSON. Bind the post-archive read to this SAME proof.
+   // A different session for the same WebID/epoch cannot inherit consent.
    // No caller-controlled owner, app, revision, scope or operation id.
    const subject=subjectHash(r.ownerWebId,clientId);
    const grantSha256=crypto.createHash('sha256')
@@ -189,7 +193,8 @@ export function createDisposablePreDenyIntentCoordinator({
       current.oauthRevision!==r.oauthRevision||
       current.saiRevision!==r.saiRevision||
       current.credentialEpoch!==r.credentialEpoch||
-      current.scopeSha256!==r.scopeSha256)
+      current.scopeSha256!==r.scopeSha256||
+      current.authProofSha256!==r.authProofSha256)
     refuse('PRE_DENY_OWNER_NOT_CURRENT');
    const expected=Object.freeze({
     subject,grantSha256,revision,operationId:op,receiptSha256:sha256

@@ -18,6 +18,9 @@ on:
       - 'pod-provider/backend/scripts/probe-oauth-portable-s3-custody.mjs'
       - 'pod-provider/backend/candidates/oauth-portable-s3-receipt-writer.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-receipt-writer.mjs'
+      - 'pod-provider/backend/candidates/oauth-pre-deny-signed-head.mjs'
+      - 'pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs'
       - 'pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs'
@@ -68,6 +71,14 @@ jobs:
           node --check pod-provider/backend/candidates/oauth-portable-s3-receipt-writer.mjs
           node --check pod-provider/backend/scripts/proof-oauth-portable-s3-receipt-writer.mjs
           PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-portable-s3-receipt-writer.mjs
+          node --check pod-provider/backend/candidates/oauth-pre-deny-signed-head.mjs
+          node --check pod-provider/backend/candidates/oauth-pre-deny-intent-coordinator.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
+          PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
+          if grep -R -nE 'oauth-pre-deny-(intent-coordinator|signed-head)' pod-provider/backend/services pod-provider/backend/moleculer.config.js; then
+            echo '::error::Independent pre-denial authority cannot be activated in production services'
+            exit 1
+          fi
           node --check pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs
           node --check pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs
           node --check pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs

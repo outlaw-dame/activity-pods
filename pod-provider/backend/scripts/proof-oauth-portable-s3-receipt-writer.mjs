@@ -26,6 +26,7 @@ const commands=Object.fromEntries([
 }]));
 const denied=(fn,code)=>assert.rejects(fn,e=>e?.code===code);
 function setup(options={}){
+  const receiptKey=options.receiptKey||key;
   const versions=[],calls=[];
   const controls={...options,putCount:0};
   let active=null;
@@ -43,7 +44,7 @@ function setup(options={}){
     if(name==='ListObjectVersionsCommand'){
       return {IsTruncated:controls.truncated===true,
         Versions:versions.map(x=>({...x})),
-        DeleteMarkers:controls.marker?[{Key:key,VersionId:'marker'}]:[]};
+        DeleteMarkers:controls.marker?[{Key:receiptKey,VersionId:'marker'}]:[]};
     }
     if(name==='HeadObjectCommand'){
       if(!active)throw Error('Missing object');
@@ -73,7 +74,7 @@ function setup(options={}){
       calls.push({role:'writer',name:cmd.kind,params:cmd.input});
       assert.equal(cmd.kind,'PutObjectCommand');
       assert.equal(cmd.input.Bucket,'immutable-custody-fixture');
-      assert.equal(cmd.input.Key,key);
+      assert.equal(cmd.input.Key,receiptKey);
       assert.equal(cmd.input.IfNoneMatch,'*');
       assert.equal(cmd.input.ContentType,'application/octet-stream');
       assert.ok(Buffer.isBuffer(cmd.input.Body));
@@ -81,7 +82,7 @@ function setup(options={}){
       if(controls.lostBefore)throw Error('No ACK before durable store');
       if(active&&!controls.ignoreCondition)throw Error('412 Precondition Failed');
       if(active)active.IsLatest=false;
-      const next={Key:key,VersionId:'version-'+controls.putCount,
+      const next={Key:receiptKey,VersionId:'version-'+controls.putCount,
         IsLatest:true,Size:cmd.input.Body.length,
         payload:Buffer.from(cmd.input.Body)};
       active=next;versions.push(next);
@@ -204,4 +205,43 @@ test('reject shared writer/reader roles and missing required SDK commands',()=>{
   assert.throws(()=>createPortableS3ReceiptWriter({
     ...h.args,commands:{}
   }),e=>e?.code==='PORTABLE_RECEIPT_CONFIGURATION_UNSAFE');
+});
+
+test('pre-denial receipt uses actual portable S3 conditional PutObject and COMPLIANCE readback',async()=>{
+  const subject=crypto.createHash('sha256').update('paper:witness:subject:v1\0')
+    .update('https://paper.example.org/users/s3-pre-deny').update('\0')
+    .update('https://paper-client.example.org/oauth').digest('hex');
+  const operationId='9c3223e0-b10d-46de-b713-20a7b23a2307';
+  const grantSha256=crypto.createHash('sha256')
+    .update('p'.repeat(32)).digest('hex');
+  const receiptKey='paper/oauth-witness/pre-deny/v1/'+subject+
+    '/0000000000000000007/'+operationId;
+  const payload=Buffer.from(JSON.stringify({
+    kind:'paper.oauth.pre-deny.v1',subject,revision:'7',
+    operationId,grantSha256,credentialEpoch:'11',saiRevision:'9',
+    scopeSha256:'f'.repeat(64)
+  }));
+  const h=setup({receiptKey});
+  const result=await h.create().putAndVerify({key:receiptKey,bytes:payload});
+  assert.equal(result.key,receiptKey);
+  assert.equal(result.retentionObserved,true);
+  assert.equal(result.contentVersionObserved,true);
+  assert.equal(result.releaseAccepted,false);
+  assert.equal(h.controls.putCount,1);
+  assert.equal(h.calls.filter(x=>x.role==='writer').length,1);
+  assert.equal(h.calls.filter(x=>x.name==='GetObjectRetentionCommand').length>0,true);
+  const again=await h.create().putAndVerify({key:receiptKey,bytes:payload});
+  assert.equal(again.versionId,result.versionId);
+  assert.equal(h.versions.length,1);
+  const bad=setup({receiptKey,lostBefore:true});
+  await denied(()=>bad.create().putAndVerify({
+    key:receiptKey,bytes:payload
+  }),'PORTABLE_RECEIPT_HISTORY_UNSAFE');
+  assert.equal(bad.controls.putCount,1);
+  const wrong=setup({receiptKey,ignoreCondition:true});
+  await wrong.create().putAndVerify({key:receiptKey,bytes:payload});
+  await denied(()=>wrong.create().putAndVerify({
+    key:receiptKey,bytes:payload
+  }),'PORTABLE_RECEIPT_HISTORY_UNSAFE');
+  assert.equal(wrong.versions.length,2);
 });

@@ -22,7 +22,10 @@ function validVersion(value){
       return code<=32||code===127;
     });
 }
-const KEY=/^paper\/oauth-witness\/epochs\/v1\/[a-f0-9]{64}\/[0-9]{19}$/u;
+// Historical pre-deny objects must be qualified by the SAME independent
+// exact-version/Object-Lock readback as epoch receipts. Do not accept
+// arbitrary app keys or prefixes supplied by browser/client requests.
+const KEY=/^paper\/oauth-witness\/(?:epochs\/v1\/[a-f0-9]{64}\/[0-9]{19}|pre-deny\/v1\/[a-f0-9]{64}\/[0-9]{19}\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const DAY=86_400_000;
 const MAX_READ=1024;
 const REQUIRED=[

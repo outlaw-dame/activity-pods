@@ -15,8 +15,11 @@ DO $roles$ BEGIN
     NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
  END IF;
 END $roles$;
-GRANT USAGE ON SCHEMA paper_atproto_authority
- TO paper_oauth_post_enrollment_reader;
+GRANT USAGE ON SCHEMA paper_atproto_authority,
+ paper_credential_epoch TO paper_oauth_post_enrollment_reader;
+-- Credential schema USAGE is necessary for PostgreSQL's named-regclass
+-- has_table_privilege(...) admission audit. It grants NO table SELECT,
+-- no CREATE, no direct credential read and no ability to change epochs.
 
 -- No separate account/profile store and no duplicate grant authority.
 -- The original ActivityPods WebID, canonical managed DID, credential

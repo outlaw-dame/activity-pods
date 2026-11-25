@@ -74,7 +74,13 @@ function createDisposableInitialConsentCoordinator({
       deny('OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT');
     }
     if(!validOwner(proof))deny('OWNER_INITIAL_CONSENT_OWNER_NOT_CURRENT');
-    return proof;
+    // Snapshot the trusted claim. A caller must not be able to mutate a
+    // shared enrollment-hash Buffer while the PG/WORM writes are pending.
+    return Object.freeze({
+      canonicalAccountId:proof.canonicalAccountId,
+      sessionId:proof.sessionId,
+      enrollmentTokenHash:Buffer.from(proof.enrollmentTokenHash)
+    });
   }
   function recordFor(proof,grantId){
     return Object.freeze({

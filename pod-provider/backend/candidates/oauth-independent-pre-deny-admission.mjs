@@ -23,7 +23,7 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
 const GRANT=/^[A-Za-z0-9_-]{32}$/u;
 const AUTH=/^[a-z0-9._:-]{3,128}$/u;
 const DOMAIN=Buffer.from('paper:oauth:admission-head:v1\0');
-const HEAD_FIELDS='authority,grantSha256,issuedAt,kind,nonce,operationId,receiptSha256,revision,status,subject,witnessEventSha256';
+const HEAD_FIELDS='authority,epochSubject,grantSha256,issuedAt,kind,nonce,operationId,receiptSha256,revision,status,subject,witnessEventSha256';
 const SURFACES=Object.freeze([
   'authorization-code-issue',
   'authorization-code-redeem',
@@ -83,9 +83,10 @@ function trustedGrant(x){
  if(!validGrant(x))fail('OAUTH_DENIAL_AUTHENTICATION_INVALID');
  return Object.freeze(Object.fromEntries(GRANT_FIELDS.map(k=>[k,x[k]])));
 }
-function validState(x,subject,grantSha256,revision){
+function validState(x,subject,epochSubject,grantSha256,revision){
  return x&&typeof x==='object'&&!Array.isArray(x)&&
-  x.subject===subject&&x.grantSha256===grantSha256&&
+  x.subject===subject&&x.epochSubject===epochSubject&&
+  x.grantSha256===grantSha256&&
   x.revision===revision&&HEX.test(x.witnessEventSha256||'')&&
   HEX.test(x.receiptSha256||'')&&UUID.test(x.operationId||'')&&
   ['active','blocked'].includes(x.status);
@@ -94,11 +95,11 @@ function pgGrant(x,r){
  return x&&typeof x==='object'&&!Array.isArray(x)&&
    x.state==='active'&&same(x,r,GRANT_FIELDS.filter(k=>k!=='authProofSha256'));
 }
-function witnessState(x,subject,grantHash,revision){
- return validState(x,subject,grantHash,revision);
+function witnessState(x,subject,epochSubject,grantHash,revision){
+ return validState(x,subject,epochSubject,grantHash,revision);
 }
-function archiveState(x,subject,grantHash,revision){
- return validState(x,subject,grantHash,revision)&&
+function archiveState(x,subject,epochSubject,grantHash,revision){
+ return validState(x,subject,epochSubject,grantHash,revision)&&
    x.receiptVerified===true&&x.retentionVerified===true&&
    x.versionHistoryComplete===true&&x.latestConfirmed===true&&
    typeof x.archiveVersion==='string'&&x.archiveVersion.length>=1&&
@@ -146,6 +147,7 @@ function signedHead(reply,nonce,expected,{key,authority,now}){
     head.kind!=='paper.oauth.admission-head.v1'||
     head.authority!==authority||head.nonce!==nonce||
     head.subject!==expected.subject||
+    head.epochSubject!==expected.epochSubject||
     head.grantSha256!==expected.grantSha256||
     head.revision!==expected.revision||
     head.operationId!==expected.operationId||
@@ -156,7 +158,8 @@ function signedHead(reply,nonce,expected,{key,authority,now}){
    fail('OAUTH_DENIAL_SIGNER_SCOPE_INVALID');
  const canonical=Buffer.from(JSON.stringify({
   kind:head.kind,authority:head.authority,
-  subject:head.subject,grantSha256:head.grantSha256,
+  subject:head.subject,epochSubject:head.epochSubject,
+  grantSha256:head.grantSha256,
   revision:head.revision,operationId:head.operationId,
   witnessEventSha256:head.witnessEventSha256,
   receiptSha256:head.receiptSha256,status:head.status,
@@ -208,14 +211,22 @@ export function createDisposableIndependentPreDenyAdmission({
     context, surface,signal
    }),timeoutMs));}
    catch{fail('OAUTH_DENIAL_AUTHENTICATION_INVALID')}
+   // Epoch v1 Object Lock receipts use NUL-separated subject bytes;
+   // signed-write v5 and new PRE-DENY use SQL length framing. Both must
+   // be attested; conflating the two lets a stale epoch look current.
+   const epochSubject=crypto.createHash('sha256')
+    .update('paper:witness:subject:v1\0').update(r.ownerWebId)
+    .update('\0').update(r.clientId).digest('hex');
    const subject=subjectHash(r.ownerWebId,r.clientId);
+   if(subject===epochSubject)
+    fail('OAUTH_DENIAL_SUBJECT_DOMAIN_INVALID');
    const grantSha256=crypto.createHash('sha256')
     .update(r.grantId,'utf8').digest('hex');
    const probe=Object.freeze({
     ownerWebId:r.ownerWebId,clientId:r.clientId,
     grantId:r.grantId,scopeSha256:r.scopeSha256,
     oauthRevision:r.oauthRevision,credentialEpoch:r.credentialEpoch,
-    saiRevision:r.saiRevision,subject,grantSha256,surface
+    saiRevision:r.saiRevision,subject,epochSubject,grantSha256,surface
    });
    const firstCanonical=await independentRead(readCanonical,probe,
     'OAUTH_DENIAL_CANONICAL_UNAVAILABLE');
@@ -223,17 +234,19 @@ export function createDisposableIndependentPreDenyAdmission({
     fail('OAUTH_DENIAL_CANONICAL_STALE');
    const firstWitness=await independentRead(readWitness,probe,
     'OAUTH_DENIAL_WITNESS_UNAVAILABLE');
-   if(!witnessState(firstWitness,subject,grantSha256,r.oauthRevision)||
+   if(!witnessState(firstWitness,subject,epochSubject,
+      grantSha256,r.oauthRevision)||
       firstWitness.status!=='active')
     fail('OAUTH_DENIAL_WITNESS_STALE');
    const archive=await independentRead(readLatestArchive,probe,
     'OAUTH_DENIAL_ARCHIVE_UNAVAILABLE');
-   if(!archiveState(archive,subject,grantSha256,r.oauthRevision))
+   if(!archiveState(archive,subject,epochSubject,
+      grantSha256,r.oauthRevision))
     fail('OAUTH_DENIAL_ARCHIVE_INVALID');
    if(archive.status!=='active')
     fail('OAUTH_DENIAL_BLOCKED');
    if(!same(firstWitness,archive,
-    ['status','subject','grantSha256','revision',
+    ['status','subject','epochSubject','grantSha256','revision',
      'witnessEventSha256','receiptSha256','operationId']))
     fail('OAUTH_DENIAL_ARCHIVE_STALE');
    const nonce=crypto.randomBytes(32).toString('base64url');
@@ -259,17 +272,19 @@ export function createDisposableIndependentPreDenyAdmission({
     fail('OAUTH_DENIAL_CANONICAL_STALE');
    const secondWitness=await independentRead(readWitness,probe,
     'OAUTH_DENIAL_WITNESS_UNAVAILABLE');
-   if(!witnessState(secondWitness,subject,grantSha256,r.oauthRevision)||
+   if(!witnessState(secondWitness,subject,epochSubject,
+      grantSha256,r.oauthRevision)||
       !same(firstWitness,secondWitness,[
-       'status','subject','grantSha256','revision',
+       'status','subject','epochSubject','grantSha256','revision',
        'witnessEventSha256','receiptSha256','operationId'])||
       secondWitness.status!=='active')
     fail('OAUTH_DENIAL_WITNESS_STALE');
    const finalArchive=await independentRead(readLatestArchive,probe,
     'OAUTH_DENIAL_ARCHIVE_UNAVAILABLE');
-   if(!archiveState(finalArchive,subject,grantSha256,r.oauthRevision)||
+   if(!archiveState(finalArchive,subject,epochSubject,
+      grantSha256,r.oauthRevision)||
       !same(archive,finalArchive,[
-       'status','subject','grantSha256','revision',
+       'status','subject','epochSubject','grantSha256','revision',
        'witnessEventSha256','receiptSha256','operationId',
        'archiveVersion'])||finalArchive.status!=='active')
     fail('OAUTH_DENIAL_ARCHIVE_STALE');

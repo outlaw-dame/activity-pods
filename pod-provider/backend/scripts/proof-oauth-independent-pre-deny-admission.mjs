@@ -321,9 +321,11 @@ test('independent S3 retained PRE-DENY vetoes rewound active grant before and af
   for(const [i,item] of cases.entries()){
    const x=examples[i];
    let reads=0;
-   const readPreDenyInventory=async ({subject:readSubject})=>{
+   const readPreDenyInventory=async (challenge)=>{
     reads++;
-    assert.equal(readSubject,SUBJECT);
+    assert.equal(challenge.subject,SUBJECT);
+    assert.deepEqual(Object.keys(challenge).sort(),['signal','subject'],
+     'External S3 inventory never receives owner WebID, grant or token');
     if(item.offline)throw Error('Independent S3 unavailable');
     return {retainedDenialObserved:reads===item.seenAt,
      absenceAuthorizes:item.unsafe?true:false,releaseAccepted:false};

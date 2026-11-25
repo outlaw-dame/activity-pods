@@ -227,6 +227,21 @@ test('first grant: owner credential, PG CAS, WORM latest readback and Redis sess
   assert.equal(f.state.calls.redis,1,'Never overwrite with a replayed initial grant');
 });
 
+test('concurrent first approvals have one canonical CAS winner and one visible consent',async()=>{
+  const f=coordinatorFixture();
+  const outcomes=await Promise.allSettled([f.execute(),f.execute()]);
+  assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);
+  const failure=outcomes.find(x=>x.status==='rejected');
+  assert.equal(failure?.reason?.code,'OWNER_INITIAL_CONSENT_COMMIT_AMBIGUOUS');
+  assert.equal(f.state.calls.issue,2);
+  assert.equal(f.state.calls.attest,1);
+  assert.equal(f.state.calls.redis,1);
+  const committed=outcomes.find(x=>x.status==='fulfilled').value;
+  assert.equal(committed.grantId,f.state.acceptedGrant);
+  assert.deepEqual(JSON.parse(f.state.redis.get(consentKey('oauth:grant',OWNER,CLIENT))),
+    committed);
+});
+
 test('irreversible SQL ACK loss never retries or calls Redis/witness',async()=>{
   const f=coordinatorFixture();
   f.options.epochIssuer.issueFirst=async()=>{f.state.calls.issue++;throw Error('lost ACK')};

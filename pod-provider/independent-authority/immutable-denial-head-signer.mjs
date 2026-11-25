@@ -49,9 +49,11 @@ function publicKey(input){
 }
 function receipt(x,subject){
  return x&&typeof x==='object'&&!Array.isArray(x)&&
-  x.subject===subject&&EPOCH.test(x.revision||'')&&
-  BigInt(x.revision)<=MAX_EPOCH&&HEX.test(x.grantSha256||'')&&
-  HEX.test(x.receiptSha256||'')&&UUID.test(x.operationId||'')&&
+  x.subject===subject&&typeof x.revision==='string'&&
+  EPOCH.test(x.revision)&&BigInt(x.revision)<=MAX_EPOCH&&
+  typeof x.grantSha256==='string'&&HEX.test(x.grantSha256)&&
+  typeof x.receiptSha256==='string'&&HEX.test(x.receiptSha256)&&
+  typeof x.operationId==='string'&&UUID.test(x.operationId)&&
   typeof x.versionId==='string'&&x.versionId.length>0&&
   x.versionId.length<=512&&x.versionId!=='null'&&
   [...x.versionId].every(ch=>ch.codePointAt(0)>32&&ch.codePointAt(0)!==127);
@@ -102,10 +104,12 @@ export function createDisposableImmutableDenialHeadSigner({
    Object.keys(challenge).sort().join(','):'';
   if(!challenge||!['kind,nonce,subject','kind,nonce,signal,subject'].includes(fields)||
      (challenge.signal!==undefined&&(
-      typeof challenge.signal.aborted!=='boolean'||challenge.signal.aborted||
+      !challenge.signal||typeof challenge.signal.aborted!=='boolean'||
+      challenge.signal.aborted||
       typeof challenge.signal.addEventListener!=='function'))||
      challenge.kind!=='paper.oauth.pre-deny.challenge.v1'||
-     !HEX.test(challenge.subject||'')||!NONCE.test(challenge.nonce||''))
+     typeof challenge.subject!=='string'||!HEX.test(challenge.subject)||
+     typeof challenge.nonce!=='string'||!NONCE.test(challenge.nonce))
    deny('DENIAL_SIGNER_CHALLENGE_UNSAFE');
   const subject=challenge.subject;
   let first;

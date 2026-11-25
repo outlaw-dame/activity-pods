@@ -23,6 +23,8 @@ on:
       - 'pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs'
       - 'pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs'
+      - 'pod-provider/backend/candidates/oauth-portable-pre-deny-inventory.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs'
       - 'pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs'
@@ -80,6 +82,14 @@ jobs:
           PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-pre-deny-intent.mjs
           node --check pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs
           PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_PORTABLE_WORM_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_WITNESS_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-pre-deny-prepared-bridge.mjs
+          node --check pod-provider/backend/candidates/oauth-portable-pre-deny-inventory.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs
+          NODE_ENV=test PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs
+          grep -q 'NONACTIVATED' pod-provider/backend/candidates/oauth-portable-pre-deny-inventory.mjs
+          if grep -R -n 'oauth-portable-pre-deny-inventory' pod-provider/backend/services pod-provider/backend/moleculer.config.js; then
+            echo '::error::Independent denial inventory is NOT a production service'
+            exit 1
+          fi
           node --check pod-provider/backend/candidates/oauth-independent-pre-deny-admission.mjs
           node --check pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
           PAPER_OAUTH_PRE_DENY_ADMISSION_DISPOSABLE=confirmed PAPER_OAUTH_PRE_DENY_DISPOSABLE=confirmed PAPER_OAUTH_WORM_READBACK_DISPOSABLE=confirmed PAPER_OAUTH_WITNESS_DISPOSABLE=confirmed node pod-provider/backend/scripts/proof-oauth-independent-pre-deny-admission.mjs
@@ -154,6 +164,9 @@ jobs:
           set -euo pipefail
           PAPER_OAUTH_S3_SDK_ENTRY="$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js" \
             node pod-provider/backend/scripts/proof-oauth-s3-compliance-archive.mjs
+          NODE_ENV=test PAPER_OAUTH_PRE_DENY_INVENTORY_DISPOSABLE=confirmed \
+            PAPER_OAUTH_S3_SDK_ENTRY="$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js" \
+            node pod-provider/backend/scripts/proof-oauth-portable-pre-deny-inventory.mjs
           PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
             node pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs

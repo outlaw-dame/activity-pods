@@ -12,11 +12,11 @@ const { execFileSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const BACKEND = 'pod-provider/backend/';
-const ALLOWED_TEST_KEYS = new Set([
-  'SEMAPPS_SPARQL_ENDPOINT',
-  'SEMAPPS_QUEUE_SERVICE_URL',
-  'SEMAPPS_REDIS_TRANSPORTER_URL',
-  'SEMAPPS_REDIS_OIDC_PROVIDER_URL'
+const TEST_FIXTURE = new Map([
+  ['SEMAPPS_SPARQL_ENDPOINT', 'http://localhost:3040/'],
+  ['SEMAPPS_QUEUE_SERVICE_URL', 'redis://localhost:6379/11'],
+  ['SEMAPPS_REDIS_TRANSPORTER_URL', 'redis://localhost:6379/12'],
+  ['SEMAPPS_REDIS_OIDC_PROVIDER_URL', 'redis://localhost:6379/13']
 ]);
 const EMPTY_IN_TEMPLATE = new Set([
   'SEMAPPS_JENA_PASSWORD',
@@ -61,12 +61,18 @@ function validateSafeTemplates({ example, testFixture }) {
       throw new Error('Secret-bearing environment template must have empty value: ' + key);
     }
   }
-  for (const key of fixture.keys()) {
-    if (!ALLOWED_TEST_KEYS.has(key)) {
-      throw new Error('Unexpected tracked test environment key: ' + key);
+  for (const [key, value] of template) {
+    if (/(?:^|_)(?:TOKEN|PASSWORD|PASS|SECRET|PRIVATE|KEY|CREDENTIAL)(?:_|$)/iu.test(key) &&
+        value !== '') {
+      throw new Error('Secret-looking example environment value is populated: ' + key);
     }
   }
-  if (fixture.size !== ALLOWED_TEST_KEYS.size) {
+  for (const [key, value] of fixture) {
+    if (!TEST_FIXTURE.has(key) || TEST_FIXTURE.get(key) !== value) {
+      throw new Error('Unexpected tracked test environment value: ' + key);
+    }
+  }
+  if (fixture.size !== TEST_FIXTURE.size) {
     throw new Error('Tracked test environment fixture has changed');
   }
 }

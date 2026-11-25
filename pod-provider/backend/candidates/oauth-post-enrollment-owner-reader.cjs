@@ -199,7 +199,9 @@ function createDisposablePostEnrollmentOwnerReader({
         saiRevision:r.sai_revision
       }),timeoutMs);
       if(active===true)return;
-    }catch{}
+    }catch{
+      reject('OWNER_POST_ENROLLMENT_SAI_NOT_CURRENT');
+    }
     reject('OWNER_POST_ENROLLMENT_SAI_NOT_CURRENT');
   }
   async function witness(r){
@@ -209,7 +211,9 @@ function createDisposablePostEnrollmentOwnerReader({
         consentGrantId:r.grant_id,oauthPgRevision:r.oauth_revision
       }),timeoutMs);
       if(active===true)return;
-    }catch{}
+    }catch{
+      reject('OWNER_POST_ENROLLMENT_WITNESS_NOT_CURRENT');
+    }
     reject('OWNER_POST_ENROLLMENT_WITNESS_NOT_CURRENT');
   }
   return Object.freeze({

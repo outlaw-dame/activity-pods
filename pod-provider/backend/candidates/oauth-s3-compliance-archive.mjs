@@ -20,6 +20,8 @@ const MAX_BYTES=1024;
 const EPOCH_KEY=/^paper\/oauth-witness\/epochs\/v1\/([a-f0-9]{64})\/([0-9]{19})$/u;
 const INTENT_KEY=/^paper\/oauth-witness\/signed-intents\/v1\/([0-9a-f-]{36})\/(pending|resolved)$/u;
 const PRE_DENY_KEY=/^paper\/oauth-witness\/pre-deny\/v1\/([a-f0-9]{64})\/([0-9]{19})\/([0-9a-f-]{36})$/u;
+const AUTH_GENERATION_KEY=/^paper\/oauth-authority\/generations\/v1\/([a-f0-9]{64})\/([0-9]{19})$/u;
+const ZERO='0'.repeat(64);
 function deny(code) {
  const e=new Error('Immutable S3 compliance receipt unavailable');
  e.code=code;
@@ -66,6 +68,36 @@ export function assertReceipt(key,bytes){
      v.revision.padStart(19,'0')!==pre[2]||
      asRevision(v.credentialEpoch)!==v.credentialEpoch||
      asRevision(v.saiRevision)!==v.saiRevision||
+     JSON.stringify(v)!==s)
+    deny('S3_RECEIPT_FORMAT_INVALID');
+  return;
+ }
+ const generation=AUTH_GENERATION_KEY.exec(key);
+ if(generation){
+  let v;
+  try{v=JSON.parse(s)}catch{deny('S3_RECEIPT_FORMAT_INVALID')}
+  if(!v||typeof v!=='object'||Array.isArray(v)||
+     Object.keys(v).sort().join(',')!=='credentialEpoch,epochSubject,grantSha256,kind,oauthRevision,operationId,ownerProofSha256,preDenyReceiptSha256,previousSha256,saiRevision,scopeSha256,sequence,status,subject'||
+     v.kind!=='paper.oauth.authority-generation.v1'||
+     v.subject!==generation[1]||!SUBJECT.test(v.epochSubject)||
+     v.epochSubject===v.subject||
+     !SUBJECT.test(v.grantSha256)||!SUBJECT.test(v.scopeSha256)||
+     !SUBJECT.test(v.ownerProofSha256)||v.ownerProofSha256===ZERO||
+     !SUBJECT.test(v.previousSha256)||
+     !SUBJECT.test(v.preDenyReceiptSha256)||
+     !UUID.test(v.operationId)||
+     typeof v.sequence!=='string'||typeof v.oauthRevision!=='string'||
+     typeof v.credentialEpoch!=='string'||
+     typeof v.saiRevision!=='string'||
+     asRevision(v.sequence)!==v.sequence||
+     asRevision(v.oauthRevision)!==v.oauthRevision||
+     asRevision(v.credentialEpoch)!==v.credentialEpoch||
+     asRevision(v.saiRevision)!==v.saiRevision||
+     v.sequence.padStart(19,'0')!==generation[2]||
+     !['active','blocked'].includes(v.status)||
+     (v.status==='active'&&v.preDenyReceiptSha256!==ZERO)||
+     (v.status==='blocked'&&v.preDenyReceiptSha256===ZERO)||
+     (v.sequence==='1'&&v.previousSha256!==ZERO)||
      JSON.stringify(v)!==s)
     deny('S3_RECEIPT_FORMAT_INVALID');
   return;

@@ -26,6 +26,9 @@ function config(){
  if(!['preflight','hostile'].includes(phase)||
     !path.isAbsolute(env.PAPER_WORM_SDK_ROOT||'')||
     !PROFILE.test(env.PAPER_PORTABLE_WORM_READER_PROFILE||'')||
+    !PROFILE.test(env.PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE||'')||
+    env.PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE===
+      env.PAPER_PORTABLE_WORM_READER_PROFILE||
     !['path','virtual-host',''].includes(
       env.PAPER_PORTABLE_WORM_URL_STYLE||'')||
     env.AWS_ENDPOINT_URL||env.AWS_ENDPOINT_URL_S3||
@@ -40,6 +43,8 @@ function config(){
      !PROFILE.test(env.PAPER_PORTABLE_WORM_ADVERSARY_PROFILE||'')||
      env.PAPER_PORTABLE_WORM_ADVERSARY_PROFILE===
        env.PAPER_PORTABLE_WORM_READER_PROFILE||
+     env.PAPER_PORTABLE_WORM_ADVERSARY_PROFILE!==
+       env.PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE||
      env.PAPER_PORTABLE_WORM_ADVERSARY_PROFILE===
        env.PAPER_PORTABLE_WORM_WRITER_PROFILE||
      !/^hostile-locked-version:[a-f0-9]{64}$/u.test(
@@ -91,7 +96,9 @@ async function main(){
     key:env.PAPER_PORTABLE_WORM_RECEIPT_KEY,
     versionId:env.PAPER_PORTABLE_WORM_RECEIPT_VERSION,
     sha256:env.PAPER_PORTABLE_WORM_RECEIPT_SHA256
-   },phase,explicitApproval:phase==='hostile'?
+   },phase,
+   plannedAdversaryProfile:env.PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE,
+   explicitApproval:phase==='hostile'?
     env.PAPER_PORTABLE_WORM_HOSTILE_ACK:null
   });
   process.stdout.write(JSON.stringify(result)+'\n');

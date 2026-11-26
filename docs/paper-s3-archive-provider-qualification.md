@@ -248,7 +248,8 @@ acceptance tool now lives at:
 **This is an irreversible-storage test**: ONE synthetic object version
 may be retained under COMPLIANCE for at least 400 days. Use a new,
 empty, individually approved bucket named
-`paper-worm-disposable-<random-suffix>`. Its object key is derived
+`paper-worm-disposable` (the operator's existing empty Storj test bucket)
+or `paper-worm-disposable-<random-suffix>`. Its object key is derived
 from a cryptographically random subject and uses the existing
 `paper/oauth-witness/epochs/v1/<hash>/<revision>` test namespace.
 It contains **no real WebID, credentials, signing keys, consent or user
@@ -261,7 +262,7 @@ settings, with a separately provisioned **disposable writer** profile:
 
 - `PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=disposable-write-approved`
 - `PAPER_PORTABLE_WORM_WRITE_DISPOSABLE=confirmed`
-- `PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable-<random-suffix>`
+- `PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable` (or previously supported `paper-worm-disposable-<random-suffix>`)
 - `PAPER_PORTABLE_WORM_WRITE_ACK=permanently-retain:<exact-bucket-name>`
 - `PAPER_PORTABLE_WORM_WRITER_PROFILE=<disposable-writer-profile>`
 - `PAPER_PORTABLE_WORM_READER_PROFILE=<distinct-read-only-profile>`
@@ -327,6 +328,37 @@ owner account lifecycle, positive hosted signup and independent
 human security review are still required. Production signup and
 release remain CLOSED.
 
+### Existing Storj bucket compatibility and non-destructive verification
+
+The Storj `APods_test` project has an existing **empty** bucket named
+`paper-worm-disposable`. Both the competing-conditional-create probe
+and the hostile-version proof now accept **exactly** this bare name in
+addition to their original explicit `paper-worm-disposable-<suffix>`
+allowlist. All S3 proof scripts still demand the **exact bucket name**
+in their explicit approval inputs. Arbitrary S3 buckets, close
+lookalikes and general production authorization buckets remain
+forbidden.
+
+In Storj, **enabling bucket Object Lock does not necessarily configure
+a bucket default retention rule**. The read-only inspection must
+independently observe `ObjectLockEnabled=Enabled`,
+`GetBucketVersioning.Status=Enabled`, and a *default retention rule*
+with `Mode=COMPLIANCE` and **at least 400 days** before allowing
+the two-writer probe. The operator should confirm these settings
+under `GetObjectLockConfiguration`; the browser's bucket page and a
+"COMPLIANCE enabled" label alone are not sufficient evidence. Storj's
+official [Object Lock documentation](https://storj.dev/dcs/buckets/object-lock)
+documents these as separate configurations.
+
+No changes are authorized by a read-only preflight. A real
+`If-None-Match: *` two-writer test and any subsequent adversarial
+delete/retention test are separate, explicit, operator-approved
+operations that may leave an irreversible 400-plus-day object version.
+Use the existing trusted-host AWS S3 profile mechanism; do not paste
+credentials into a chat or repository. Storj access-grant isolation
+also does **not** by itself prove independent account control, signer
+custody, KMS separation or production release acceptance.
+
 ## Live exact-version COMPLIANCE hostility qualification (separately approved)
 
 The existing two-writer conditional-`PutObject` probe establishes only
@@ -340,7 +372,9 @@ shorten its retention. The additional operator-only tools are:
 
 **Never run these against a production bucket or real user authorization
 data.** The only accepted bucket format is
-`paper-worm-disposable-<approved-random-id>`. The receipt must use the
+`paper-worm-disposable` (the confirmed existing Storj disposable bucket),
+or the previously supported `paper-worm-disposable-<approved-random-id>`.
+No general-purpose/production bucket is permitted. The receipt must use the
 exact v1 synthetic `paper/oauth-witness/epochs/v1/<64-hex>/0000000000000000001`
 key and `VersionId` / SHA-256 from a prior successful **live**
 `probe-oauth-portable-s3-writeonce.mjs` invocation. Use the
@@ -361,7 +395,7 @@ export PAPER_WORM_SDK_ROOT=/absolute/path/to/pinned-s3-sdk
 export PAPER_PORTABLE_WORM_PROVIDER=backblaze-b2
 export PAPER_PORTABLE_WORM_ENDPOINT=https://s3.us-west-002.backblazeb2.com/
 export PAPER_PORTABLE_WORM_URL_STYLE=path
-export PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable-approvedrandomid
+export PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable
 export PAPER_PORTABLE_WORM_READER_PROFILE=separate-custody-reader
 export PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE=separate-custody-adversary
 export PAPER_PORTABLE_WORM_RECEIPT_KEY=paper/oauth-witness/epochs/v1/YOUR_64_HEX_SUBJECT/0000000000000000001

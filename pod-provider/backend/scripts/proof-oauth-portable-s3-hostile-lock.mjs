@@ -39,6 +39,7 @@ function kind(cmd){return cmd.kind??cmd.constructor.name}
 function fault(code){return e=>e?.code===code}
 async function refused(fn,code){await assert.rejects(fn,fault(code))}
 function fixture(options={}){
+ const bucket=options.bucket??BUCKET;
  const state={reads:[],mutations:[],retentionReads:0,
   original:NOW+440*DAY,retention:NOW+440*DAY,deleted:false,
   markers:[],versions:1};
@@ -46,7 +47,7 @@ function fixture(options={}){
   send:async cmd=>{
    const name=kind(cmd),input=cmd.input;
    state.reads.push({name,input});
-   assert.equal(input.Bucket,BUCKET);
+   assert.equal(input.Bucket,bucket);
    if(options.offline)throw Error('Simulated offline storage');
    if(name==='GetBucketVersioningCommand')
     return {Status:options.suspended?'Suspended':'Enabled'};
@@ -87,7 +88,7 @@ function fixture(options={}){
     ['Bucket','Key','VersionId']:[
      'Bucket','Key','Retention','VersionId'
     ]);
-   assert.equal(input.Bucket,BUCKET);
+   assert.equal(input.Bucket,bucket);
    assert.equal(input.Key,KEY);
    assert.equal(input.VersionId,VERSION);
    if(name==='PutObjectRetentionCommand'){
@@ -119,7 +120,7 @@ function fixture(options={}){
    }));
   }};
  const args={provider:'custom-s3',endpoint,
-  approvedEndpoint:endpoint,bucket:BUCKET,reader,adversary:null,
+  approvedEndpoint:endpoint,bucket,reader,adversary:null,
   commands,sample,phase:'preflight',clock:()=>NOW,
   plannedAdversaryProfile:'dedicated-hostile-principal'};
  const observe=()=>probeDisposableS3HostileObjectLock(args);
@@ -139,6 +140,39 @@ async function withGate(task){
   else process.env.PAPER_PORTABLE_WORM_HOSTILE_DISPOSABLE=original;
  }
 }
+test('existing bare Storj bucket passes preflight and keeps hostile approval scoped',async()=>{
+ await withGate(async()=>{
+  const bucket='paper-worm-disposable';
+  const f=fixture({bucket});
+  const preflight=await f.observe();
+  assert.equal(preflight.phase,'preflight');
+  assert.equal(f.state.mutations.length,0);
+  const result=await f.hostile('hostile-locked-version:'+preflight.approvalChallenge);
+  assert.equal(result.exactVersionDeleteRejected,true);
+  assert.equal(result.shorteningRejected,true);
+  assert.equal(result.releaseAccepted,false);
+  assert.equal(f.state.mutations.length,2);
+  for(const entry of f.state.mutations)
+   assert.equal(entry.input.Bucket,bucket);
+  const wrong=fixture({bucket});
+  const suffixChallenge=await approval(fixture());
+  await refused(()=>wrong.hostile(suffixChallenge),
+   'PORTABLE_WORM_HOSTILE_OPERATOR_APPROVAL_REQUIRED');
+  assert.equal(wrong.state.mutations.length,0);
+ });
+});
+test('lookalike bare Storj bucket labels remain invalid before any read',async()=>{
+ for(const bucket of [
+  'paper-worm-disposable-','paper-worm-disposablex',
+  'paper-worm-disposable.test','paper-worm-disposable-foo',
+  'paper-worm-disposable--evil','production-authority'
+ ]){
+  const f=fixture({bucket});
+  await refused(f.observe,'PORTABLE_WORM_HOSTILE_CONFIG_UNSAFE');
+  assert.equal(f.state.reads.length,0);
+  assert.equal(f.state.mutations.length,0);
+ }
+});
 test('preflight verifies real-shaped COMPLIANCE version without invoking any writer',async()=>{
  const f=fixture();
  const result=await f.observe();

@@ -216,7 +216,7 @@ test('unsafe policy, expiry, tampering, altered version history and missing prov
 test('a successful exact version delete is a critical failure, never do next mutation',async()=>{
  await withGate(async()=>{
   const f=fixture({acceptDelete:true});
-  await refused(()=>f.hostile(await approval(f)),
+  await refused(async()=>f.hostile(await approval(f)),
    'PORTABLE_WORM_HOSTILE_MUTATION_ACCEPTED');
   assert.deepEqual(f.state.mutations.map(x=>x.name),['DeleteObjectCommand']);
  });
@@ -224,7 +224,7 @@ test('a successful exact version delete is a critical failure, never do next mut
 test('a successful retention shortening is a critical failure after successful denied exact delete',async()=>{
  await withGate(async()=>{
   const f=fixture({acceptShortening:true});
-  await refused(()=>f.hostile(await approval(f)),
+  await refused(async()=>f.hostile(await approval(f)),
    'PORTABLE_WORM_HOSTILE_MUTATION_ACCEPTED');
   assert.equal(f.state.mutations.length,2);
  });
@@ -232,11 +232,11 @@ test('a successful retention shortening is a critical failure after successful d
 test('403 or 400 mutations cannot conceal marker or changed retention',async()=>{
  await withGate(async()=>{
   const marker=fixture({createMarkerOnDenial:true});
-  await refused(()=>marker.hostile(await approval(marker)),
+  await refused(async()=>marker.hostile(await approval(marker)),
    'PORTABLE_WORM_HOSTILE_EVIDENCE_UNVERIFIED');
   assert.equal(marker.state.mutations.length,1);
   const shortened=fixture({changeOnDenial:true});
-  await refused(()=>shortened.hostile(await approval(shortened)),
+  await refused(async()=>shortened.hostile(await approval(shortened)),
    'PORTABLE_WORM_HOSTILE_RETENTION_CHANGED');
   assert.equal(shortened.state.mutations.length,2);
  });
@@ -245,7 +245,7 @@ test('ambiguous 409 and 503 are not accepted as Object Lock evidence and NEVER r
  await withGate(async()=>{
   for(const fault of [{ambiguous409:true},{transientMutations:true}]){
    const f=fixture(fault);
-   await refused(()=>f.hostile(await approval(f)),
+   await refused(async()=>f.hostile(await approval(f)),
     'PORTABLE_WORM_HOSTILE_MUTATION_AMBIGUOUS');
    assert.equal(f.state.mutations.length,1);
   }
@@ -265,7 +265,7 @@ test('unexpected denied status or errors cannot masquerade as compliance',async(
    {denialStatus:429,denialName:'AccessDenied'}
   ]){
    const f=fixture(fault);
-   await refused(()=>f.hostile(await approval(f)),
+   await refused(async()=>f.hostile(await approval(f)),
     'PORTABLE_WORM_HOSTILE_MUTATION_AMBIGUOUS');
    assert.equal(f.state.mutations.length,1);
   }

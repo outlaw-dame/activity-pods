@@ -14,7 +14,9 @@ import {inspectPortableS3ObjectLock,validatePortableS3Endpoint} from
  './oauth-portable-s3-custody-readonly.mjs';
 import {assertReceipt} from './oauth-s3-compliance-archive.mjs';
 
-const BUCKET=/^paper-worm-disposable-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9])$/u;
+// Explicitly allow the operator's existing bare Storj bucket name, or the
+// previously supported random-suffix disposable names. No generic buckets.
+const BUCKET=/^paper-worm-disposable(?:-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9]))?$/u;
 const HEX=/^[a-f0-9]{64}$/u;
 const VERSION=/^\S{1,512}$/u;
 const REQUIRED=['PutObjectCommand','GetBucketVersioningCommand',

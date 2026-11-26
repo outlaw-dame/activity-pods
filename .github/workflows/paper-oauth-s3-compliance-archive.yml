@@ -222,6 +222,7 @@ jobs:
             PAPER_PORTABLE_WORM_ENDPOINT=https://gateway.storjshare.io/ \
             PAPER_PORTABLE_WORM_READER_PROFILE=not-real-read \
             PAPER_PORTABLE_WORM_ADVERSARY_PROFILE=not-real-hostile \
+            PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE=not-real-hostile \
             PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
             node pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs \
             > /tmp/portable-hostile-unsafe.log 2>&1; then

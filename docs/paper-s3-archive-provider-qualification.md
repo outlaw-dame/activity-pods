@@ -363,6 +363,7 @@ export PAPER_PORTABLE_WORM_ENDPOINT=https://s3.us-west-002.backblazeb2.com/
 export PAPER_PORTABLE_WORM_URL_STYLE=path
 export PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable-approvedrandomid
 export PAPER_PORTABLE_WORM_READER_PROFILE=separate-custody-reader
+export PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE=separate-custody-adversary
 export PAPER_PORTABLE_WORM_RECEIPT_KEY=paper/oauth-witness/epochs/v1/YOUR_64_HEX_SUBJECT/0000000000000000001
 export PAPER_PORTABLE_WORM_RECEIPT_VERSION=EXACT_VERSION_FROM_WRITEONCE_PROBE
 export PAPER_PORTABLE_WORM_RECEIPT_SHA256=EXACT_SHA256_FROM_WRITEONCE_PROBE
@@ -384,9 +385,10 @@ with **no** delete markers, intact canonical content/SHA-256,
 versioning, >=400-day default COMPLIANCE, >=32 days of retained
 COMPLIANCE lifetime and safe HTTPS transport. It returns a SHA-256
 `approvalChallenge` bound to the operator-pinned provider origin,
-bucket, key, exact S3 version ID, receipt digest and **observed
-retention expiry**. A different version, bucket or retention date
-requires a fresh approval. No mutation is issued in this phase.
+bucket, key, exact S3 version ID, receipt digest, **planned adversarial
+profile label**, and **observed retention expiry**. A different version, bucket, planned adversary profile or retention date
+requires a fresh approval. A profile name is only an operator-bound label;
+its actual provider IAM principal must be checked independently. No mutation is issued in this phase.
 
 ### Phase 2 — separately approved hostile mutation attempts
 
@@ -398,6 +400,7 @@ export PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=hostile-locked-version-approved
 export PAPER_PORTABLE_WORM_HOSTILE_PHASE=hostile
 export PAPER_PORTABLE_WORM_HOSTILE_DISPOSABLE=confirmed
 export PAPER_PORTABLE_WORM_ADVERSARY_PROFILE=separate-custody-adversary
+# Must match PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE from preflight.
 export PAPER_PORTABLE_WORM_WRITER_PROFILE=separate-custody-writer
 export PAPER_PORTABLE_WORM_HOSTILE_ACK=hostile-locked-version:EXACT_PREFLIGHT_CHALLENGE
 node pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs

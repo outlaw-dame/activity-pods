@@ -120,7 +120,8 @@ function fixture(options={}){
   }};
  const args={provider:'custom-s3',endpoint,
   approvedEndpoint:endpoint,bucket:BUCKET,reader,adversary:null,
-  commands,sample,phase:'preflight',clock:()=>NOW};
+  commands,sample,phase:'preflight',clock:()=>NOW,
+  plannedAdversaryProfile:'dedicated-hostile-principal'};
  const observe=()=>probeDisposableS3HostileObjectLock(args);
  const hostile=async approval=>probeDisposableS3HostileObjectLock({
   ...args,phase:'hostile',adversary,explicitApproval:approval});
@@ -202,6 +203,20 @@ test('preflight and hostile refuse unsafe bucket, synthetic key, roles, SDK retr
    'PORTABLE_WORM_HOSTILE_RETRY_UNSAFE');
  });
  assert.equal(f.state.mutations.length,0);
+});
+test('operator challenge binds the planned adversarial principal label',async()=>{
+ await withGate(async()=>{
+  const f=fixture();
+  const token=await approval(f);
+  await refused(()=>probeDisposableS3HostileObjectLock({
+   ...f.args,plannedAdversaryProfile:'swapped-credentials',
+   phase:'hostile',adversary:f.adversary,explicitApproval:token
+  }), 'PORTABLE_WORM_HOSTILE_OPERATOR_APPROVAL_REQUIRED');
+  assert.equal(f.state.mutations.length,0);
+  await refused(()=>probeDisposableS3HostileObjectLock({
+   ...f.args,plannedAdversaryProfile:'',phase:'preflight'
+  }), 'PORTABLE_WORM_HOSTILE_CONFIG_UNSAFE');
+ });
 });
 test('unsafe policy, expiry, tampering, altered version history and missing provider fail before mutation',async()=>{
  for(const fault of [

@@ -120,6 +120,19 @@ test('operator existing bare Storj disposable bucket is accepted without looseni
     assert.equal(wrong.writes.length,0);
   }finally{restore()}
 });
+test('the unsuffixed bucket name is scoped to Storj, not arbitrary S3',async()=>{
+  const restore=withGate(true);
+  try{
+    const {options,writes}=mock({bucket:'paper-worm-disposable'});
+    await refused(()=>probeDisposableS3ConditionalCreate({
+      ...options,provider:'custom-s3'
+    }), 'PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE');
+    await refused(()=>probeDisposableS3ConditionalCreate({
+      ...options,provider:'backblaze-b2'
+    }), 'PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE');
+    assert.equal(writes.length,0);
+  }finally{restore()}
+});
 test('similar non-disposable bucket spellings fail even with matching approvals',async()=>{
   const restore=withGate(true);
   try{

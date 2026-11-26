@@ -392,8 +392,8 @@ these nonsecret environment variables locally:
 
 ```sh
 export PAPER_WORM_SDK_ROOT=/absolute/path/to/pinned-s3-sdk
-export PAPER_PORTABLE_WORM_PROVIDER=backblaze-b2
-export PAPER_PORTABLE_WORM_ENDPOINT=https://s3.us-west-002.backblazeb2.com/
+export PAPER_PORTABLE_WORM_PROVIDER=storj
+export PAPER_PORTABLE_WORM_ENDPOINT=https://gateway.storjshare.io/
 export PAPER_PORTABLE_WORM_URL_STYLE=path
 export PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable
 export PAPER_PORTABLE_WORM_READER_PROFILE=separate-custody-reader
@@ -406,9 +406,9 @@ export PAPER_PORTABLE_WORM_HOSTILE_PHASE=preflight
 node pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs
 ```
 
-Substitute the actual previously approved provider, bucket and receipt
-values; for Storj use `https://gateway.storjshare.io/`, and for a
-custom S3 origin pin `PAPER_PORTABLE_WORM_APPROVED_ENDPOINT` and
+Substitute the exact pre-approved provider, bucket and receipt
+values. For Backblaze B2 use that provider's pinned regional endpoint;
+for a custom S3 origin pin `PAPER_PORTABLE_WORM_APPROVED_ENDPOINT` and
 `PAPER_PORTABLE_WORM_REGION` exactly as in the existing read-only
 qualification. Do not set `PAPER_PORTABLE_WORM_ADVERSARY_PROFILE`,
 `PAPER_PORTABLE_WORM_HOSTILE_DISPOSABLE` or

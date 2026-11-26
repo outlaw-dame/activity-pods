@@ -17,7 +17,9 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {inspectPortableS3ObjectLock,validatePortableS3Endpoint} from
  './oauth-portable-s3-custody-readonly.mjs';
 
-const BUCKET=/^paper-worm-disposable-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9])$/u;
+// Explicitly allow the operator's existing bare Storj bucket name, or the
+// previously supported random-suffix disposable names. No generic buckets.
+const BUCKET=/^paper-worm-disposable(?:-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9]))?$/u;
 const KEY=/^paper\/oauth-witness\/epochs\/v1\/[a-f0-9]{64}\/0000000000000000001$/u;
 const HEX=/^[a-f0-9]{64}$/u;
 const PROFILE=/^[A-Za-z0-9_.-]{1,128}$/u;

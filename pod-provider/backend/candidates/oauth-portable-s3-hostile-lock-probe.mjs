@@ -17,7 +17,13 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {inspectPortableS3ObjectLock,validatePortableS3Endpoint} from
  './oauth-portable-s3-custody-readonly.mjs';
 
+// Only Storj's exact existing test bucket may omit the random suffix.
+// Other providers keep the prior strict disposable-bucket pattern.
 const BUCKET=/^paper-worm-disposable-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9])$/u;
+function disposableBucket(provider,bucket){
+ return (provider==='storj'&&bucket==='paper-worm-disposable')||
+  BUCKET.test(bucket||'');
+}
 const KEY=/^paper\/oauth-witness\/epochs\/v1\/[a-f0-9]{64}\/0000000000000000001$/u;
 const HEX=/^[a-f0-9]{64}$/u;
 const PROFILE=/^[A-Za-z0-9_.-]{1,128}$/u;
@@ -84,7 +90,7 @@ export async function probeDisposableS3HostileObjectLock({
 }={}){
  if(phase!=='preflight'&&phase!=='hostile')
   fail('PORTABLE_WORM_HOSTILE_CONFIG_UNSAFE');
- if(!BUCKET.test(bucket||'')||!validSample(sample)||
+ if(!disposableBucket(provider,bucket)||!validSample(sample)||
     !PROFILE.test(plannedAdversaryProfile||'')||
     !reader||typeof reader.send!=='function'||!commands||
     REQUIRED.some(name=>typeof commands[name]!=='function')||

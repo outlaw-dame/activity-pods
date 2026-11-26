@@ -16,13 +16,13 @@ const conflict=()=>Object.assign(new Error('already exists'),{
   name:'PreconditionFailed',$metadata:{httpStatusCode:412}
 });
 function mock({behavior='one',delMarker=false,wrongRetain=false,
-  versioning=true}={}){
+  versioning=true,bucket=BUCKET}={}){
   const writes=[],reads=[];let stored=null;
   const writer={send:async command=>{
     assert.equal(command.name,'PutObjectCommand');
     const a=command.input;
     writes.push(a);
-    assert.equal(a.Bucket,BUCKET);
+    assert.equal(a.Bucket,bucket);
     assert.equal(a.IfNoneMatch,'*');
     assert.equal(a.ContentType,'application/octet-stream');
     assert.ok(a.Body instanceof Uint8Array);
@@ -42,7 +42,7 @@ function mock({behavior='one',delMarker=false,wrongRetain=false,
   const reader={send:async command=>{
     reads.push(command.name);
     const args=command.input;
-    assert.equal(args.Bucket,BUCKET);
+    assert.equal(args.Bucket,bucket);
     switch(command.name){
       case 'GetBucketVersioningCommand':
         return {Status:versioning?'Enabled':'Suspended'};
@@ -65,8 +65,8 @@ function mock({behavior='one',delMarker=false,wrongRetain=false,
       default:throw Error('Unexpected read operation');
     }
   }};
-  const options={provider:'storj',endpoint,bucket:BUCKET,reader,writer,
-    commands,clock:()=>NOW,explicitBucketApproval:'permanently-retain:'+BUCKET};
+  const options={provider:'storj',endpoint,bucket,reader,writer,
+    commands,clock:()=>NOW,explicitBucketApproval:'permanently-retain:'+bucket};
   return {options,writes,reads};
 }
 async function refused(call,code){
@@ -101,6 +101,54 @@ test('genuine single-winner conditional race and exact COMPLIANCE readback',asyn
     assert.equal(result.versionId,'immutable-version-1');
     assert.ok(reads.includes('GetObjectRetentionCommand'));
     assert.ok(reads.filter(x=>x==='GetBucketVersioningCommand').length>=3);
+  }finally{restore()}
+});
+test('operator existing bare Storj disposable bucket is accepted without loosening approval',async()=>{
+  const restore=withGate(true);
+  try{
+    const exact='paper-worm-disposable';
+    const {options,writes}=mock({bucket:exact});
+    const result=await probeDisposableS3ConditionalCreate(options);
+    assert.equal(result.bucket,exact);
+    assert.equal(result.releaseAccepted,false);
+    assert.equal(writes.length,2);
+    const wrong=mock({bucket:exact});
+    await refused(()=>probeDisposableS3ConditionalCreate({
+      ...wrong.options,explicitBucketApproval:
+        'permanently-retain:paper-worm-disposable-qafixture'
+    }), 'PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE');
+    assert.equal(wrong.writes.length,0);
+  }finally{restore()}
+});
+test('the unsuffixed bucket name is scoped to Storj, not arbitrary S3',async()=>{
+  const restore=withGate(true);
+  try{
+    const {options,writes}=mock({bucket:'paper-worm-disposable'});
+    await refused(()=>probeDisposableS3ConditionalCreate({
+      ...options,provider:'custom-s3'
+    }), 'PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE');
+    await refused(()=>probeDisposableS3ConditionalCreate({
+      ...options,provider:'backblaze-b2'
+    }), 'PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE');
+    assert.equal(writes.length,0);
+  }finally{restore()}
+});
+test('similar non-disposable bucket spellings fail even with matching approvals',async()=>{
+  const restore=withGate(true);
+  try{
+    for(const bucket of [
+      'paper-worm-disposable-',
+      'paper-worm-disposablex',
+      'paper-worm-disposable.test',
+      'paper-worm-disposable-foo',
+      'paper-worm-disposable--evil',
+      'production-oauth-archive'
+    ]){
+      const {options,writes}=mock({bucket});
+      await refused(()=>probeDisposableS3ConditionalCreate(options),
+        'PORTABLE_WORM_WRITE_CONFIGURATION_UNSAFE');
+      assert.equal(writes.length,0);
+    }
   }finally{restore()}
 });
 test('safety gates refuse prod-looking buckets and any absent human acknowledgement',async()=>{

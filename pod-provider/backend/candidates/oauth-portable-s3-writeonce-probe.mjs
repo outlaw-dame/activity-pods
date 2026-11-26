@@ -14,7 +14,13 @@ import {inspectPortableS3ObjectLock,validatePortableS3Endpoint} from
  './oauth-portable-s3-custody-readonly.mjs';
 import {assertReceipt} from './oauth-s3-compliance-archive.mjs';
 
+// Only Storj's exact existing test bucket may omit the random suffix.
+// Other providers keep the prior strict disposable-bucket pattern.
 const BUCKET=/^paper-worm-disposable-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9])$/u;
+function disposableBucket(provider,bucket){
+ return (provider==='storj'&&bucket==='paper-worm-disposable')||
+  BUCKET.test(bucket||'');
+}
 const HEX=/^[a-f0-9]{64}$/u;
 const VERSION=/^\S{1,512}$/u;
 const REQUIRED=['PutObjectCommand','GetBucketVersioningCommand',
@@ -59,7 +65,7 @@ export async function probeDisposableS3ConditionalCreate({
   explicitBucketApproval,clock=()=>Date.now()
 }={}){
   if(process.env.PAPER_PORTABLE_WORM_WRITE_DISPOSABLE!=='confirmed'||
-     !BUCKET.test(bucket||'')||
+     !disposableBucket(provider,bucket)||
      explicitBucketApproval!=='permanently-retain:'+bucket||
      !writer||!reader||writer===reader||
      typeof writer.send!=='function'||typeof reader.send!=='function'||

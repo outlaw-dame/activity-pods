@@ -197,7 +197,8 @@ test('preflight and hostile refuse unsafe bucket, synthetic key, roles, SDK retr
  await refused(retries.observe,'PORTABLE_WORM_HOSTILE_RETRY_UNSAFE');
  const hostileRetries=fixture({adversaryAttempts:3});
  await withGate(async()=>{
-  await refused(()=>hostileRetries.hostile(await approval(hostileRetries)),
+  const token=await approval(hostileRetries);
+  await refused(()=>hostileRetries.hostile(token),
    'PORTABLE_WORM_HOSTILE_RETRY_UNSAFE');
  });
  assert.equal(f.state.mutations.length,0);

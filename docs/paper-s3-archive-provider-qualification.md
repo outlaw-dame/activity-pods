@@ -332,9 +332,10 @@ release remain CLOSED.
 
 The Storj `APods_test` project has an existing **empty** bucket named
 `paper-worm-disposable`. Both the competing-conditional-create probe
-and the hostile-version proof now accept **exactly** this bare name in
-addition to their original explicit `paper-worm-disposable-<suffix>`
-allowlist. All S3 proof scripts still demand the **exact bucket name**
+and the hostile-version proof accept **exactly** this bare name **only
+when `PAPER_PORTABLE_WORM_PROVIDER=storj`**, in addition to their prior
+explicit `paper-worm-disposable-<suffix>` allowlist for qualified
+providers. All S3 proof scripts still demand the **exact bucket name**
 in their explicit approval inputs. Arbitrary S3 buckets, close
 lookalikes and general production authorization buckets remain
 forbidden.

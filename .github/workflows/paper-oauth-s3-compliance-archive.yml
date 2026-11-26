@@ -36,6 +36,9 @@ on:
       - 'pod-provider/backend/candidates/oauth-portable-s3-writeonce-probe.mjs'
       - 'pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs'
       - 'pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs'
+      - 'pod-provider/backend/candidates/oauth-portable-s3-hostile-lock-probe.mjs'
+      - 'pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs'
+      - 'pod-provider/backend/scripts/proof-oauth-portable-s3-hostile-lock.mjs'
       - 'docs/paper-s3-archive-provider-qualification.md'
   workflow_dispatch:
 
@@ -137,8 +140,12 @@ jobs:
           node --check pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs
           node --check pod-provider/backend/scripts/probe-oauth-portable-s3-writeonce.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-writeonce.mjs
+          node --check pod-provider/backend/candidates/oauth-portable-s3-hostile-lock-probe.mjs
+          node --check pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs
+          node --check pod-provider/backend/scripts/proof-oauth-portable-s3-hostile-lock.mjs
+          node pod-provider/backend/scripts/proof-oauth-portable-s3-hostile-lock.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
-          if grep -R -nE 'oauth-portable-s3-custody-readonly|probe-oauth-portable-s3-custody|oauth-portable-s3-receipt-writer|oauth-portable-s3-writeonce-probe|probe-oauth-portable-s3-writeonce' pod-provider/backend/services; then
+          if grep -R -nE 'oauth-portable-s3-custody-readonly|probe-oauth-portable-s3-custody|oauth-portable-s3-receipt-writer|oauth-portable-s3-writeonce-probe|probe-oauth-portable-s3-writeonce|oauth-portable-s3-hostile-lock-probe|probe-oauth-portable-s3-hostile-lock' pod-provider/backend/services; then
             echo '::error::Do not wire unapproved portable S3 evidence into production'
             exit 1
           fi
@@ -207,6 +214,23 @@ jobs:
           PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
             node pod-provider/backend/scripts/proof-oauth-s3-independent-custody.mjs
           node pod-provider/backend/scripts/proof-oauth-portable-s3-custody.mjs
+          PAPER_OAUTH_S3_SDK_ENTRY="$RUNNER_TEMP/paper-s3-contract/node_modules/@aws-sdk/client-s3/dist-cjs/index.js" \
+            node pod-provider/backend/scripts/proof-oauth-portable-s3-hostile-lock.mjs
+          if env PAPER_PORTABLE_WORM_HOSTILE_PHASE=hostile \
+            PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=read-only-verified \
+            PAPER_PORTABLE_WORM_PROVIDER=storj \
+            PAPER_PORTABLE_WORM_ENDPOINT=https://gateway.storjshare.io/ \
+            PAPER_PORTABLE_WORM_READER_PROFILE=not-real-read \
+            PAPER_PORTABLE_WORM_ADVERSARY_PROFILE=not-real-hostile \
+            PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE=not-real-hostile \
+            PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
+            node pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs \
+            > /tmp/portable-hostile-unsafe.log 2>&1; then
+            echo '::error::Missing hostile-operator approval admitted'
+            exit 1
+          fi
+          grep -qx 'REFUSED: PORTABLE_WORM_HOSTILE_OPERATOR_APPROVAL_REQUIRED' /tmp/portable-hostile-unsafe.log
+          rm -f /tmp/portable-hostile-unsafe.log
           if env PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=read-only-verified \
             PAPER_WORM_SDK_ROOT="$RUNNER_TEMP/paper-s3-contract" \
             PAPER_PORTABLE_WORM_PROVIDER=filebase \

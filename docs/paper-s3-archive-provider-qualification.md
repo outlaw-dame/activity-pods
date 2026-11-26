@@ -326,3 +326,150 @@ The external signer, complete Redis/Jena/PDS restore, authenticated
 owner account lifecycle, positive hosted signup and independent
 human security review are still required. Production signup and
 release remain CLOSED.
+
+## Live exact-version COMPLIANCE hostility qualification (separately approved)
+
+The existing two-writer conditional-`PutObject` probe establishes only
+**one observed conditional race**. It cannot prove retention denies
+attempts by an independent principal to delete a protected version or
+shorten its retention. The additional operator-only tools are:
+
+- `pod-provider/backend/candidates/oauth-portable-s3-hostile-lock-probe.mjs`
+- `pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs`
+- `pod-provider/backend/scripts/proof-oauth-portable-s3-hostile-lock.mjs`
+
+**Never run these against a production bucket or real user authorization
+data.** The only accepted bucket format is
+`paper-worm-disposable-<approved-random-id>`. The receipt must use the
+exact v1 synthetic `paper/oauth-witness/epochs/v1/<64-hex>/0000000000000000001`
+key and `VersionId` / SHA-256 from a prior successful **live**
+`probe-oauth-portable-s3-writeonce.mjs` invocation. Use the
+independent operator's own trusted host with pinned HTTPS provider
+endpoint and **exact-version reader** and **adversary** S3 profiles
+from separate credentials. Do not use a Paper, Railway, federation,
+Cloudflare R2 or application deployment administrator as the
+independent custody operator.
+
+### Phase 1 — read-only approval challenge
+
+Install precisely pinned Apache-2.0 SDK packages as documented above
+in an isolated operator directory (outside source control). Configure
+these nonsecret environment variables locally:
+
+```sh
+export PAPER_WORM_SDK_ROOT=/absolute/path/to/pinned-s3-sdk
+export PAPER_PORTABLE_WORM_PROVIDER=backblaze-b2
+export PAPER_PORTABLE_WORM_ENDPOINT=https://s3.us-west-002.backblazeb2.com/
+export PAPER_PORTABLE_WORM_URL_STYLE=path
+export PAPER_PORTABLE_WORM_BUCKET=paper-worm-disposable-approvedrandomid
+export PAPER_PORTABLE_WORM_READER_PROFILE=separate-custody-reader
+export PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE=separate-custody-adversary
+export PAPER_PORTABLE_WORM_RECEIPT_KEY=paper/oauth-witness/epochs/v1/YOUR_64_HEX_SUBJECT/0000000000000000001
+export PAPER_PORTABLE_WORM_RECEIPT_VERSION=EXACT_VERSION_FROM_WRITEONCE_PROBE
+export PAPER_PORTABLE_WORM_RECEIPT_SHA256=EXACT_SHA256_FROM_WRITEONCE_PROBE
+export PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=read-only-verified
+export PAPER_PORTABLE_WORM_HOSTILE_PHASE=preflight
+node pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs
+```
+
+Substitute the actual previously approved provider, bucket and receipt
+values; for Storj use `https://gateway.storjshare.io/`, and for a
+custom S3 origin pin `PAPER_PORTABLE_WORM_APPROVED_ENDPOINT` and
+`PAPER_PORTABLE_WORM_REGION` exactly as in the existing read-only
+qualification. Do not set `PAPER_PORTABLE_WORM_ADVERSARY_PROFILE`,
+`PAPER_PORTABLE_WORM_HOSTILE_DISPOSABLE` or
+`PAPER_PORTABLE_WORM_HOSTILE_ACK` for preflight.
+
+Preflight requires a **single** exact-version Object Lock receipt
+with **no** delete markers, intact canonical content/SHA-256,
+versioning, >=400-day default COMPLIANCE, >=32 days of retained
+COMPLIANCE lifetime and safe HTTPS transport. It returns a SHA-256
+`approvalChallenge` bound to the operator-pinned provider origin,
+bucket, key, exact S3 version ID, receipt digest, **planned adversarial
+profile label**, and **observed retention expiry**. A different version, bucket, planned adversary profile or retention date
+requires a fresh approval. A profile name is only an operator-bound label;
+its actual provider IAM principal must be checked independently. No mutation is issued in this phase.
+
+### Phase 2 — separately approved hostile mutation attempts
+
+**Only after explicit independent operator authorization for the
+exact sacrificial version and potential irreversible result:**
+
+```sh
+export PAPER_PORTABLE_WORM_OPERATOR_CONFIRM=hostile-locked-version-approved
+export PAPER_PORTABLE_WORM_HOSTILE_PHASE=hostile
+export PAPER_PORTABLE_WORM_HOSTILE_DISPOSABLE=confirmed
+export PAPER_PORTABLE_WORM_ADVERSARY_PROFILE=separate-custody-adversary
+# Must match PAPER_PORTABLE_WORM_PLANNED_ADVERSARY_PROFILE from preflight.
+export PAPER_PORTABLE_WORM_WRITER_PROFILE=separate-custody-writer
+export PAPER_PORTABLE_WORM_HOSTILE_ACK=hostile-locked-version:EXACT_PREFLIGHT_CHALLENGE
+node pod-provider/backend/scripts/probe-oauth-portable-s3-hostile-lock.mjs
+```
+
+The script performs **exactly one** `DeleteObjectCommand` with the
+approved `VersionId`, then independently revalidates the whole
+single-version history, exact retained bytes, SHA-256, unmodified
+retention and absence of delete markers. It performs **one**
+`PutObjectRetentionCommand` for that same version, attempting
+to shorten the observed COMPLIANCE expiry by **one day**. It again
+requires complete unmodified readback.
+
+There is no SDK or application retry of either mutation, even on
+409, timeout, 429, 503 or lost acknowledgment. A returned 200/204,
+a changed retention date, a missing version, a new version, an
+unexpected delete marker or any ambiguous response **fails**.
+Only explicit error-code/status denials are observed. Bounded
+exponential backoff with jitter is used **only for idempotent,
+read-only `GetObjectRetention` under 429/503/504** (three attempts
+maximum). Neither test invokes an unversioned delete, which S3
+may legitimately turn into a delete marker even with a COMPLIANCE
+protected historical version.
+
+Even when both negative requests receive 400 or 403,
+**this alone does not prove COMPLIANCE enforcement**: insufficient
+IAM privileges, invalid request serialization, unsupported S3
+methods or provider policy may yield identical responses. The
+result explicitly keeps `iamEnforcementProven:false`,
+`independentAdministrationVerified:false`,
+`monotonicLatestHeadVerified:false` and
+`releaseAccepted:false`.
+
+### Release evidence and independent-review criteria
+
+A separate human security/custody operator must retain a signed,
+tamper-evident **out-of-band certificate** (not just Paper CI
+logs) containing the approved account boundary, distinct project
+owners/root credentials, sealed KMS/recovery key custody, reader,
+writer and adversary rights, positive proof that the adversary had
+**permission to attempt exact-version deletion and retention changes**
+(therefore 403 is not solely an IAM denial), provider/region,
+bucket policy, retained sample key/version/SHA/expiry, both
+sanitized negative API responses and timestamps, immutable
+version-history snapshots after each attempt, checksum and key
+rotation/backup behavior, and auditor approval. Also examine
+vendor-native API paths, not only S3 gateway paths, for deleting or
+shortening a retained version.
+
+For a deliberate **unversioned** deletion or same-key overwrite
+test, use an entirely distinct disposable sample and an independently
+approved separate procedure: those operations may create a
+delete marker or additional retained version, **which would
+invalidate this exact-version sample for authorization purposes**.
+Never infer that a COMPLIANCE mode prohibits unversioned delete
+markers (AWS documents the contrary). An externally authenticated,
+nonrewindable monotonic **latest** generation head is still necessary.
+
+Provider specifications and independent review:
+- https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html
+- https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html
+- https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectRetention.html
+- https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-s3-compatible-api
+- https://www.backblaze.com/docs/cloud-storage-s3-compatible-api-bucket-versions
+- https://storj.dev/dcs/api/s3/object-lock
+- https://storj.dev/dcs/api/s3/s3-compatibility
+
+**Neither CI fixtures nor a connected Cloudflare account establish
+independent administration or real S3 COMPLIANCE custody. Until a
+real provider and external operator have completed this protocol
+and the monotonic signing authority, the production fuse stays
+CLOSED.**

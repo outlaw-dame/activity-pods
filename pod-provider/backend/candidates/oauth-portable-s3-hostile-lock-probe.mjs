@@ -20,6 +20,7 @@ import {inspectPortableS3ObjectLock,validatePortableS3Endpoint} from
 const BUCKET=/^paper-worm-disposable-[a-z0-9](?:[a-z0-9-]{3,33}[a-z0-9])$/u;
 const KEY=/^paper\/oauth-witness\/epochs\/v1\/[a-f0-9]{64}\/0000000000000000001$/u;
 const HEX=/^[a-f0-9]{64}$/u;
+const PROFILE=/^[A-Za-z0-9_.-]{1,128}$/u;
 const DAY=86400000;
 const REQUIRED=['GetBucketVersioningCommand',
  'GetObjectLockConfigurationCommand','ListObjectVersionsCommand',
@@ -61,10 +62,11 @@ function allowedDenial(error){
   ['AccessDenied','Forbidden','InvalidRequest','InvalidArgument',
    'OperationNotAllowed','NotAllowed'].includes(error?.name);
 }
-function approvalHash({provider,endpoint,bucket,sample,retentionUntil}){
+function approvalHash({provider,endpoint,bucket,sample,retentionUntil,plannedAdversaryProfile}){
  return crypto.createHash('sha256').update(JSON.stringify({
   kind:'paper.portable-s3.hostile-retention-approval.v1',
-  provider,endpoint,bucket,key:sample.key,versionId:sample.versionId,
+  provider,endpoint,bucket,plannedAdversaryProfile,
+  key:sample.key,versionId:sample.versionId,
   sha256:sample.sha256,retentionUntil
  })).digest('hex');
 }
@@ -77,11 +79,13 @@ function approvalHash({provider,endpoint,bucket,sample,retentionUntil}){
 export async function probeDisposableS3HostileObjectLock({
  provider,endpoint,approvedEndpoint=null,bucket,reader,adversary=null,
  commands,sample,phase='preflight',explicitApproval=null,
+ plannedAdversaryProfile,
  clock=()=>Date.now()
 }={}){
  if(phase!=='preflight'&&phase!=='hostile')
   fail('PORTABLE_WORM_HOSTILE_CONFIG_UNSAFE');
  if(!BUCKET.test(bucket||'')||!validSample(sample)||
+    !PROFILE.test(plannedAdversaryProfile||'')||
     !reader||typeof reader.send!=='function'||!commands||
     REQUIRED.some(name=>typeof commands[name]!=='function')||
     typeof clock!=='function'||
@@ -137,7 +141,8 @@ export async function probeDisposableS3HostileObjectLock({
  await inspect();
  const original=retainUntil(await getRetention(),now);
  const challenge=approvalHash({
-  provider,endpoint,bucket,sample,retentionUntil:new Date(original).toISOString()
+  provider,endpoint,bucket,sample,plannedAdversaryProfile,
+  retentionUntil:new Date(original).toISOString()
  });
  if(phase==='preflight')
   return Object.freeze({
